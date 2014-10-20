@@ -1,4 +1,4 @@
-module Alpha where
+module Alpha(Err,alphaConversion) where
 import Control.Monad.Except
 import Control.Monad.State
 import Control.Monad.Reader
@@ -8,17 +8,13 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Syntax
 import Data.List(foldl')
-
-type Err = String
+import Util
 
 alphaConversion :: Program -> Either Err (Program,[Symbol])
 alphaConversion p = runExcept $ do
     (p',memo) <- runStateT (convert p) S.empty
     return (p',S.toList memo)
 
-assert :: (MonadError e m) => Bool -> e -> m ()
-assert b e = unless b $ throwError e
-    
 convert :: Program -> StateT (S.Set String) (Except Err) Program
 convert p = do
     let defs = definitions p
@@ -50,9 +46,6 @@ convertTerm label _t = case _t of
                              (convertTerm label t2)
                              (convertTerm label t3)
     t -> pure t
-
-allDifferent :: (Ord a) => [a] -> Bool
-allDifferent xs = length xs == S.size (S.fromList xs)
 
 rename :: Symbol -> AMonad Symbol
 rename x = do
