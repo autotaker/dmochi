@@ -10,6 +10,7 @@ import Syntax
 import Util
 import qualified Data.Sequence as Q
 import qualified Data.Map as M
+import Data.Traversable(traverse)
 
 sortCheck :: Program -> [Symbol] -> Either Err (M.Map Symbol Sort)
 sortCheck prog syms = runExcept $ do
@@ -73,13 +74,13 @@ gatherT _t env = case _t of
     _ -> genFresh
         
 unify :: Constraints -> Except Err Subst
-unify cs = execStateT (go cs) M.empty
+unify _cs = execStateT (go _cs) M.empty
     where
     go (Q.viewl -> v) = case v of
         Q.EmptyL -> return ()
-        (s1,s2) Q.:< cs -> do
-            s1' <- substSort s1
-            s2' <- substSort s2
+        (_s1,_s2) Q.:< cs -> do
+            s1' <- substSort _s1
+            s2' <- substSort _s2
             case (s1',s2') of
                 (SBase,SBase)  -> go cs
                 (SVar i1,SVar i2) | i1 == i2 -> go cs 
@@ -105,7 +106,7 @@ substSort (SVar i) = do
         Nothing -> return (SVar i)
         Just s  -> do
             s' <- substSort s
-            modify (M.insert i s')
+            modify $ M.insert i s'
             return s'
 substSort (SFun ss s) = liftA2 SFun (mapM substSort ss) (substSort s)
 
@@ -125,5 +126,4 @@ concretize (SFun ss s) = map concretize ss :-> concretize s
 
 substEnv :: Env -> Subst -> Except Err (M.Map Symbol Sort)
 substEnv env subst = evalStateT doit subst where
-    l = M.assocs env
-    doit = M.fromList <$> mapM (\(x,s) -> (,) x . concretize <$> substSort s) l
+    doit = traverse (fmap concretize . substSort) env
