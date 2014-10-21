@@ -81,6 +81,6 @@ primE = trueE
 trueE,falseE,failE,omegaE,varE :: Parser Term
 trueE = reserved "true" *> pure (C True) 
 falseE = reserved "false" *> pure (C False)
-failE = reserved "Fail" *> pure Fail
-omegaE = reserved "Omega" *> pure Omega
+failE = reserved "Fail" *> pure (Fail "")
+omegaE = reserved "Omega" *> pure (Omega "")
 varE = V <$> identifier

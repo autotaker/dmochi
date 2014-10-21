@@ -38,13 +38,15 @@ convertTerm label _t = case _t of
             printf "Conflicting labels %s at %s" (show xs) label
         xs' <- forM xs (genName label)
         let f e = foldl' (\acc (x,x') -> M.insert x x' acc) e $ zip xs xs'
-        local f $ convertTerm (label++"$f") t
+        Lam xs' <$> (local f $ convertTerm (label++"$f") t)
     App t ts -> liftA2 App (convertTerm label t)
                            (mapM (convertTerm label) ts)
     t1 :+: t2 -> liftA2 (:+:) (convertTerm label t1) (convertTerm label t2)
     If t1 t2 t3 -> liftA3 If (convertTerm label t1)
                              (convertTerm label t2)
                              (convertTerm label t3)
+    Fail _ -> Fail <$> genName label "Fail"
+    Omega _ -> Omega <$> genName label "Omega"
     t -> pure t
 
 rename :: Symbol -> AMonad Symbol

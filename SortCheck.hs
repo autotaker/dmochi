@@ -1,4 +1,4 @@
-{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ViewPatterns,BangPatterns #-}
 module SortCheck(sortCheck) where
 import Control.Monad.Except
 import Control.Monad.Writer
@@ -20,7 +20,7 @@ sortCheck prog syms = runExcept $ do
 
 type Env = M.Map Symbol SortLike
 type Id = Int
-data SortLike = SBase | SVar Id | SFun [SortLike] SortLike
+data SortLike = SBase | SVar Id | SFun [SortLike] SortLike deriving(Show)
 
 type Constraints = Q.Seq (SortLike,SortLike)
 type Subst = M.Map Id SortLike
@@ -35,7 +35,7 @@ gather prog syms = do
     return env
 
 shouldBe :: SortLike -> SortLike -> SWM ()
-shouldBe s1 s2 = tell $ Q.singleton (s1,s2)
+shouldBe !s1 !s2 = tell $ Q.singleton (s1,s2)
 
 genFresh :: SWM SortLike
 genFresh = (SVar <$> get) <* modify succ
@@ -52,6 +52,8 @@ gatherT :: Term -> Env -> SWM SortLike
 gatherT _t env = case _t of
     C _ -> pure SBase
     V x -> pure $ env M.! x
+    Fail x -> pure $ env M.! x
+    Omega x -> pure $ env M.! x
     Lam xs t -> SFun (map (env M.!) xs) <$> gatherT t env 
     App t ts -> do
         ss <- mapM (flip gatherT env) ts
@@ -71,7 +73,6 @@ gatherT _t env = case _t of
         sp `shouldBe` SBase
         st `shouldBe` se
         return st
-    _ -> genFresh
         
 unify :: Constraints -> Except Err Subst
 unify _cs = execStateT (go _cs) M.empty
@@ -85,11 +86,11 @@ unify _cs = execStateT (go _cs) M.empty
                 (SBase,SBase)  -> go cs
                 (SVar i1,SVar i2) | i1 == i2 -> go cs 
                 (SVar i,s) -> do
-                    assert (not $ contains i s) "Recursive Type"
+                    assert (not $ contains i s) $ "Recursive Type " ++ show (s1',s2')
                     assign i s
                     go cs
                 (s,SVar i) -> do
-                    assert (not $ contains i s) "Recursive Type"
+                    assert (not $ contains i s) $ "Recursive Type" ++ show (s1',s2')
                     assign i s
                     go cs
                 (SFun ss1 s1,SFun ss2 s2) -> do
