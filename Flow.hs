@@ -2,23 +2,12 @@
 module Flow where
 
 import qualified Data.Map as M
-import qualified Data.Set as S
-import Data.Array.Unboxed
 import Control.Monad
 import Control.Monad.State
 import Control.Applicative
-import Text.Printf
-import Data.Maybe
-import Data.Tree
-import Data.Graph
-import Data.Monoid
 import Data.STRef
-import Data.Array.ST
-import Sort 
+import Data.Maybe
 import Syntax
-import qualified Data.DList as DL
-import Data.List(intersperse)
-import Control.DeepSeq
 import Data.Hashable
 import qualified Data.HashTable.ST.Basic as HT
 import Control.Monad.ST
@@ -36,15 +25,15 @@ data FlowTerm = Cst Id !Term
               | Cod Id !FlowTerm
               deriving(Show)
 
-data FlowKey = KCst Term
-             | KVar Int
-             | KApp Id Id
-             | KAbst Id Id
-             | KBr [Id]
-             | KTuple [Id]
-             | KProj Int Id
-             | KDom Id
-             | KCod Id
+data FlowKey = KCst !Term
+             | KVar !Int
+             | KApp !Id !Id
+             | KAbst !Id !Id
+             | KBr ![Id]
+             | KTuple ![Id]
+             | KProj !Int !Id
+             | KDom !Id
+             | KCod !Id
              deriving(Eq)
 
 instance Hashable FlowKey where
@@ -62,7 +51,6 @@ instance Hashable FlowKey where
     hashWithSalt s (KDom i) = s `hashWithSalt` (7::Int) `hashWithSalt` i
     hashWithSalt s (KCod i) = s `hashWithSalt` (8::Int) `hashWithSalt` i
          
-
 termId :: FlowTerm -> Id
 termId (Cst i _) = i
 termId (Var i _) = i
@@ -75,55 +63,106 @@ termId (Dom i _) = i
 termId (Cod i _) = i
 
 key :: FlowTerm -> FlowKey
-key = undefined
+key (Cst _ t) = KCst t
+key (Var _ i) = KVar i
+key (Flow.App _ t1 t2) = KApp (termId t1) (termId t2)
+key (Abst _ t1 t2) = KAbst (termId t1) (termId t2)
+key (Br _ ts) = KBr $ map termId ts
+key (Tuple _ ts) = KTuple $ map termId ts
+key (Proj _ j t) = KProj j $ termId t
+key (Dom _ t) = KDom $ termId t
+key (Cod _ t) = KCod $ termId t
+
+cst :: Term -> Constructor
+cst t i = Cst i t
+var :: Int -> Constructor
+var j i = Var i j
+app :: FlowTerm -> FlowTerm -> Constructor
+app t1 t2 i = Flow.App i t1 t2
+abst :: FlowTerm -> FlowTerm -> Constructor
+abst t1 t2 i = Abst i t1 t2
+br :: [FlowTerm] -> Constructor
+br ts i = Br i ts
+tuple :: [FlowTerm] -> Constructor
+tuple ts i = Tuple i ts
+proj :: Int -> FlowTerm -> Constructor
+proj j t i = Proj i j t
+dom :: FlowTerm -> Constructor
+dom t i = Dom i t
+cod :: FlowTerm -> Constructor
+cod t i = Cod i t
+
+
+
 {-
-buildGraph :: Program -> FlowGraph
-buildGraph (Program defs t0) = where
+buildGraph :: Program -> ()
+buildGraph (Program defs t0) = undefined where
     (g,env) = runST $ do
         ctx <- newContext
         env <- execStateT (doit ctx) M.empty
         calcClosure ctx
         g <- getGraph ctx
         return (g,env)
-    push x v = modify $ M.insert x v
-    lookupVar x = (M.! x) <$> get 
-    doit ctx = do
-        ts <- forM defs $ \(f,t) -> do
-            vf <- fmap M.size get >>= (\j -> lift $ genNode ctx (\i -> Var i j))
-            push f vf
-            return (vf,t)
-        forM_ ts $ \(vf,t) -> do
-            v <- go t
-            lift $ addEdge ctx vf v
-        go t0
+        -}
+
+newContext :: ST s (Context s)
+newContext = Context <$> HT.new
+                     <*> HT.new
+                     <*> HT.new
+                     <*> HT.new
+                     <*> HT.new
+                     <*> HT.new
+                     <*> HT.new
+                     <*> newSTRef 0
+
+
+gatherPrimProgram :: Context s -> Program -> StateT (M.Map Symbol FlowTerm) (ST s) ()
+gatherPrimProgram ctx (Program defs t0) = do
+    ts <- forM defs $ \(f,t) -> do
+        vf <- fmap M.size get >>= lift . genNode ctx . var
+        push f vf
+        return (vf,t)
+    forM_ ts $ \(vf,t) -> do
+        v <- gatherPrimTerm ctx t
+        lift $ addEdge ctx vf v
+    void $ gatherPrimTerm ctx t0
+
+push :: Symbol -> FlowTerm -> StateT (M.Map Symbol FlowTerm) (ST s) ()
+push x v = modify $ M.insert x v
+
+lookupVar :: Symbol -> StateT (M.Map Symbol FlowTerm) (ST s) FlowTerm
+lookupVar x = (M.! x) <$> get 
+
+gatherPrimTerm :: Context s -> Term -> StateT (M.Map Symbol FlowTerm) (ST s) FlowTerm
+gatherPrimTerm ctx = go where
     go (V x) = lookupVar x
     go (Lam xs t) = do
-        vx   <- fmap M.size get >>= (\j -> lift $ genNode ctx (\i -> Var i j))
-        forM (zip [0..] xs) $ \(j,x) -> lift $ genNode ctx (\i -> Proj i j vx) >>= push x
+        vx   <- fmap M.size get >>= lift . genNode ctx . var
+        forM_ (zip [0..] xs) $ \(j,x) -> lift (genNode ctx (proj j vx)) >>= push x
         vb   <- go t
-        vt   <- lift $ genNode ctx (\i -> Abst i vx vb)
-        vdom <- lift $ genNode ctx (\i -> Dom i vt)
-        vcod <- lift $ genNode ctx (\i -> Cod i vt)
-        lift $ addEdge vx vdom
-        lift $ addEdge vcod vt
+        vt   <- lift $ genNode ctx (abst vx vb)
+        vdom <- lift $ genNode ctx (dom vt)
+        vcod <- lift $ genNode ctx (cod vt)
+        lift $ addEdge ctx vx vdom
+        lift $ addEdge ctx vcod vt
         return vt
     go (Syntax.App t ts) = do
         v    <- go t
         vs   <- mapM go ts
-        vtup <- lift $ genNode ctx (\i -> Tuple i vs)
-        vt   <- lift $ genNode ctx (\i -> Flow.App i v vtup)
-        vdom <- lift $ genNode ctx (\i -> Dom i v)
-        vcod <- lift $ genNode ctx (\i -> Cod i v)
+        vtup <- lift $ genNode ctx (tuple vs)
+        vt   <- lift $ genNode ctx (app v vtup)
+        vdom <- lift $ genNode ctx (dom v)
+        vcod <- lift $ genNode ctx (cod v)
         lift $ addEdge ctx vdom vtup
         lift $ addEdge ctx vt vcod
         forM_ (zip [0..] vs) $ \(j,vj) -> do
-            vp <- lift $ genNode ctx (\i -> Proj i j vtup)
+            vp <- lift $ genNode ctx (proj j vtup)
             lift $ addEdge ctx vp vj
         return vt
     go (t1 :+: t2) = do
         v1 <- go t1
         v2 <- go t2
-        vt <- lift $ genNode ctx (\i -> Br i [v1,v2])
+        vt <- lift $ genNode ctx (br [v1,v2])
         lift $ addEdge ctx vt v1
         lift $ addEdge ctx vt v2
         return vt
@@ -131,15 +170,20 @@ buildGraph (Program defs t0) = where
         v1 <- go t1
         v2 <- go t2
         v3 <- go t3
-        vt <- lift $ genNode ctx (\i -> Br i [v1,v2,v3])
+        vt <- lift $ genNode ctx (br [v1,v2,v3])
         lift $ addEdge ctx vt v2
         lift $ addEdge ctx vt v3
         return vt
-    go t = lift $ genNode ctx (\i -> Cst i t)
-    -}
+    go t = lift $ genNode ctx (cst t)
 
 type Constructor = Id -> FlowTerm
-data Context s = Context { nodeTable :: HT.HashTable s FlowKey FlowTerm
+data Context s = Context { nodeTable     :: HT.HashTable s FlowKey FlowTerm
+                         , labelTable    :: HT.HashTable s Id FlowTerm
+                         , inEdgeTable   :: HT.HashTable s Id [FlowTerm]
+                         , outEdgeTable  :: HT.HashTable s Id [FlowTerm]
+                         , domLiftTable  :: HT.HashTable s (Id,Id) ()
+                         , codLiftTable  :: HT.HashTable s (Id,Id) ()
+                         , projLiftTable :: HT.HashTable s ((Id,Id),Int) ()
                          , counter   :: STRef s Id }
 
 genNode :: Context s -> Constructor -> ST s FlowTerm
@@ -150,14 +194,71 @@ genNode ctx constructor = fmap constructor $ mfix $ \i -> do
     mv <- HT.lookup tbl k
     case mv of
         Just v -> return $ termId v
-        Nothing -> HT.insert k v >> incr (counter ctx)
+        Nothing -> do 
+            HT.insert tbl k v 
+            i <- incr (counter ctx)
+            HT.insert (labelTable ctx) i v
+            HT.insert (inEdgeTable ctx) i []
+            HT.insert (outEdgeTable ctx) i []
+            return i
 
 incr :: STRef s Id -> ST s Id
 incr st = readSTRef st <* modifySTRef st (+1)
 
+addEdge :: Context s -> FlowTerm -> FlowTerm -> ST s ()
+addEdge ctx s t = do
+    let in_tbl = inEdgeTable ctx
+        out_tbl = outEdgeTable ctx
+        modifyTable tbl i f = HT.lookup tbl i >>= HT.insert tbl i . f . fromJust
+    modifyTable out_tbl (termId s) (t:)
+    modifyTable in_tbl  (termId t) (s:)
 
+readTable :: (Hashable k,Eq k) => HT.HashTable s k v -> k -> ST s v
+readTable tbl i = fromJust <$> HT.lookup tbl i
 
+containTable :: (Hashable k,Eq k) => HT.HashTable s k v -> k -> ST s Bool
+containTable tbl i = isJust <$> HT.lookup tbl i
 
+calcClosure :: Context s -> ST s ()
+calcClosure ctx = do
+    let go [] [] = return ()
+        go [] qs = go (reverse qs) []
+        go ((_,dt@(Dom _ t)):es) qs = do
+            _ns <- readTable (inEdgeTable ctx) (termId t)
+            _ns <- filterM (\s -> not <$> containTable (domLiftTable ctx) (termId s,termId t)) _ns
+            es' <- forM _ns $ \s -> do
+                ds <- genNode ctx $ dom s
+                addEdge ctx dt ds
+                HT.insert (domLiftTable ctx) (termId s,termId t) ()
+                return (dt,ds)
+            go es (es'++qs)
+        go ((_,ct@(Cod _ t)):es) qs = do
+            _ns <- readTable (outEdgeTable ctx) (termId t)
+            _ns <- filterM (\s -> not <$> containTable (codLiftTable ctx) (termId s,termId t)) _ns
+            es' <- forM _ns $ \s -> do
+                cs <- genNode ctx $ cod s
+                addEdge ctx ct cs
+                HT.insert (codLiftTable ctx) (termId s,termId t) ()
+                return (ct,cs)
+            go es (es'++qs)
+        go ((_,pt@(Proj _ j t)):es) qs= do
+            _ns <- readTable (outEdgeTable ctx) (termId t)
+            _ns <- filterM (\s -> not <$> containTable (projLiftTable ctx) ((termId s,termId t),j)) _ns
+            es' <- forM _ns $ \s -> do
+                ps <- genNode ctx $ proj j s
+                addEdge ctx pt ps
+                HT.insert (projLiftTable ctx) ((termId s,termId t),j) ()
+                return (pt,ps)
+            go es (es'++qs)
+        go (_:es) qs = go es qs
+    es <- getEdges ctx
+    go es []
+
+getEdges :: Context s -> ST s [(FlowTerm,FlowTerm)]
+getEdges ctx = HT.foldM f [] (outEdgeTable ctx) where
+    f acc (k,vs) = do
+        s <- readTable (labelTable ctx) k
+        return $ [ (s,t) | t <- vs ] ++ acc
 {-
 
 labelGrammar :: A.Grammar -> SortEnv -> ([(Id,Id)], M.Map Key FlowTerm)
