@@ -4,6 +4,7 @@ import Data.Foldable(toList)
 import Control.Monad.Writer
 import Util
 import Data.Hashable
+import Data.List(intersperse)
 
 data Program = Program { definitions :: [Def]
                        , mainTerm    :: Term } deriving(Show)
@@ -15,7 +16,19 @@ data Term = C Bool | V Symbol
           | App Term [Term]
           | Term :+: Term 
           | If Term Term Term 
-          | Fail Symbol | Omega Symbol deriving(Show,Eq)
+          | Fail Symbol | Omega Symbol deriving(Eq)
+
+instance Show Term where
+    show (C True) = "true"
+    show (C False) = "false"
+    show (V x) = x
+    show (Lam xs t) = "λ <"++concat (intersperse "," xs)++"> . "++show t
+    show (App t ts) = "("++show t++") "++"<"++concat (intersperse "," $ map show ts)++">" 
+    show (t1 :+: t2) = unwords ["("++show t1++")","<>",show t2]
+    show (If t1 t2 t3) = unwords ["if",show t1,"then",show t2,"else",show t3]
+    show (Fail s) = "Fail(" ++ s ++ ")"
+    show (Omega s) = "Omega("++ s ++ ")"
+
 
 symbols :: Program -> [Symbol]
 symbols (Program defs t0) = nub $ toList $ execWriter doit where
