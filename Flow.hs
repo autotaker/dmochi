@@ -14,7 +14,8 @@ import Data.Hashable
 import qualified Data.HashTable.Class as HT
 import Data.HashTable.ST.Basic (HashTable)
 import Control.Monad.ST
-import Data.Array
+import Data.Array.Unboxed
+import Data.Array.ST
 import Control.Arrow(first,second)
 import Data.Function
 import Debug.Trace
@@ -25,14 +26,13 @@ newtype VarId = VarId { getId :: Int }deriving(Ord,Eq)
 instance Show VarId where
     show = show . getId
 
-
 type Id = Int
 
 data FlowTerm = Var Id !VarId
               | App Id !FlowTerm !FlowTerm
-              | Abst Id !VarId !FlowTerm 
+              | Abst Id !FlowTerm !FlowTerm 
               | Br    Id ![FlowTerm]
-              | Tuple Id ![FlowTerm]
+              | Tuple Id ![FlowTerm] [Term] -- for memo
               | Proj Id !Int !FlowTerm
               | Dom Id !FlowTerm 
               | Cod Id !FlowTerm
@@ -40,7 +40,7 @@ data FlowTerm = Var Id !VarId
 
 data FlowKey = KVar VarId
              | KApp Int Int
-             | KAbst VarId Int
+             | KAbst Int Int
              | KBr ![Id]
              | KTuple ![Id]
              | KProj !Int !Id
@@ -54,7 +54,7 @@ instance Hashable FlowKey where
                                     `hashWithSalt` i1 
                                     `hashWithSalt` i2
     hashWithSalt s (KAbst i1 i2) = s `hashWithSalt`(3::Int) 
-                                     `hashWithSalt` getId i1
+                                     `hashWithSalt` i1
                                      `hashWithSalt` i2
     hashWithSalt s (KBr is) = s `hashWithSalt` (4::Int) `hashWithSalt` is
     hashWithSalt s (KTuple is) = s `hashWithSalt` (5::Int) `hashWithSalt` is
@@ -72,7 +72,7 @@ termId (Var i _) = i
 termId (Flow.App i _ _) = i
 termId (Abst i _ _) = i
 termId (Br i _) = i
-termId (Tuple i _) = i
+termId (Tuple i _ _) = i
 termId (Proj i _ _) = i
 termId (Dom i _) = i
 termId (Cod i _) = i
@@ -80,9 +80,9 @@ termId (Cod i _) = i
 key :: FlowTerm -> FlowKey
 key (Var _ i) = KVar i
 key (Flow.App _ t1 t2) = KApp (termId t1) (termId t2)
-key (Abst _ i t2) = KAbst i (termId t2)
+key (Abst _ t1 t2) = KAbst (termId t1) (termId t2)
 key (Br _ ts) = KBr $ map termId ts
-key (Tuple _ ts) = KTuple $ map termId ts
+key (Tuple _ ts _) = KTuple $ map termId ts
 key (Proj _ j t) = KProj j $ termId t
 key (Dom _ t) = KDom $ termId t
 key (Cod _ t) = KCod $ termId t
@@ -91,12 +91,12 @@ var :: VarId -> Constructor
 var j i = Var i j
 app :: FlowTerm -> FlowTerm -> Constructor
 app t1 t2 i = Flow.App i t1 t2
-abst :: VarId -> FlowTerm -> Constructor
+abst :: FlowTerm -> FlowTerm -> Constructor
 abst x t i = Abst i x t
 br :: [FlowTerm] -> Constructor
 br ts i = Br i ts
-tuple :: [FlowTerm] -> Constructor
-tuple ts i = Tuple i ts
+tuple :: [FlowTerm] -> [Term] -> Constructor
+tuple ts _ts i = Tuple i ts _ts
 proj :: Int -> FlowTerm -> Constructor
 proj j t i = Proj i j t
 dom :: FlowTerm -> Constructor
@@ -108,6 +108,7 @@ type Constructor = Id -> FlowTerm
 data Context s = Context { nodeTable     :: HashTable s FlowKey FlowTerm
                          , labelTable    :: HashTable s Id FlowTerm
                          , counter   :: STRef s Id }
+
 buildGraph :: M.Map Symbol Sort -> Program -> ((Array Id FlowTerm,Array Id [Id]),M.Map Symbol' Id)
 buildGraph senv p = runST $ do
     ctx <- newContext
@@ -118,9 +119,7 @@ buildGraph senv p = runST $ do
     return ((lbl,edgeTbl),fmap termId env)
 
 newContext :: ST s (Context s)
-newContext = Context <$> HT.new
-                     <*> HT.new
-                     <*> newSTRef 0
+newContext = Context <$> HT.new <*> HT.new <*> newSTRef 0
 
 getNodes :: Context s -> ST s (Array Id FlowTerm)
 getNodes ctx = do
@@ -128,6 +127,7 @@ getNodes ctx = do
     array (0,n-1) <$> HT.toList (labelTable ctx)
 
 type Symbol' = Either Symbol [Symbol]
+type Sort' = Either Sort [Sort]
 
 gatherPrimProgram :: Context s -> M.Map Symbol Sort -> Program -> StateT (M.Map Symbol' FlowTerm,S.Set (Id,Id,Sort')) (ST s) ()
 gatherPrimProgram ctx senv (Program defs t0) = do
@@ -149,8 +149,6 @@ lookupVar x = (M.! Left x).fst <$> get
 newVar :: Context s -> Symbol' -> StateT (M.Map Symbol' FlowTerm, S.Set (Id, Id, Sort')) (ST s) FlowTerm
 newVar ctx x = get >>= lift . genNode ctx . var . VarId . M.size . fst >>= \t -> push x t >> pure t
 
-type Sort' = Either Sort [Sort]
-
 gatherPrimTerm :: Context s -> M.Map Symbol Sort -> Term -> StateT (M.Map Symbol' FlowTerm, S.Set (Id,Id,Sort')) (ST s) (FlowTerm,Sort)
 gatherPrimTerm ctx senv = go where
     go (V x) = (,senv M.! x) <$> lookupVar x 
@@ -159,11 +157,11 @@ gatherPrimTerm ctx senv = go where
     go (Omega x) = (,senv M.! x) <$> newVar ctx (Left x)
     go (Fail x) = (,senv M.! x) <$> newVar ctx (Left x)
     go (Lam xs t) = do
-        vx@(Var _ xi) <- newVar ctx $ Right xs
+        vx <- newVar ctx $ Right xs
         forM_ (zip [0..] xs) $ \(j,x) -> lift (genNode ctx (proj j vx)) >>= push (Left x)
         let sortArgs = map (senv M.!) xs
         (vb,sortb) <- go t
-        vt   <- lift $ genNode ctx (abst xi vb)
+        vt   <- lift $ genNode ctx (abst vx vb)
         vdom <- lift $ genNode ctx (dom vt)
         vcod <- lift $ genNode ctx (cod vt)
         pushEdge vx vdom (Right sortArgs)
@@ -172,7 +170,7 @@ gatherPrimTerm ctx senv = go where
     go (Syntax.App t ts) = do
         (v, _ :-> sort) <- go t
         (vs,sorts) <- unzip <$> mapM go ts
-        vtup <- lift $ genNode ctx (tuple vs)
+        vtup <- lift $ genNode ctx (tuple vs ts)
         vt   <- lift $ genNode ctx (app v vtup)
         vdom <- lift $ genNode ctx (dom v)
         vcod <- lift $ genNode ctx (cod v)
@@ -248,6 +246,29 @@ calcClosure ctx = go [] [] where
                     pi2 <- fmap termId $ genNode ctx $ proj i v2
                     return (pi1,pi2,Left s)
                 go acc' es (l++qs)
+
+type ReducedFlowGraph = (Array Id [Id],M.Map [Symbol] Id,Array Id (Maybe [Term]))
+
+reduce1 :: Array Id FlowTerm -> Array Id [Id] -> M.Map Symbol' Id -> ReducedFlowGraph
+reduce1 lbl g label = (g',label',lbl')
+    where
+    bb = bounds g
+    rename = runSTUArray $ do
+        arr <- newArray bb (-1)
+        c <- newSTRef 0
+        let dfs v = do
+            x <- readArray arr v
+            when ( x == -1 ) $ do
+                incr c >>= writeArray arr v
+                forM_ (g ! v) dfs
+        forM_ [ i | (Right _,i) <- M.assocs label ] dfs
+        return arr
+    n = maximum $ elems rename
+    g' = array (0,n) [ (rename ! i,map (rename!) l) | (i,l) <- assocs g, rename ! i /= -1 ]
+    label' = M.fromList [ (xs,rename ! i) | (Right xs,i) <- M.toList label]
+    lbl' = array (0,n) [ (j,f t) | (i,j) <- assocs rename, j /= -1, let t = lbl ! i ]
+    f (Tuple _ _ ts) = return ts
+    f _ = Nothing
 
 -- pretty printing
 ppGraph :: (Show a) => Array Id a -> Array Id [Id] -> String

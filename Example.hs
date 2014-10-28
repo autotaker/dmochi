@@ -50,3 +50,9 @@ example4 = Program defs t0 where
           , ("f2",Lam ["x"] $ (Omega ""))]
    t1 = Lam ["f"] $ App (V "f") [C False] :+: App (V "f") [C True]
    t0 = App t1 [App (App (V "g") [V "f1"]) [V "f2"]]
+
+example5 :: Program
+example5 = Program defs t0 where
+   defs = [ ("f1",Lam ["x"] $ App (V "f2") [V "x"])
+          , ("f2",Lam ["x"] $ App (V "f1") [V "x"])]
+   t0 = App (V "f1") [C True]

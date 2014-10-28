@@ -1,7 +1,10 @@
 module Syntax where
 import qualified Data.Sequence as Q
+import qualified Data.Map as M
+import qualified Data.Set as S
 import Data.Foldable(toList)
 import Control.Monad.Writer
+import Control.Monad.Reader
 import Util
 import Data.Hashable
 import Data.List(intersperse)
@@ -16,7 +19,7 @@ data Term = C Bool | V Symbol
           | App Term [Term]
           | Term :+: Term 
           | If Term Term Term 
-          | Fail Symbol | Omega Symbol deriving(Eq)
+          | Fail Symbol | Omega Symbol deriving(Ord,Eq)
 
 instance Show Term where
     show (C True) = "true"
@@ -42,6 +45,26 @@ symbols (Program defs t0) = nub $ toList $ execWriter doit where
     go (App t ts) = go t >> mapM_ go ts
     go (t1 :+: t2) = go t1 >> go t2
     go (If t1 t2 t3) = go t1 >> go t2 >> go t3
+
+freeVariables :: Term -> [Symbol]
+freeVariables = nub . toList . execWriter . flip runReaderT S.empty . go where
+    push = tell . Q.singleton
+    go (V x) = fmap (S.member x) ask >>= \b -> unless b $ push x
+    go (Lam xs t) = local (flip (foldr S.insert) xs) $ go t
+    go (App t ts) = go t >> mapM_ go ts
+    go (t1 :+: t2) = go t1 >> go t2
+    go (If t1 t2 t3) = go t1 >> go t2 >> go t3
+    go _ = return ()
+
+boundVariables :: Term -> [[Symbol]]
+boundVariables = nub . toList . execWriter . go where
+    push = tell . Q.singleton
+    go (Lam xs t) = push xs >> go t
+    go (App t ts) = go t >> mapM_ go ts
+    go (t1 :+: t2) = go t1 >> go t2
+    go (If t1 t2 t3) = go t1 >> go t2 >> go t3
+    go _ = return ()
+    
 
 instance Hashable Term where
     hashWithSalt s (C b) = s `hashWithSalt` (0::Int) `hashWithSalt` b
