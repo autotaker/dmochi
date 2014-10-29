@@ -16,8 +16,8 @@ test input = do
     let ((lbl,edges),env) = buildGraph senv p
     let g = reduce1 lbl edges env
     let l = saturate p g
-    let go (x:y:_) | x == y = liftIO (print x) >> return x
-        go (x:xs) = liftIO (print x) >> go xs
+    let go (x:y:_) | x == y = liftIO (printContext x) >> return x
+        go (x:xs) = liftIO (printContext x) >> go xs
     c <- go l
     return $ saturateTerm (flowEnv c) (symEnv c) (mainTerm p)
 
@@ -28,7 +28,7 @@ main = do
     case args of
         [path] -> do
             res <- runExceptT $ do
-                p <- withExceptT show $ ExceptT $ parseFromFile program path
+                p <- withExceptT show $ ExceptT $ parse path
                 test p
             case res of
                 Left err -> putStrLn err

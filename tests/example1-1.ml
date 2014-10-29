@@ -1,4 +1,4 @@
-let rec g y z x = z x <> y x
+let rec g y z = z <> y
 and     f1 x = if x then x else Omega
 and     f2 x = if x then Omega else x
 and     f3 x = Omega

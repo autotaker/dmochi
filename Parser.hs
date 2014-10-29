@@ -33,6 +33,11 @@ parens :: Parser a -> Parser a
 parens = P.parens lexer
 commaSep1 :: Parser a -> Parser [a]
 commaSep1 = P.commaSep1 lexer
+whiteSpace :: Parser ()
+whiteSpace = P.whiteSpace lexer
+
+parse :: FilePath -> IO (Either ParseError Program)
+parse path = parseFromFile (whiteSpace *> program) path
 
 program :: Parser Program
 program = Program <$> (reserved "let" *> reserved "rec" *> defs )
@@ -42,7 +47,7 @@ defs :: Parser [Def]
 defs = sepBy def (reserved "and")
 
 def :: Parser Def
-def = (,) <$> identifier <*> (Lam <$> args <*> (reservedOp "=" *> term))
+def = (,) <$> identifier <*> liftA2 lam1 (many1 args) (reservedOp "=" *> term)
 
 args :: Parser [Symbol]
 args = parens (commaSep1 identifier)
@@ -53,8 +58,11 @@ term = lamE
     <|> branchE
     <|> nonDetE
 
+lam1 :: [[Symbol]] -> Term -> Term
+lam1 = flip (foldr Lam)
+
 lamE :: Parser Term
-lamE = liftA2 Lam (reserved "fun" *> args) (reservedOp "->" *> term)
+lamE = liftA2 lam1 (reserved "fun" *> many1 args) (reservedOp "->" *> term)
 
 branchE :: Parser Term
 branchE = liftA3 If (reserved "if" *> term) 
