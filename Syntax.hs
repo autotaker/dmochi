@@ -1,6 +1,5 @@
 module Syntax where
 import qualified Data.Sequence as Q
-import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Foldable(toList)
 import Control.Monad.Writer

@@ -1,5 +1,4 @@
 import System.Environment
-import Text.Parsec.String
 import Parser
 import Alpha
 import Flow hiding(Context)
@@ -18,6 +17,7 @@ test input = do
     let l = saturate p g
     let go (x:y:_) | x == y = liftIO (printContext x) >> return x
         go (x:xs) = liftIO (printContext x) >> go xs
+        go _ = undefined
     c <- go l
     return $ saturateTerm (flowEnv c) (symEnv c) (mainTerm p)
 
@@ -33,4 +33,4 @@ main = do
             case res of
                 Left err -> putStrLn err
                 Right r -> print r
-        _ -> return ()
+        _ -> putStrLn "Please specify input file."

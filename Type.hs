@@ -12,7 +12,7 @@ import Data.Array
 import Data.Array.ST
 import Data.Maybe
 import Data.List(intersperse)
-import Debug.Trace
+--import Debug.Trace
 
 data VType = T | F | VFun [([VType],TType)] deriving(Eq,Ord)
 data TType = TPrim VType | TFail deriving(Eq,Ord)
@@ -26,7 +26,7 @@ instance Show VType where
     show F = "F"
     show (VFun l) = case l of
         [] -> "Top"
-        _ -> concat $ intersperse "," $ map (\(tys,ty) -> "("++show tys ++ " -> " ++ show ty++")") l
+        _ -> concat $ intersperse "^" $ map (\(tys,ty) -> "("++show tys ++ " -> " ++ show ty++")") l
 
 data Context = Context { flowEnv :: M.Map [Symbol] [[VType]]
                        , symEnv  :: M.Map Symbol VType } deriving(Eq,Show)

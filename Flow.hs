@@ -18,7 +18,7 @@ import Data.Array.Unboxed
 import Data.Array.ST
 import Control.Arrow(first,second)
 import Data.Function
-import Debug.Trace
+--import Debug.Trace
 
 import Language.Dot hiding(Id)
 
