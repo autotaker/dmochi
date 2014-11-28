@@ -7,7 +7,6 @@ import Text.Printf
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Syntax
-import Data.List(foldl')
 import Util
 
 alphaConversion :: Program -> Either Err (Program,[Symbol])
@@ -32,22 +31,23 @@ type AMonad a = ReaderT (M.Map String String) (StateT (S.Set String) (Except Err
 
 convertTerm :: String -> Term -> AMonad Term
 convertTerm label _t = case _t of
+    C _ -> pure _t
     V x -> V <$> rename x
-    Lam xs t -> do
-        assert (allDifferent xs) $ 
-            printf "Conflicting labels %s at %s" (show xs) label
-        xs' <- forM xs (genName label)
-        let f e = foldl' (\acc (x,x') -> M.insert x x' acc) e $ zip xs xs'
-        Lam xs' <$> (local f $ convertTerm (label++"$f") t)
-    App t ts -> liftA2 App (convertTerm label t)
-                           (mapM (convertTerm label) ts)
+    T ts -> T <$> mapM (convertTerm label) ts
+    Proj i t -> Proj i <$> convertTerm label t
+    Let x t1 t2 -> do
+        x' <- genName label x
+        liftA2 (Let x') (convertTerm label t1) (local (M.insert x x') $ convertTerm label t2)
+    Lam x t -> do
+        x' <- genName label x
+        Lam x' <$> (local (M.insert x x') $ convertTerm (label++"$f") t)
+    App t1 t2 -> liftA2 App (convertTerm label t1) (convertTerm label t2)
     t1 :+: t2 -> liftA2 (:+:) (convertTerm label t1) (convertTerm label t2)
     If t1 t2 t3 -> liftA3 If (convertTerm label t1)
                              (convertTerm label t2)
                              (convertTerm label t3)
     Fail _ -> Fail <$> genName label "Fail"
     Omega _ -> Omega <$> genName label "Omega"
-    t -> pure t
 
 rename :: Symbol -> AMonad Symbol
 rename x = do
