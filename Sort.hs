@@ -1,6 +1,6 @@
 module Sort where
 
-data Sort = Base | [Sort] :-> Sort deriving(Eq,Ord,Show)
+data Sort = Base | Tuple [Sort] | Sort :-> Sort deriving(Eq,Ord,Show)
 
 
 

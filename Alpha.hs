@@ -34,7 +34,8 @@ convertTerm label _t = case _t of
     C _ -> pure _t
     V x -> V <$> rename x
     T ts -> T <$> mapM (convertTerm label) ts
-    Proj i t -> Proj i <$> convertTerm label t
+    TF  -> pure TF
+    Proj i j t -> Proj i j <$> convertTerm label t
     Let x t1 t2 -> do
         x' <- genName label x
         liftA2 (Let x') (convertTerm label t1) (local (M.insert x x') $ convertTerm label t2)
@@ -42,7 +43,7 @@ convertTerm label _t = case _t of
         x' <- genName label x
         Lam x' <$> (local (M.insert x x') $ convertTerm (label++"$f") t)
     App t1 t2 -> liftA2 App (convertTerm label t1) (convertTerm label t2)
-    t1 :+: t2 -> liftA2 (:+:) (convertTerm label t1) (convertTerm label t2)
+--    t1 :+: t2 -> liftA2 (:+:) (convertTerm label t1) (convertTerm label t2)
     If t1 t2 t3 -> liftA3 If (convertTerm label t1)
                              (convertTerm label t2)
                              (convertTerm label t3)

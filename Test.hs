@@ -1,17 +1,21 @@
 import System.Environment
-import Parser
+import Parser.MoCHi
 import Alpha
-import Flow hiding(Context)
+--import Flow hiding(Context)
 import SortCheck
-import Type
+--import Type
 import Syntax
 import Control.Monad.Except
 
 
-test :: Program -> ExceptT String IO [TType]
+--test :: Program -> ExceptT String IO [TType]
 test input = do
     (p,syms) <- ExceptT $ return $ alphaConversion input
+    liftIO $ mapM print (definitions p)
+    --liftIO $ print p
     senv <- ExceptT $ return $ sortCheck p syms
+    liftIO $ print senv
+    {-
     let ((lbl,edges),env) = buildGraph senv p
     let g = reduce1 lbl edges env
     let l = saturate p g
@@ -20,7 +24,7 @@ test input = do
         go _ = undefined
     c <- go l
     return $ saturateTerm (flowEnv c) (symEnv c) (mainTerm p)
-
+    -}
 
 main :: IO ()
 main = do
@@ -28,7 +32,7 @@ main = do
     case args of
         [path] -> do
             res <- runExceptT $ do
-                p <- withExceptT show $ ExceptT $ parse path
+                p <- withExceptT show $ ExceptT $ parseFile path
                 test p
             case res of
                 Left err -> putStrLn err
