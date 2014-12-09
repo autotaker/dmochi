@@ -42,6 +42,9 @@ genFresh = (SVar <$> get) <* modify succ
         
 gatherP :: Program -> Env -> SWM ()
 gatherP (Program defs t0) env = do
+    env M.! "true" `shouldBe` SBase
+    env M.! "false" `shouldBe` SBase
+    env M.! "*" `shouldBe` SBase
     forM_ defs $ \(f,t) -> do
         s <- gatherT t env
         s `shouldBe` (env M.! f)
