@@ -19,13 +19,14 @@ import Control.Monad.ST
 import Data.Array.Unboxed
 import Data.Array.ST
 import Data.Function
---import Debug.Trace
+import Debug.Trace
 
 import Language.Dot hiding(Id)
 
-newtype VarId = VarId { getId :: Int }deriving(Ord,Eq)
+data VarId = VarId { getId :: Int
+                   , name  :: Symbol }deriving(Ord,Eq)
 instance Show VarId where
-    show = show . getId
+    show = name
 
 type Id = Int
 
@@ -129,13 +130,17 @@ data Context s = Context { nodeTable     :: HashTable s FlowKey FlowTerm
 buildGraph :: M.Map Symbol (Sort,Term) -> Program -> ((Array Id (Maybe Term),Array Id [Id]),M.Map Symbol Id)
 buildGraph senv p = runST $ do
     ctx <- newContext
-    env <- fmap M.fromList $ forM (zip (M.assocs senv) (map VarId [0..])) $ \((x,(s,t)),v) -> do
-        ft <- genNode ctx (Just t) (var v)
+    env <- fmap M.fromList $ forM (zip (M.assocs senv) [0..]) $ \((x,(s,t)),i) -> do
+        ft <- genNode ctx (Just t) (var (VarId i x))
         return (x,(ft,s))
     edgeSet <- execStateT (gatherPrimProgram ctx env p) S.empty
     es <- calcClosure ctx (S.elems edgeSet)
     lbl <- getNodes ctx
     let edgeTbl = accumArray (flip (:)) [] (bounds lbl) es
+    _ <- do
+        n <- readSTRef $ counter ctx
+        arr <- array (0,n-1) <$> HT.toList (labelTable ctx)
+        trace (ppGraph arr edgeTbl) $ return ()
     return ((lbl,edgeTbl),fmap (termId . fst) env)
 
 newContext :: ST s (Context s)
@@ -161,7 +166,6 @@ lookupVar env x = fst $ env M.! x
 varId :: FlowTerm -> VarId
 varId (Var _ v) = v
 varId _ = undefined
-
 
 gatherPrimTerm :: Context s -> M.Map Symbol (FlowTerm,Sort) -> Term -> StateT (S.Set (Id,Id,Sort)) (ST s) (FlowTerm,Sort)
 gatherPrimTerm ctx env = go where
@@ -194,8 +198,8 @@ gatherPrimTerm ctx env = go where
         (v2,sort) <- go t2
         (v3,_) <- go t3
         vt <- lift $ genNode ctx (Just _t) (br v1 v2 v3)
-        --pushEdge vt v2 sort
-        --pushEdge vt v3 sort
+        pushEdge vt v2 sort
+        pushEdge vt v3 sort
         return (vt,sort)
     go _t@(T ts) = do
         (fts,ss) <- unzip <$> mapM go ts
@@ -211,6 +215,7 @@ gatherPrimTerm ctx env = go where
         let (fx,_) = env M.! x
         vt <- lift $ genNode ctx (Just _t) (letc (varId fx) ftx ft)
         pushEdge fx ftx sx
+        pushEdge vt ft s
         return (vt,s)
     go _t@(Syntax.Proj n d t) = do
         (t',Sort.Tuple ss) <- go t
@@ -289,10 +294,8 @@ reduce1 tlbl g label = (g2,label',lbl')
         return arr
     n = maximum $ elems rename
     g1 :: Array Id [Id]
-    g1 = listArray bb [ if f (tlbl ! i) then [] else l | (i,l) <- assocs g]
+    g1 = listArray bb [ l | (_,l) <- assocs g]
     g2 = array (0,n) [ (rename ! i,map (rename!) l) | (i,l) <- assocs g1, rename ! i /= -1 ]
-    f Nothing = False
-    f (Just t) = not $ isPrim t
     label' = M.fromList [ (x,rename ! i) | (x,i) <- M.toList label]
     lbl' = array (0,n) [ (j,tlbl ! i) | (i,j) <- assocs rename, j /= -1 ]
 

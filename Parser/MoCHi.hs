@@ -57,7 +57,7 @@ program = do
     ds <- lines
     let ds' = map (\(f,(xs,t)) -> (f,foldr Lam t xs)) $ M.assocs $ M.fromListWith (\(a,b) (_,d) -> (a,If TF b d)) ds
     case lookup m ds' of
-        Just t -> return $ Program ds' t
+        Just t -> return $ Program (filter (\(x,_) -> x /= m) ds') t
         Nothing -> unexpected $ "undefined main symbol : " ++ m
 
 mainDef :: Parser Symbol
