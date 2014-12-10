@@ -12,7 +12,7 @@ import Data.Array
 import Data.Array.ST
 import Data.Maybe
 import Data.List(intersperse)
-import Debug.Trace
+import Data.List((\\))
 
 data VType = VT | VF | VTup [VType] |VFun [(VType,TType)] deriving(Eq,Ord)
 data TType = TPrim VType | TFail deriving(Eq,Ord)
@@ -63,7 +63,7 @@ saturateFlow (edgeTbl,symMap,leafTbl) env = fmap (tbl!) symMap  where
     terms :: [Term]
     terms = catMaybes $ elems leafTbl
     fvarMap :: M.Map Term [Symbol]
-    fvarMap = M.fromList $ map (\t -> (t,freeVariables t)) terms
+    fvarMap = M.fromList $ map (\t -> (t,freeVariables t \\ (M.keys env))) terms
     bvarMap :: M.Map Term [Symbol]
     bvarMap = M.fromList $ map (\t -> (t,boundVariables t)) terms
     bb = bounds edgeTbl
@@ -82,11 +82,11 @@ saturateFlow (edgeTbl,symMap,leafTbl) env = fmap (tbl!) symMap  where
                     Nothing -> do
                         tys <- forM (edgeTbl  ! v) $ readArray arr
                         let res = nub $ concat $ ty : tys
-                        traceShow ("updated",v,res) $ return res
-                    Just (V x) -> do
+                        return res
+                    Just (V _) -> do
                         tys <- forM (edgeTbl  ! v) $ readArray arr
                         let res = nub $ concat $ ty : tys
-                        traceShow ("updated",v,(V x),res) $ return res
+                        return res
                     Just t -> do
                         let fvars = fvarMap M.! t
                             bvars = bvarMap M.! t
@@ -100,9 +100,9 @@ saturateFlow (edgeTbl,symMap,leafTbl) env = fmap (tbl!) symMap  where
                                     TPrim _ty -> return _ty
                                     _ -> empty
                             f t
-                        traceShow ("updated",v,t,res) $ return res
+                        return res
                 if ty' /= ty 
-                then writeArray arr v ty' >> traceShow ("add",(depTbl ! v)) (go (foldr S.insert vs (depTbl ! v)))
+                then writeArray arr v ty' >> (go (foldr S.insert vs (depTbl ! v)))
                 else go vs
         go $ S.fromList $ map fst $ filter (isJust . snd) $ assocs leafTbl
         return arr
@@ -115,7 +115,7 @@ saturateSym _flowEnv _symEnv defs =
     M.fromList $ [ (x,ty) | (x,t) <- defs, let [TPrim ty] = saturateTerm _flowEnv _symEnv t ]
 
 saturateTerm :: M.Map Symbol [VType] -> M.Map Symbol VType -> Term -> [TType]
-saturateTerm _flowEnv e t = let v = go e t in traceShow (t,v) v where
+saturateTerm _flowEnv = go where
     go _ (C True) = pure $ TPrim VT
     go _ (C False) = pure $ TPrim VF
     go env (V x) = pure $ TPrim (env M.! x)
@@ -133,9 +133,9 @@ saturateTerm _flowEnv e t = let v = go e t in traceShow (t,v) v where
                   return ty)
     go env (If t1 t2 t3) =
         let ty1 = go env t1 in
-        (pure TFail <* guard (TFail `elem` ty1)) <|>
-        (go env t2  <* guard (TPrim VT `elem` ty1)) <|>
-        (go env t3  <* guard (TPrim VF `elem` ty1))
+        nub $ (pure TFail <* guard (TFail `elem` ty1)) <|>
+              (go env t2  <* guard (TPrim VT `elem` ty1)) <|>
+              (go env t3  <* guard (TPrim VF `elem` ty1))
     go env (T ts) = 
         let check = foldr (\tyi acc -> (TFail `elem` tyi) || (not (null tyi) && acc)) False
             tys = map (go env) ts 
