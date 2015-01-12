@@ -137,10 +137,12 @@ buildGraph senv p = runST $ do
     es <- calcClosure ctx (S.elems edgeSet)
     lbl <- getNodes ctx
     let edgeTbl = accumArray (flip (:)) [] (bounds lbl) es
+    {-
     _ <- do
         n <- readSTRef $ counter ctx
         arr <- array (0,n-1) <$> HT.toList (labelTable ctx)
-        trace (ppGraph arr edgeTbl) $ return ()
+        return ()
+        -}
     return ((lbl,edgeTbl),fmap (termId . fst) env)
 
 newContext :: ST s (Context s)

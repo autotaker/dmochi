@@ -76,6 +76,7 @@ line = do
 
 term :: Parser Term
 term = letE <|> 
+       funE <|>
        branchE <|> 
        l0E    <|>
        l1E    <|>
@@ -101,6 +102,15 @@ letE = do
     reserved "in"
     t <- term
     return (Let x tx t)
+
+funE :: Parser Term
+funE = do
+    reserved "fun"
+    x <- identifier
+    reservedOp "->"
+    t <- term
+    return (Lam x t)
+
 
 andE :: Parser Term
 andE = try $ do
