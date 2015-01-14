@@ -1,4 +1,4 @@
-module Util where
+module Boolean.Util where
 
 import qualified Data.Set as S
 import Control.Monad.Except

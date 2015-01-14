@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Parser where
+module Boolean.Parser where
 import Text.Parsec
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Language(emptyDef)

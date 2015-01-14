@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Parser.MoCHi(parseFile) where
+module Boolean.Parser.MoCHi(parseFile) where
 import Text.Parsec hiding(Line)
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Language(emptyDef)
 import Text.Parsec.String
 import Control.Applicative hiding((<|>),many)
-import Syntax
+import Boolean.Syntax
 import Control.Monad(replicateM)
 import qualified Data.Map as M
 import Prelude hiding(lines)

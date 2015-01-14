@@ -1,12 +1,12 @@
-module Alpha(Err,alphaConversion) where
+module Boolean.Alpha(Err,alphaConversion) where
 import Control.Monad.Except
 import Control.Monad.State
 import Control.Monad.Reader
 import Control.Applicative
 import Text.Printf
 import qualified Data.Map as M
-import Syntax
-import Util
+import Boolean.Syntax
+import Boolean.Util
 
 alphaConversion :: Program -> Either Err (Program,[(Symbol,Term)])
 alphaConversion p = runExcept $ do

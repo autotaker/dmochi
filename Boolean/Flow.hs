@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns,TupleSections #-}
-module Flow where
+module Boolean.Flow where
 
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -8,10 +8,10 @@ import Control.Monad.State
 import Control.Applicative
 import Data.STRef
 import Data.Maybe
-import Syntax hiding(Proj,Let)
-import Sort hiding(Tuple)
-import qualified Sort
-import qualified Syntax
+import Boolean.Syntax hiding(Proj,Let)
+import Boolean.Sort hiding(Tuple)
+import qualified Boolean.Sort   as Sort
+import qualified Boolean.Syntax as Syntax
 import Data.Hashable
 import qualified Data.HashTable.Class as HT
 import Data.HashTable.ST.Basic (HashTable)
@@ -82,7 +82,7 @@ instance Eq FlowTerm where
          
 termId :: FlowTerm -> Id
 termId (Var i _) = i
-termId (Flow.App i _ _) = i
+termId (Boolean.Flow.App i _ _) = i
 termId (Abst i _ _) = i
 termId (Br i _ _ _) = i
 termId (Tuple i _) = i
@@ -93,7 +93,7 @@ termId (Cod i _) = i
 
 key :: FlowTerm -> FlowKey
 key (Var _ i) = KVar i
-key (Flow.App _ t1 t2) = KApp (termId t1) (termId t2)
+key (Boolean.Flow.App _ t1 t2) = KApp (termId t1) (termId t2)
 key (Abst _ t1 t2) = KAbst t1 (termId t2)
 key (Br _ t1 t2 t3) = KBr (termId t1) (termId t2) (termId t3)
 key (Tuple _ ts) = KTuple $ map termId ts
@@ -105,7 +105,7 @@ key (Cod _ t) = KCod $ termId t
 var :: VarId -> Constructor
 var j i = Var i j
 app :: FlowTerm -> FlowTerm -> Constructor
-app t1 t2 i = Flow.App i t1 t2
+app t1 t2 i = Boolean.Flow.App i t1 t2
 abst :: VarId -> FlowTerm -> Constructor
 abst x t i = Abst i x t
 letc :: VarId -> FlowTerm -> FlowTerm -> Constructor

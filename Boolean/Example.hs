@@ -1,4 +1,4 @@
-module Example where
+module Boolean.Example where
 import Syntax
 example1 :: Program
 example1 = Program defs t0 where

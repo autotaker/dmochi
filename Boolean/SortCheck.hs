@@ -1,13 +1,13 @@
 {-# LANGUAGE ViewPatterns,BangPatterns #-}
-module SortCheck(sortCheck) where
+module Boolean.SortCheck(sortCheck) where
 import Control.Monad.Except
 import Control.Monad.Writer
 import Control.Monad.State
 import Control.Applicative
 
-import Sort
-import Syntax
-import Util
+import Boolean.Sort
+import Boolean.Syntax
+import Boolean.Util
 import qualified Data.Sequence as Q
 import qualified Data.Map as M
 import Data.Traversable(traverse)

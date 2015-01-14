@@ -1,13 +1,13 @@
 {-# LANGUAGE TupleSections #-}
-module Type where
+module Boolean.Type where
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Applicative
-import Syntax
-import Flow(ReducedFlowGraph,Id)
+import Boolean.Syntax
+import Boolean.Flow(ReducedFlowGraph,Id)
 import Control.Arrow(second)
 import Control.Monad
-import Util
+import Boolean.Util
 import Data.Array
 import Data.Array.ST
 import Data.Maybe

@@ -1,10 +1,10 @@
 import System.Environment
-import Parser.MoCHi
-import Alpha
-import Flow hiding(Context)
-import SortCheck
-import Type
-import Syntax
+import Boolean.Parser.MoCHi
+import Boolean.Alpha
+import Boolean.Flow hiding(Context)
+import Boolean.SortCheck
+import Boolean.Type
+import Boolean.Syntax
 import Control.Monad.Except
 import qualified Data.Map as M
 

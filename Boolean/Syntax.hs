@@ -1,10 +1,10 @@
-module Syntax where
+module Boolean.Syntax where
 import qualified Data.Sequence as Q
 import qualified Data.Set as S
 import Data.Foldable(toList)
 import Control.Monad.Writer
 import Control.Monad.Reader
-import Util
+import Boolean.Util
 import Data.Hashable
 import Data.List(intersperse)
 import Text.Printf
@@ -30,6 +30,7 @@ data Term = C Bool | V Symbol | T [Term] | TF
 --          | Term :+: Term 
           | If Term Term Term 
           | Fail Symbol | Omega Symbol deriving(Ord,Eq)
+
 
 isPrim :: Term -> Bool
 isPrim (C _) = True
