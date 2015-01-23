@@ -107,3 +107,12 @@ instance Hashable Term where
     hashWithSalt s (Omega x) = s `hashWithSalt` (3::Int) `hashWithSalt` x
     hashWithSalt s TF = s `hashWithSalt` (4 :: Int)
     hashWithSalt _ _ = undefined
+
+printProgram :: Program -> IO ()
+printProgram p = do
+    printf "(* functions *)\n"
+    forM_ (definitions p) $ \(x,e) -> do
+        printf "let %s = %s\n" x (show e)
+    printf "(* main *)\n"
+    print (mainTerm p)
+

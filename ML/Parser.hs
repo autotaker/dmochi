@@ -4,8 +4,8 @@ import qualified Text.Parsec.Token as P
 import Text.Parsec.Expr
 import Text.Parsec.Language(emptyDef)
 import Text.Parsec.String
-import Control.Applicative hiding((<|>),many)
-import ML.Syntax
+import Control.Applicative hiding((<|>),many,optional)
+import ML.Syntax.UnTyped
 
 reservedNames :: [String]
 reservedNames = ["let","rec","in","and","fun","not",
@@ -17,7 +17,7 @@ language = emptyDef { P.commentStart = "(*"
                     , P.commentEnd = "*)"
                     , P.nestedComments = True
                     , P.reservedNames = reservedNames
-                    , P.reservedOpNames = ["=","<","&&","||","->","<>","+","-"]
+                    , P.reservedOpNames = ["=","<",">","&&","||","->","<>","+","-",";;","<=",">="]
                     , P.caseSensitive = True }
 
 lexer :: P.TokenParser st
@@ -48,9 +48,24 @@ semiSep = P.semiSep lexer
 brackets :: Parser a -> Parser a
 brackets = P.brackets lexer
 
+parseProgramFromFile :: FilePath -> IO (Either ParseError Program)
+parseProgramFromFile = parseFromFile (whiteSpace >> progP)
+
+progP :: Parser Program
+progP = Program <$> many defP <*> exprP
+
+defP :: Parser (Id,PType,Exp)
+defP = try $ do
+    x <- reserved "let" *> identifier
+    ty <- colon *> ptypeP
+    reservedOp "="
+    t <- exprP
+    optional (reservedOp ";;")
+    return (x,ty,t)
+
 exprP :: Parser Exp
-exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") where
-    simpleP = Value <$> valueP <|> letP <|> assumeP <|> lambdaP <|> failP <|> parens exprP
+exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") <?> "expr" where
+    simpleP = Value <$> (try valueP) <|> letP <|> assumeP <|> lambdaP <|> failP <|> parens exprP
     assumeP = Assume <$> (reserved "assume" *> valueP <* semi) 
                      <*> exprP
     lambdaP = Lambda <$> (reserved "fun" *> identifier <* reservedOp "->") 
@@ -58,19 +73,21 @@ exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") where
     failP   = Fail <$ reserved "Fail"
 
 letP :: Parser Exp
-letP = Let <$> (reserved "let" *> identifier)
+letP = (Let <$> (reserved "let" *> identifier)
            <*> sub
-           <*> (reserved "in" *> exprP)
+           <*> (reserved "in" *> exprP)) <?> "let"
     where sub = LExp <$> (reservedOp ":" *> ptypeP) <*> (reservedOp "=" *> exprP)
             <|> try (LApp <$> (reservedOp "=" *> identifier) <*> many1 termP)
             <|> LValue <$> (reservedOp "=" *> valueP)
 
 valueP :: Parser Value
-valueP = buildExpressionParser opTable termP where
+valueP = buildExpressionParser opTable termP <?> "value" where
     opTable = [ [prefix "-" (after Op OpNeg), prefix "+" id, prefix' "not" (after Op OpNot)]
               , [binary "+" (after2 Op OpAdd) AssocLeft, binary "-" (after2 Op OpSub) AssocLeft]
               , [binary "=" (after2 Op OpEq)  AssocNone, 
                  binary "<" (after2 Op OpLt) AssocNone,
+                 binary "<=" (after2 Op OpLte) AssocNone,
+                 binary ">=" (after2 Op OpGte) AssocNone,
                  binary ">" (after2 Op OpGt) AssocNone]
               , [binary "&&" (after2 Op OpAnd) AssocLeft]
               , [binary "||" (after2 Op OpOr) AssocLeft]
@@ -90,19 +107,11 @@ termP = Var <$> identifier
     <|> parens valueP
 
 ptypeP :: Parser PType
-ptypeP = base PInt "int" <|> base PBool "bool" <|> func where
+ptypeP = base PInt "int" <|> base PBool "bool" <|> func <|> parens ptypeP where
     base cstr ty = cstr <$> (reserved ty *> option [] (brackets $ semiSep predicateP))
     func = f <$> identifier <*> (reservedOp ":" *> ptypeP) <*> (reservedOp "->" *> ptypeP)
-    f x ty1 ty2 = PFun ty1 (g x ty2)
-    g :: Id -> PType -> (Value -> PType)
-    g x (PInt ps)      v = PInt (map (substV x v.) ps)
-    g x (PBool ps)     v = PBool (map (substV x v.) ps)
-    g x (PFun ty ty_f) v = PFun (g x ty v) (\w -> g x (ty_f w) v)
+    f x ty1 ty2 = PFun ty1 (x,ty2)
 
 predicateP :: Parser Predicate
-predicateP = f <$> identifier <*> (dot *> valueP) where
-    f :: Id -> Value -> Predicate
-    f x (Var y) | x == y = id
-    f x (Op op)          = \v -> Op $ fmap (($v).f x) op
-    f _ v                = const v
+predicateP = (,) <$> identifier <*> (dot *> valueP) where
 

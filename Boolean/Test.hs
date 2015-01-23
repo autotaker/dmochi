@@ -1,3 +1,4 @@
+module Boolean.Test(test) where
 import System.Environment
 import Boolean.Parser.MoCHi
 import Boolean.Alpha
