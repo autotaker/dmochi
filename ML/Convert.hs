@@ -1,17 +1,19 @@
 module ML.Convert where
-import ML.Syntax
+import ML.Syntax.Typed hiding(convertE,convertP,Env,convertV)
 import qualified Boolean.Syntax as B
 import qualified Data.Map as M
 import Control.Monad
 import Control.Applicative
-import Data.SBV
+import Data.SBV hiding(name)
 import System.IO.Unsafe
 import Data.IORef
-import Debug.Trace
+--import Debug.Trace
 import Text.Printf
+import Text.PrettyPrint(render)
+import ML.PrettyPrint.Typed
 
 type Constraints = [Value]
-type Env = M.Map Id (Either PType Value)
+type Env = M.Map String (Either PType Value)
 
 -- syntax sugars
 assume :: B.Term -> B.Term -> B.Term
@@ -60,8 +62,8 @@ infixl 9 !
 
 convert :: Program -> IO B.Program
 convert p = do
-    let env = M.fromList [ (x,Left ty) | (x,ty,_) <- functions p ]
-    ds <- forM (functions p) $ \(x,ty,e) -> (,) x <$> convertE [] env ty e
+    let env = M.fromList [ (name x,Left ty) | (x,ty,_) <- functions p ]
+    ds <- forM (functions p) $ \(x,ty,e) -> (,) (name x) <$> convertE [] env ty e
     let ps = [("and",tAnd),("or",tOr),("not",tNot)]
     t <- convertE [] env (PInt []) (mainTerm p)
     return $ B.Program (ps++ds) t
@@ -69,52 +71,58 @@ convert p = do
 convertE :: Constraints -> Env -> PType -> Exp -> IO B.Term
 convertE cts env sigma _e = case _e of
     Value v -> convertV cts env sigma v
-    Let x (LValue v) e -> 
-        convertE (addC cts $ Op (Var x `OpEq` v)) (addE env x (PInt [])) sigma e
-    Let x (LApp f vs) e -> do
-        let Left ty_f = env ! f
-        let (ty_vs,ty_r) = substPType ty_f vs
+    Let _ x (LValue v) e -> 
+        convertE (addC cts $ Op (Var x `OpEq` v)) (addE env (name x) (PInt [])) sigma e
+    Let _ x (LApp _ f vs) e -> do
+        let Left ty_f = env ! name f
+        let (ty_vs,ty_r) = substPTypes ty_f vs
         es <- zipWithM (convertE cts env) ty_vs (map Value vs)
-        B.Let x (foldl B.App (B.V f) es) <$> convertE cts (addE env x ty_r) sigma e
-    Let x (LExp ty_v ev) e -> 
-        B.Let x <$> convertE cts env ty_v ev <*> convertE cts (addE env x ty_v) sigma e
-    Assume v e ->
+        B.Let (name x) (foldl B.App (B.V (name f)) es) <$> convertE cts (addE env (name x) ty_r) sigma e
+    Let _ x (LExp ty_v ev) e -> 
+        B.Let (name x) <$> convertE cts env ty_v ev <*> convertE cts (addE env (name x) ty_v) sigma e
+    Assume _ v e ->
         assume <$> convertP cts env v <*> convertE (addC cts v) env sigma e
-    Lambda x e -> 
-        let PFun ty_x ty_r = sigma in
-        B.Lam x <$> convertE cts (addE env x ty_x) (ty_r (Var x)) e
-    Fail -> return $ B.Fail ""
-    Branch e1 e2 -> nondet <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
+    Lambda _ x e -> 
+        let PFun _ ty_x (y,ty_r) = sigma in
+        B.Lam (name x) <$> convertE cts (addE env (name x) ty_x) (substPType y (Var x) ty_r) e
+    Fail _ -> return $ B.Fail ""
+    Branch _ e1 e2 -> nondet <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
 
 convertV :: Constraints -> Env -> PType -> Value -> IO B.Term
 convertV cts env (PInt ps) v = do
     pnames <- replicateM (length ps) freshId
-    let bs = map ($v) ps
+    let bs = map (\(x,w) -> substV x v w) ps
     let envs = scanl (uncurry . addE') env $ zip pnames bs
     es <- zipWithM (\env_i b_i -> convertP cts env_i b_i) envs bs
     return $ foldr (uncurry B.Let) (B.T (map B.V pnames)) $ zip pnames es
 convertV cts env (PBool ps) v = do
     pnames <- replicateM (length ps) freshId
-    let bs = map ($v) ps
+    let bs = map (\(x,w) -> substV x v w) ps
     let envs = scanl (uncurry . addE') env $ zip pnames bs
     es <- zipWithM (\env_i b_i -> convertP cts env_i b_i) envs bs
     return $ foldr (uncurry B.Let) (B.T (map B.V pnames)) $ zip pnames es
-convertV cts env (PFun ty_x ty_r) v = do
+convertV cts env t1@(PFun ty ty_x (x0,ty_r)) v = do
     let Var f = v
-    let Left (PFun ty_x' ty_r') = env ! f
-    x <- freshId
-    B.Lam x <$> do
-        y <- freshId
-        let env1 = addE env x ty_x
-        B.Let y <$> convertV cts env1 ty_x' (Var x) <*> do
-            z <- freshId
-            let env2 = addE (addE env1 y ty_x') z (ty_r' (Var x))
-            B.Let z (B.App (B.V f) (B.V y)) <$> convertV cts env2 (ty_r (Var x)) (Var z)
+    let Left (t2@(PFun _ ty_x' (x0',ty_r'))) = env ! (name f)
+    let vf = B.V $ name f
+    if t1 == t2 then
+        return $ vf
+    else do
+        x <- freshId
+        B.Lam x <$> do
+            y <- freshId
+            let env1 = addE env x ty_x
+            let vx = Var $ Id (getType x0) x
+            B.Let y <$> convertV cts env1 ty_x' vx <*> do
+                z <- freshId
+                let vz = Var $ Id ty z
+                let env2 = addE (addE env1 y ty_x') z (substPType x0' vx ty_r')
+                B.Let z (B.App vf (B.V y)) <$> convertV cts env2 (substPType x0 vx ty_r) vz
 
 globalIdRef :: IORef Int
 globalIdRef = unsafePerformIO (newIORef 0)
 
-freshId :: IO Id
+freshId :: IO String
 freshId = do
     i <- readIORef globalIdRef
     writeIORef globalIdRef (i+1)
@@ -134,12 +142,12 @@ convertP cts env b = do
 printConstraints :: Constraints -> IO ()
 printConstraints cts = do
     putStrLn "---Constraints---"
-    forM_ cts print
+    forM_ cts $ putStrLn . render . pprintV 0
 
 printPredicates :: [(Value,B.Term)] -> IO ()
 printPredicates ps = do
     putStrLn "---Predicates---"
-    forM_ ps $ \(v,term) -> putStrLn $ show term ++ " : " ++ show v
+    forM_ ps $ \(v,term) -> putStrLn $ show term ++ " : " ++ (render $ pprintV 0 v)
 
 model :: Constraints -> Env -> IO B.Term
 model cts env = do
@@ -175,54 +183,55 @@ model cts env = do
                         _ -> return acc
         foldM step (B.C True) ps
         
-toSBV :: M.Map Id SBool -> M.Map Id SInteger -> Value -> SBool
+toSBV :: M.Map String SBool -> M.Map String SInteger -> Value -> SBool
 toSBV boolTbl intTbl = goBool where
-    goBool (Var   x) = boolTbl ! x
+    goBool (Var   x) = boolTbl ! name x
     goBool (CInt  _) = undefined
     goBool (CBool b) = if b then true else false
     goBool (Op op) = goBoolOp op
-    goInt (Var x) = intTbl ! x
+    goInt (Var x) = intTbl ! name x
     goInt (CInt i) = fromIntegral i
     goInt (CBool _) = undefined
     goInt (Op op) = goIntOp op
-    goBoolOp (OpEq v1 v2) = goInt v1 .== goInt v2
+    goBoolOp (OpEq v1 v2) 
+        | getType v1 == TInt = goInt v1 .== goInt v2
+        | getType v1 == TBool = goBool v1 .== goBool v2
+        | otherwise = undefined
     goBoolOp (OpLt v1 v2) = goInt v1 .< goInt v2
     goBoolOp (OpLte v1 v2) = goInt v1 .<= goInt v2
-    goBoolOp (OpGt v1 v2) = goInt v1 .> goInt v2
-    goBoolOp (OpGte v1 v2) = goInt v1 .>= goInt v2
     goBoolOp (OpAnd v1 v2) = goBool v1 &&& goBool v2
     goBoolOp (OpOr  v1 v2) = goBool v1 ||| goBool v2
     goBoolOp (OpNot  v1) = bnot $ goBool v1 
     goBoolOp _ = undefined
     goIntOp (OpAdd v1 v2) = goInt v1 + goInt v2
     goIntOp (OpSub v1 v2) = goInt v1 - goInt v2
-    goIntOp (OpNeg v1) = - goInt v1
     goIntOp _ = undefined
 
 predicates :: Env -> [(Value,B.Term)]
 predicates env = do
     (x,ty) <- M.assocs env
-    let f xs = do
+    let f tyx xs = do
         let n = B.ProjD $ length xs
-        (i,p) <- zip [0..] xs
-        pure (p (Var x), B.Proj (B.ProjN i) n (B.V x))
+        (i,(y,pv)) <- zip [0..] xs
+        let pv' = substV y (Var $ Id tyx x) pv
+        pure (pv', B.Proj (B.ProjN i) n (B.V x))
     case ty of
         Right p -> pure (p,B.V x)
-        Left (PInt xs) -> f xs
-        Left (PBool xs) -> f xs
+        Left (PInt xs) -> f TInt xs
+        Left (PBool xs) -> f TBool xs
         _ -> empty
 
-substPType :: PType -> [Value] -> ([PType],PType)
-substPType ty [] = ([],ty)
-substPType (PFun ty1 ty2) (v:vs) = (ty1:tys,ty) where
-    (tys,ty) = substPType (ty2 v) vs
-substPType _ _ = error "Type_missmatch"
+substPTypes :: PType -> [Value] -> ([PType],PType)
+substPTypes ty [] = ([],ty)
+substPTypes (PFun _ ty1 (x,ty2)) (v:vs) = (ty1:tys,ty) where
+    (tys,ty) = substPTypes (substPType x v ty2) vs
+substPTypes _ _ = error "Type_mismatch"
 
 addC :: Constraints -> Value -> Constraints
 addC = flip (:)
 
-addE :: Env -> Id -> PType -> Env
+addE :: Env -> String -> PType -> Env
 addE env x ty = M.insert x (Left ty) env
 
-addE' :: Env -> Id -> Value -> Env
+addE' :: Env -> String -> Value -> Env
 addE' env x ty = M.insert x (Right ty) env

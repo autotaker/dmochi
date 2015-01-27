@@ -35,6 +35,7 @@ pprintV :: Int -> Value -> Doc
 pprintV _ (Var x) = text x
 pprintV _ (CInt x) = integer x
 pprintV _ (CBool b) = text $ if b then "true" else "false" 
+pprintV _ (Pair v1 v2) = parens (pprintV 0 v1 <+> comma <+> pprintV 0 v2)
 pprintV assoc (Op op) | assoc <= assoc' =  op' 
                       | otherwise = parens op' where
     assoc' = priority op
@@ -44,6 +45,8 @@ pprintV assoc (Op op) | assoc <= assoc' =  op'
         OpAdd v1 v2 -> f v1 <+> text "+" <+> g v2
         OpSub v1 v2 -> f v1 <+> text "-" <+> g v2
         OpNeg v1 -> text "-" <> f v1
+        OpFst v1 -> f v1 <> text ".fst"
+        OpSnd v1 -> f v1 <> text ".snd"
         OpEq v1 v2 -> g v1 <+> text "=" <+> g v2 
         OpLt v1 v2 -> g v1 <+> text "<" <+> g v2
         OpGt v1 v2 -> g v1 <+> text ">" <+> g v2
@@ -62,6 +65,12 @@ pprintPSub tname ps =
 pprintP :: Int -> PType -> Doc
 pprintP _ (PInt ps) = pprintPSub "int" ps
 pprintP _ (PBool ps) = pprintPSub "bool" ps
+pprintP assoc (PPair ty_f (x,ty_s)) = 
+    let df = pprintP 1 ty_f in
+    let ds = pprintP 1 ty_s in
+    let d = text x <+> colon <+> df <+> text "*" <+> ds in
+    if assoc == 0 then d else parens d
+
 pprintP assoc (PFun p (x,f)) = 
     let dp = pprintP 1 p in
     let df = pprintP 0 f in
@@ -93,3 +102,5 @@ priority (OpGte _ _) = 4
 priority (OpAnd _ _) = 3
 priority (OpOr _ _)  = 2
 priority (OpNot _)   = 8
+priority (OpFst _)   = 9
+priority (OpSnd _)   = 9

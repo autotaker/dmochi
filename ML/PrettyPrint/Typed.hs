@@ -7,8 +7,6 @@ module ML.PrettyPrint.Typed(pprintE
 import Text.PrettyPrint
 import ML.Syntax.Typed
 
-
-
 pprintE :: Exp -> Doc
 pprintE (Value v) = pprintV 0 v
 pprintE (Let _ x' lv e) = 
@@ -42,6 +40,7 @@ pprintV :: Int -> Value -> Doc
 pprintV _ (Var x) = text (name x)
 pprintV _ (CInt x) = integer x
 pprintV _ (CBool b) = text $ if b then "true" else "false" 
+pprintV _ (Pair v1 v2) = parens (pprintV 0 v1 <+> comma <+> pprintV 0 v2)
 pprintV assoc (Op op) | assoc <= assoc' =  op' 
                       | otherwise = parens op' where
     assoc' = priority op
@@ -56,6 +55,8 @@ pprintV assoc (Op op) | assoc <= assoc' =  op'
         OpAnd v1 v2 -> f v1 <+> text "&&" <+> g v2
         OpOr  v1 v2 -> f v1 <+> text "||" <+> g v2
         OpNot v1    -> text "not" <+> (g v1)
+        OpFst _ v1 -> f v1 <> text ".fst"
+        OpSnd _ v1 -> f v1 <> text ".snd"
     
 
 pprintPSub :: String -> [Predicate] -> Doc
@@ -66,6 +67,11 @@ pprintPSub tname ps =
 pprintP :: Int -> PType -> Doc
 pprintP _ (PInt ps) = pprintPSub "int" ps
 pprintP _ (PBool ps) = pprintPSub "bool" ps
+pprintP assoc (PPair _ p (x,f)) = 
+    let dp = pprintP 1 p in
+    let df = pprintP 1 f in
+    let d = text (name x) <+> colon <+> dp <+> text "->" <+> df in
+    if assoc == 0 then d else parens d
 pprintP assoc (PFun _ p (x,f)) = 
     let dp = pprintP 1 p in
     let df = pprintP 0 f in
@@ -79,7 +85,7 @@ pprintProgram (Program fs t) =
             nest 4 (pprintE e <> text ";;")) fs in
     text "(* functions *)" $+$ 
     d $+$ 
-    text "(*main*)" $+$
+    text "(* main *)" $+$
     pprintE t
 
 printProgram :: Program -> IO ()
@@ -94,3 +100,5 @@ priority (OpLte _ _) = 4
 priority (OpAnd _ _) = 3
 priority (OpOr _ _)  = 2
 priority (OpNot _)   = 8
+priority (OpFst _ _)   = 9
+priority (OpSnd _ _)   = 9

@@ -6,12 +6,12 @@ import Control.Applicative
 import qualified Data.Map as M
 import Text.PrettyPrint
 
-data Id = Id { _type :: Type, name :: String }
+data Id = Id { _type :: Type, name :: String } deriving(Eq)
 type Predicate = (Id,Value)
 
 data Program = Program { functions :: [(Id,PType,Exp)] 
                        , mainTerm  :: Exp }
-data Type = TInt | TBool | TFun Type Type deriving(Eq)
+data Type = TInt | TBool | TPair Type Type | TFun Type Type deriving(Eq)
 
 data Exp = Value Value
          | Let Type Id LetValue Exp
@@ -23,7 +23,8 @@ data Exp = Value Value
 data Value = Var Id
            | CInt  Integer
            | CBool Bool
-           | Op Op
+           | Pair Value Value
+           | Op Op deriving(Eq)
 
 
 data Op = OpAdd Value Value
@@ -33,7 +34,9 @@ data Op = OpAdd Value Value
         | OpLte Value Value
         | OpAnd Value Value
         | OpOr  Value Value
-        | OpNot Value 
+        | OpFst Type Value
+        | OpSnd Type Value
+        | OpNot Value  deriving(Eq)
 
 data LetValue = LValue Value
               | LApp Type Id [Value]
@@ -41,7 +44,8 @@ data LetValue = LValue Value
 
 data PType = PInt  [Predicate]
            | PBool [Predicate]
-           | PFun  Type PType (Id,PType)
+           | PPair Type PType (Id,PType) 
+           | PFun  Type PType (Id,PType) deriving(Eq)
 
 class HasType m where
     getType :: m -> Type
@@ -66,6 +70,7 @@ instance HasType Value where
     getType (Var x) = getType x
     getType (CInt _) = TInt
     getType (CBool _) = TBool
+    getType (Pair v1 v2) = TPair (getType v1) (getType v2)
     getType (Op op) = getType op
 
 instance HasType Op where
@@ -77,10 +82,13 @@ instance HasType Op where
     getType (OpAnd _ _) = TBool
     getType (OpOr  _ _) = TBool
     getType (OpNot _)   = TBool
+    getType (OpFst a _)   = a
+    getType (OpSnd a _)   = a
 
 instance HasType PType where
     getType (PInt _) = TInt
     getType (PBool _) = TBool
+    getType (PPair t _ _) = t
     getType (PFun t _ _) = t
 
 type Env = M.Map String Type
@@ -89,9 +97,37 @@ data TypeError = UndefinedVariable String
                | TypeMisUse   Type [Type]
                | OtherError String
 
+substV :: Id -> Value -> Value -> Value
+substV x v = go where
+    go (Var y) | name x == name y = v
+    go (Op op) = Op $ case op of
+        OpAdd a b -> OpAdd (go a) (go b)
+        OpSub a b -> OpSub (go a) (go b)
+        OpEq  a b -> OpEq  (go a) (go b)
+        OpLt  a b -> OpLt  (go a) (go b)
+        OpLte a b -> OpLte (go a) (go b)
+        OpAnd a b -> OpAnd (go a) (go b)
+        OpOr  a b -> OpOr  (go a) (go b)
+        OpNot a   -> OpNot (go a)
+        OpFst t a -> OpFst t (go a)
+        OpSnd t a -> OpSnd t (go a)
+    go w = w
+
+substPType :: Id -> Value -> PType -> PType
+substPType x v = go where
+    go (PInt  ps) = PInt (map (\(y,w) -> (y,substV x v w)) ps)
+    go (PBool ps) = PBool (map (\(y,w) -> (y,substV x v w)) ps)
+    go (PPair ty p1 (y,p2)) = PPair ty (go p1) (y,go p2)
+    go (PFun  ty p1 (y,p2)) = PFun ty (go p1) (y,go p2)
+
 pprintT :: Int -> Type -> Doc
 pprintT _ TInt = text "int"
 pprintT _ TBool = text "bool"
+pprintT assoc (TPair t1 t2) =
+    let d1 = pprintT 1 t1
+        d2 = pprintT 1 t2
+        d  = d1 <+> text "*" <+> d2
+    in if assoc <= 0 then d else parens d
 pprintT assoc (TFun t1 t2) =
     let d1 = pprintT 1 t1
         d2 = pprintT 0 t2
@@ -115,10 +151,12 @@ fromUnTyped (U.Program fs t) = do
         (,,) (Id (getType p) x) p <$> convertE tenv (getType p) e) fs'
     Program fs'' <$> convertE tenv TInt t
 
+{-
 toUnTyped :: Program -> U.Program
 toUnTyped (Program fs t) = U.Program fs' t' where
     fs' = map (\(x,p,e) -> (name x,revP p, revE e)) fs
     t'  = revE t
+    -}
 
 shouldBe :: MonadError TypeError m => Type -> Type -> m ()
 shouldBe t1 t2 | t1 == t2 = return ()
@@ -127,6 +165,10 @@ shouldBe t1 t2 | t1 == t2 = return ()
 shouldBeIn :: MonadError TypeError m => Type -> [Type] -> m ()
 shouldBeIn t1 ts = 
     if t1 `elem` ts then return () else throwError (TypeMisUse t1 ts)
+
+shouldBePair :: MonadError TypeError m => String -> Type -> m (Type,Type)
+shouldBePair _ (TPair t1 t2) = return (t1,t2)
+shouldBePair s _ = throwError (OtherError $ "expecting pair :" ++ s)
 
 convertP :: (Applicative m,MonadError TypeError m) => U.PType -> m PType
 convertP = go M.empty where
@@ -137,6 +179,11 @@ convertP = go M.empty where
             return (Id ty x,p')) ps
     go env (U.PInt ps) = base PInt env TInt ps
     go env (U.PBool ps) = base PInt env TInt ps
+    go env (U.PPair p (x,f)) =  do
+        p' <- go env p
+        let ty = getType p'
+        f' <- go (M.insert x ty env) f
+        return $ PPair (TPair ty (getType f')) p' (Id ty x,f')
     go env (U.PFun p (x,f)) = do
         p' <- go env p
         let ty = getType p'
@@ -187,6 +234,7 @@ convertV env v = case v of
         Nothing -> throwError $ UndefinedVariable x
     U.CInt i -> pure $ CInt i
     U.CBool b -> pure $ CBool b
+    U.Pair v1 v2 -> Pair <$> convertV env v1 <*> convertV env v2
     U.Op op -> do
         let bin f t v1 v2 = do
             v1' <- convertV env v1
@@ -214,7 +262,17 @@ convertV env v = case v of
                 v1' <- convertV env v1
                 getType v1' `shouldBe` TBool
                 return $ OpNot v1'
+            U.OpFst v1    -> do
+                v1' <- convertV env v1
+                (t1,_) <- shouldBePair ("fst" ++ show v1) $ getType v1'
+                return $ OpFst t1 v1'
+            U.OpSnd v1    -> do
+                v1' <- convertV env v1
+                (_,t2) <- shouldBePair ("snd" ++ show v1 ++ "," ++ show env++ show (getType v1')) $ getType v1'
+                return $ OpSnd t2 v1'
 
+
+{-
 revP :: PType -> U.PType
 revP (PInt ps) = U.PInt (map (\(x,v) -> (name x,revV v)) ps)
 revP (PBool ps) = U.PBool (map (\(x,v) -> (name x,revV v)) ps)
@@ -246,3 +304,4 @@ revLV :: LetValue -> U.LetValue
 revLV (LValue v) = U.LValue (revV v)
 revLV (LApp _ x vs) = U.LApp (name x) (map revV vs)
 revLV (LExp p e) = U.LExp (revP p) (revE e)
+-}

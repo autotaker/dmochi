@@ -14,6 +14,7 @@ data Program = Program { functions :: [(Id,PType,Exp)]
 data Value = Var Id
            | CInt Integer
            | CBool Bool
+           | Pair Value Value
            | Op Op deriving(Show)
 
 data Op = OpAdd Value Value
@@ -26,6 +27,8 @@ data Op = OpAdd Value Value
         | OpGte Value Value
         | OpAnd Value Value
         | OpOr  Value Value
+        | OpFst Value
+        | OpSnd Value
         | OpNot Value deriving(Show)
 
 data LetValue = LValue Value
@@ -35,11 +38,15 @@ data LetValue = LValue Value
 
 data PType = PInt [Predicate]
            | PBool [Predicate]
-           | PFun PType (Id,PType)
+           | PPair PType (Id,PType)
+           | PFun  PType (Id,PType)
 
 instance Show PType where
     show (PInt xs) = "int"++ show xs
     show (PBool xs) = "bool"++show xs
+    show (PPair ty_f (x,ty_s)) = 
+        let s1 = "("++x++ " ; " ++ show ty_f ++ ") * " in
+        s1 ++ show ty_s
     show (PFun ty (x,f)) = 
         let s1 = "("++x ++ " : " ++ show ty ++ ") -> " in
         s1 ++ show f
@@ -47,19 +54,3 @@ instance Show PType where
 type Id = String
 type Predicate = (Id,Value)
 
-{-
-substV :: Id -> Value -> Value -> Value
-substV x v = go where
-    go (Var y) | x == y = v
-    go (Op op) = Op $ fmap go op
-    go w = w
-
-printProgram :: Program -> IO ()
-printProgram p = do
-    printf "(* functions *)\n"
-    forM_ (functions p) $ \(x,ty,e) -> do
-        printf "%s : %s\n" x (show ty)
-        printf "%s = %s\n" x (show e)
-    printf "(* main *)\n"
-    print (mainTerm p)
-    -}

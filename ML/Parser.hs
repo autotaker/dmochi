@@ -9,7 +9,7 @@ import ML.Syntax.UnTyped
 
 reservedNames :: [String]
 reservedNames = ["let","rec","in","and","fun","not",
-                 "if","then","else","true","false","assume",
+                 "if","then","else","true","false","assume","fst","snd",
                  "Fail","Main"]
 
 language :: P.LanguageDef st
@@ -41,10 +41,13 @@ semi :: Parser String
 semi = P.semi lexer
 dot :: Parser String
 dot = P.dot lexer
+comma :: Parser String
+comma = P.comma lexer
 natural :: Parser Integer
 natural = P.natural lexer
 semiSep :: Parser a -> Parser [a]
 semiSep = P.semiSep lexer
+
 brackets :: Parser a -> Parser a
 brackets = P.brackets lexer
 
@@ -82,7 +85,8 @@ letP = (Let <$> (reserved "let" *> identifier)
 
 valueP :: Parser Value
 valueP = buildExpressionParser opTable termP <?> "value" where
-    opTable = [ [prefix "-" (after Op OpNeg), prefix "+" id, prefix' "not" (after Op OpNot)]
+    opTable = [ [fstOrSnd]
+              , [prefix "-" (after Op OpNeg), prefix "+" id, prefix' "not" (after Op OpNot)]
               , [binary "+" (after2 Op OpAdd) AssocLeft, binary "-" (after2 Op OpSub) AssocLeft]
               , [binary "=" (after2 Op OpEq)  AssocNone, 
                  binary "<" (after2 Op OpLt) AssocNone,
@@ -97,20 +101,30 @@ valueP = buildExpressionParser opTable termP <?> "value" where
     binary name fun assoc = Infix (reservedOp name >> pure fun) assoc
     prefix name fun       = Prefix (reservedOp name >> pure fun)
     prefix' name fun      = Prefix (reserved name >> pure fun)
-
+    fstOrSnd = Postfix $ dot >> ((reserved "fst" >> pure (Op . OpFst)) <|>
+                                 (reserved "snd" >> pure (Op . OpSnd)))
 
 termP :: Parser Value
 termP = Var <$> identifier 
     <|> CInt <$> natural 
     <|> CBool True <$ reserved "true" 
     <|> CBool False <$ reserved "false"
-    <|> parens valueP
+    <|> parens (do p1 <- valueP
+                   mp2 <- optionMaybe (comma >> valueP)
+                   case mp2 of
+                        Nothing -> return p1
+                        Just p2 -> return $ Pair p1 p2)
 
 ptypeP :: Parser PType
-ptypeP = base PInt "int" <|> base PBool "bool" <|> func <|> parens ptypeP where
+ptypeP = base PInt "int" 
+     <|> base PBool "bool" 
+     <|> try pair
+     <|> func 
+     <|> parens ptypeP where
     base cstr ty = cstr <$> (reserved ty *> option [] (brackets $ semiSep predicateP))
-    func = f <$> identifier <*> (reservedOp ":" *> ptypeP) <*> (reservedOp "->" *> ptypeP)
-    f x ty1 ty2 = PFun ty1 (x,ty2)
+    func = g PFun  <$> identifier <*> (reservedOp ":" *> ptypeP) <*> (reservedOp "->" *> ptypeP)
+    pair = g PPair <$> identifier <*> (reservedOp ":" *> ptypeP) <*> (reservedOp "*"  *> ptypeP)
+    g f x ty1 ty2 = f ty1 (x,ty2)
 
 predicateP :: Parser Predicate
 predicateP = (,) <$> identifier <*> (dot *> valueP) where
