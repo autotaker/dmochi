@@ -56,6 +56,21 @@ instance Show Term where
     show (Fail s) = "Fail(" ++ s ++ ")"
     show (Omega s) = "Omega("++ s ++ ")"
 
+size :: Program -> Int
+size (Program ds t) = sum [ sizeT ti + 1 | (_,ti) <- ds ] + sizeT t
+
+sizeT :: Term -> Int
+sizeT (C _) = 1
+sizeT (V _) = 1
+sizeT TF    = 1
+sizeT (T ts) = 1 + sum (map sizeT ts)
+sizeT (Lam _ t) = 1 + sizeT t
+sizeT (Let _ t1 t2) = 1 + sizeT t1 + sizeT t2
+sizeT (Proj _ _ t) = 1 + sizeT t
+sizeT (App t1 t2) = 1 + sizeT t1 + sizeT t2
+sizeT (If t1 t2 t3) = 1 + sizeT t1 + sizeT t2 + sizeT t3
+sizeT (Fail _) = 1
+sizeT (Omega _) = 1
 
 symbols :: Program -> [Symbol]
 symbols (Program defs t0) = nub $ toList $ execWriter doit where

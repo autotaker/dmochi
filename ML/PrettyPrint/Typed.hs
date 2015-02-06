@@ -70,7 +70,7 @@ pprintP _ (PBool ps) = pprintPSub "bool" ps
 pprintP assoc (PPair _ p (x,f)) = 
     let dp = pprintP 1 p in
     let df = pprintP 1 f in
-    let d = text (name x) <+> colon <+> dp <+> text "->" <+> df in
+    let d = text (name x) <+> colon <+> dp <+> text "*" <+> df in
     if assoc == 0 then d else parens d
 pprintP assoc (PFun _ p (x,f)) = 
     let dp = pprintP 1 p in
