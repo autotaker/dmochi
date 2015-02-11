@@ -49,9 +49,8 @@ instance Show Term where
     show (Lam x t) = "λ " ++ x ++ " . "++show t
     show (Let x t1 t2) = unwords ["let",x,"=",show t1,"in",show t2]
     show (Proj i n t) = printf "#(%d/%d)" (projN i) (projD n) ++ " " ++ (if isPrim t then show t else "(" ++ show t ++ ")")
-    show (App t1 t2) | isPrim t1 = show t1 ++ " " ++ show t2
-                     | otherwise = "("++show t1++") "++ show t2
---    show (t1 :+: t2) = unwords ["("++show t1++")","<>",show t2]
+    show (App t1 t2) | isPrim t1 = show t1 ++ " " ++ "(" ++ show t2 ++ ")"
+                     | otherwise = "("++show t1++") "++ "(" ++ show t2  ++ ")"
     show (If t1 t2 t3) = unwords ["if",show t1,"then",show t2,"else",show t3]
     show (Fail s) = "Fail(" ++ s ++ ")"
     show (Omega s) = "Omega("++ s ++ ")"
