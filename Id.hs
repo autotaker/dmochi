@@ -50,3 +50,5 @@ instance MonadId m => MonadId (ReaderT r m) where
 instance MonadId m => MonadId (ExceptT e m) where
     freshId = lift . freshId
 
+instance MonadId m => MonadId (StateT s m) where
+    freshId = lift . freshId

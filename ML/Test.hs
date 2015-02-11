@@ -5,36 +5,41 @@ import ML.Syntax.UnTyped
 import ML.Parser
 import qualified Boolean.Syntax as B
 import qualified Boolean.Sort   as B
+import qualified Boolean.HORS   as B
+import Boolean.PrettyPrint.HORS(printHORS)
 import qualified ML.Syntax.Typed as Typed
 import ML.Convert
 import ML.PrettyPrint.UnTyped
+import ML.Alpha
 import qualified ML.PrettyPrint.Typed as Typed
 import qualified ML.TypeCheck as Typed
 import Boolean.Test 
 import Control.Monad.Except
 import Text.Parsec(ParseError)
 import Data.Time
-
+import Id
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
+               | AlphaFailed AlphaError
                | IllTyped Typed.TypeError 
                | BooleanError String
 
 instance Show MainError where
     show NoInputSpecified = "NoInputSpecified"
     show (ParseFailed err) = "ParseFailed: " ++ show err
+    show (AlphaFailed err) = "AlphaFailed: " ++ show err
     show (IllTyped err)    = "IllTyped: " ++ show err
     show (BooleanError s) = "Boolean: " ++ s
 
 main :: IO ()
 main = do
-    m <- runExceptT doit
+    m <- runFreshT $ runExceptT doit
     case m of
         Left err -> print err
         Right _ -> return ()
 
-doit :: ExceptT MainError IO ()
+doit :: ExceptT MainError (FreshT IO) ()
 doit = do
     t_begin <- liftIO $ getCurrentTime
     -- check args
@@ -48,24 +53,34 @@ doit = do
     t_parsing_begin <- liftIO $ getCurrentTime
     let path = head args
     parseRes <- liftIO $ parseProgramFromFile path
-    program <- case parseRes of
+    program  <- case parseRes of
         Left err -> throwError $ ParseFailed err
         Right p  -> return p
+    liftIO $ putStrLn "Parsed Program"
     liftIO $ printProgram program
     t_parsing_end <- liftIO $ getCurrentTime
 
+    alphaProgram <- withExceptT AlphaFailed $ alpha program
+    liftIO $ putStrLn "Alpha Converted Program"
+    liftIO $ printProgram alphaProgram
+
     -- type checking
     t_type_checking_begin <- liftIO $ getCurrentTime
-    typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped program
+    typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
     liftIO $ Typed.printProgram typedProgram
-    liftIO $ printf "SIZE = %d\n" $ Typed.size typedProgram
     t_type_checking_end <- liftIO $ getCurrentTime
 
     -- predicate abst
     t_predicate_abst_begin <- liftIO $ getCurrentTime
-    boolProgram <- liftIO $ convert typedProgram
+    boolProgram <- convert typedProgram
     liftIO $ B.printProgram boolProgram
     t_predicate_abst_end <- liftIO $ getCurrentTime
+
+    -- cps transformation
+    liftIO $ printf "--HORS--\n"
+    hors <- B.toHORS boolProgram
+    liftIO $ printHORS hors
+--    liftIO $ B.printProgram cpsProgram
 
     -- model checking
     t_model_checking_begin <- liftIO $ getCurrentTime
@@ -84,6 +99,7 @@ doit = do
         o_typed_program = maximum $ 0:map (Typed.orderT . Typed.getType) types
         p_typed_program = maximum $ 0:map Typed.sizeP types
         s_boolean_program = B.size boolProgram
+        --s_cps_program     = B.size cpsProgram
     liftIO $ do
         printf "-- statistics --\n"
         printf "time stamp: %s\n" $ show t_begin
@@ -91,6 +107,7 @@ doit = do
         printf "\tInput Program Order   : %5d\n" o_typed_program
         printf "\tMax Number of Predicates : %5d\n" p_typed_program
         printf "\tBoolean Program Size  : %5d\n" s_boolean_program
+        --printf "\tCPS Program Size  : %5d\n" s_cps_program
         printf "\tHandle Input Args : %7.3f sec\n" t_input
         printf "\tParsing           : %7.3f sec\n" t_parsing
         printf "\tType Checking     : %7.3f sec\n" t_type_checking

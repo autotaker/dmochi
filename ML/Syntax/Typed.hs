@@ -2,7 +2,7 @@
 module ML.Syntax.Typed where
 import Text.PrettyPrint
 import Control.Monad
-import Control.Applicative
+--import Control.Applicative
 import Control.Monad.State
 
 data Id = Id { _type :: Type, name :: String } deriving(Eq)

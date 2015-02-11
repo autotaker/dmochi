@@ -12,6 +12,8 @@ import Text.Printf
 import Text.PrettyPrint(render)
 import ML.PrettyPrint.Typed
 import Control.Exception
+import Id
+import Control.Monad.IO.Class
 
 type Constraints = [Value]
 type Env = M.Map String (Either PType Value)
@@ -72,11 +74,11 @@ infixl 9 !
 (!) m key | M.member key m = m M.! key
           | otherwise = error $ printf "given key(%s) is not an element in the map" $ show key
 
-convert :: Program -> IO B.Program
+convert :: (MonadIO m, MonadId m,Applicative m) => Program -> m B.Program
 convert p = do
     let env = M.fromList [ (name x,Left ty) | (x,ty,_) <- functions p ]
     ds <- forM (functions p) $ \(x,ty,e) -> do
-        printf "Abstracting function %s\n" $ name x
+        liftIO $ printf "Abstracting function %s\n" $ name x
         (,) (name x) <$> convertE [] env ty e
     let ps = [("and",tAnd),("or",tOr),("not",tNot)]
     t <- convertE [] env (PInt []) (mainTerm p)
@@ -94,7 +96,7 @@ getPType env (Op (OpSnd _ v)) =
     (B.Proj (B.ProjN 1) (B.ProjD 2) t, p2')
 getPType _ _ = error "failed to infer type"
 
-convertE :: Constraints -> Env -> PType -> Exp -> IO B.Term
+convertE :: (MonadIO m, MonadId m,Applicative m) =>  Constraints -> Env -> PType -> Exp -> m B.Term
 convertE cts env sigma _e = case _e of
     Value v -> convertV cts env sigma v
     Let _ x (LValue v) e -> 
@@ -104,7 +106,7 @@ convertE cts env sigma _e = case _e of
             _ -> do
                 let (t,pty) = getPType env v 
                 let s = render $ pprintP 0 pty
-                print $ "PType = " ++ s
+                liftIO $ print $ "PType = " ++ s
                 B.Let (name x) t <$> convertE cts (addE env (name x) pty) sigma e
     Let _ x (LApp _ f vs) e -> do
         let Left ty_f = env ! name f
@@ -121,27 +123,27 @@ convertE cts env sigma _e = case _e of
     Fail _ -> return $ B.Fail ""
     Branch _ e1 e2 -> nondet <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
 
-convertV :: Constraints -> Env -> PType -> Value -> IO B.Term
+convertV :: (MonadIO m, MonadId m,Applicative m) => Constraints -> Env -> PType -> Value -> m B.Term
 convertV cts env (PInt ps) v = do
-    pnames <- replicateM (length ps) freshId
+    pnames <- replicateM (length ps) (freshId "int")
     let bs = map (\(x,w) -> substV x v w) ps
     let envs = scanl (uncurry . addE') env $ zip pnames bs
     es <- zipWithM (\env_i b_i -> convertP cts env_i b_i) envs bs
     return $ foldr (uncurry B.Let) (B.T (map B.V pnames)) $ zip pnames es
 convertV cts env (PBool ps) v = do
-    pnames <- replicateM (length ps) freshId
+    pnames <- replicateM (length ps) (freshId "bool")
     let bs = map (\(x,w) -> substV x v w) ps
     let envs = scanl (uncurry . addE') env $ zip pnames bs
     es <- zipWithM (\env_i b_i -> convertP cts env_i b_i) envs bs
     return $ foldr (uncurry B.Let) (B.T (map B.V pnames)) $ zip pnames es
 convertV cts env t1@(PPair _ ty_f (x0,ty_s)) v = do
-    putStrLn $ render $ pprintP 0 t1
-    putStrLn $ render $ pprintV 0 v
+    liftIO $ putStrLn $ render $ pprintP 0 t1
+    liftIO $ putStrLn $ render $ pprintV 0 v
     let (vf,vs) = case v of
             Pair v1 v2 -> (v1,v2)
             Var (Id (TPair t1 t2) _) -> (Op $ OpFst t1 v,Op $ OpSnd t2 v)
             _ -> error $ "expecting a pair or a variable but found : " ++ (render $ pprintV 0 v) ++ show (getType v)
-    x <- freshId
+    x <- freshId "x"
     B.Let x <$> convertV cts env ty_f vf <*> do
         let env1 = addE env x ty_f
         let vx = Var $ Id (getType x0) x
@@ -158,7 +160,7 @@ convertV cts env t1@(PPair _ ty_f (x0,ty_s)) v = do
                              (v2f,v2s) in
                 eqs t1 v1f v2f <|> eqs t2 v1s v2s
             eqs (TFun _ _) v1 v2 = empty
-        y <- freshId
+        y <- freshId "y"
         B.Let y <$> convertV cts env1 (substPType x0 vf ty_s) vs <*> do
             return $ B.T [B.V x,B.V y]
 convertV cts env t1@(PFun ty ty_x (x0,ty_r)) v = do
@@ -166,36 +168,21 @@ convertV cts env t1@(PFun ty ty_x (x0,ty_r)) v = do
     if t1 == t2 then
         return $ vf
     else do
-        putStrLn $ render $ pprintP 0 t1
-        putStrLn $ render $ pprintP 0 t2
-        putStrLn $ render $ pprintV 0 v
-        x <- freshId
-        print ("x",x)
+        x <- freshId "x"
         B.Lam x <$> do
-            y <- freshId
-            print ("y",y)
+            y <- freshId "y"
             let env1 = addE env x ty_x
             let vx = Var $ Id (getType x0) x
             B.Let y <$> convertV cts env1 ty_x' vx <*> do
-                z <- freshId
-                print ("z",z)
+                z <- freshId "z"
                 let vz = Var $ Id (getType ty_r) z
                 let env2 = addE (addE env1 y ty_x') z (substPType x0' vx ty_r')
                 B.Let z (B.App vf (B.V y)) <$> convertV cts env2 (substPType x0 vx ty_r) vz
 
-globalIdRef :: IORef Int
-globalIdRef = unsafePerformIO (newIORef 0)
-
-freshId :: IO String
-freshId = do
-    i <- readIORef globalIdRef
-    writeIORef globalIdRef (i+1)
-    return $ "fresh_" ++ show i
-
-convertP :: Constraints -> Env -> Value -> IO B.Term
-convertP cts env b = do
-    et <- model (addC cts b) env
-    ef <- model (addC cts (Op (OpNot b))) env
+convertP :: MonadIO m => Constraints -> Env -> Value -> m B.Term
+convertP cts env b = liftIO $ do
+    et <- liftIO $ model (addC cts b) env
+    ef <- liftIO $ model (addC cts (Op (OpNot b))) env
     if et == B.C False then
         return $ assume ef (B.C False)
     else if ef == B.C False then
