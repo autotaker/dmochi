@@ -5,8 +5,10 @@ import ML.Syntax.UnTyped
 import ML.Parser
 import qualified Boolean.Syntax as B
 import qualified Boolean.Sort   as B
+import qualified Boolean.CPS    as B
 import qualified Boolean.HORS   as B
-import Boolean.PrettyPrint.HORS(printHORS)
+import Boolean.Syntax.Typed as B(toUnTyped,tCheck)
+import Boolean.PrettyPrint.HORS(pprintHORS,printHORS)
 import qualified ML.Syntax.Typed as Typed
 import ML.Convert
 import ML.PrettyPrint.UnTyped
@@ -17,6 +19,7 @@ import Boolean.Test
 import Control.Monad.Except
 import Text.Parsec(ParseError)
 import Data.Time
+import Text.PrettyPrint
 import Id
 
 data MainError = NoInputSpecified
@@ -38,6 +41,7 @@ main = do
     case m of
         Left err -> print err
         Right _ -> return ()
+
 
 doit :: ExceptT MainError (FreshT IO) ()
 doit = do
@@ -72,14 +76,35 @@ doit = do
 
     -- predicate abst
     t_predicate_abst_begin <- liftIO $ getCurrentTime
-    boolProgram <- convert typedProgram
+    boolProgram' <- convert typedProgram
+    let boolProgram = B.toUnTyped boolProgram'
+    case runExcept (B.tCheck boolProgram') of
+        Left (s1,s2,str,ctx) -> liftIO $ do
+            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                printf "Context %d: %s\n" i (show t)
+        Right _ -> return ()
     liftIO $ B.printProgram boolProgram
     t_predicate_abst_end <- liftIO $ getCurrentTime
 
     -- cps transformation
-    liftIO $ printf "--HORS--\n"
-    hors <- B.toHORS boolProgram
-    liftIO $ printHORS hors
+    liftIO $ printf "--CPS--\n"
+    {-
+    cps1 <- B.cps boolProgram'
+    cps2 <- B.elimTupleP cps1
+    liftIO $ print cps2
+    case runExcept (B.tCheck1 cps2) of
+        Left (s1,s2,str,ctx) -> liftIO $ do
+            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                printf "Context %d: %s\n" i (show t)
+        Right _ -> return ()
+        -}
+    
+    hors <- B.toHORS boolProgram'
+    let file_hors = path ++ ".hrs"
+    liftIO $ writeFile file_hors $ render $ pprintHORS hors
+--    liftIO $ printHORS hors
 --    liftIO $ B.printProgram cpsProgram
 
     -- model checking
@@ -99,7 +124,6 @@ doit = do
         o_typed_program = maximum $ 0:map (Typed.orderT . Typed.getType) types
         p_typed_program = maximum $ 0:map Typed.sizeP types
         s_boolean_program = B.size boolProgram
-        --s_cps_program     = B.size cpsProgram
     liftIO $ do
         printf "-- statistics --\n"
         printf "time stamp: %s\n" $ show t_begin
@@ -107,7 +131,6 @@ doit = do
         printf "\tInput Program Order   : %5d\n" o_typed_program
         printf "\tMax Number of Predicates : %5d\n" p_typed_program
         printf "\tBoolean Program Size  : %5d\n" s_boolean_program
-        --printf "\tCPS Program Size  : %5d\n" s_cps_program
         printf "\tHandle Input Args : %7.3f sec\n" t_input
         printf "\tParsing           : %7.3f sec\n" t_parsing
         printf "\tType Checking     : %7.3f sec\n" t_type_checking

@@ -1,12 +1,10 @@
 module ML.Convert where
 import ML.Syntax.Typed
-import qualified Boolean.Syntax as B
+import qualified Boolean.Syntax.Typed as B
 import qualified Data.Map as M
 import Control.Monad
 import Control.Applicative
 import Data.SBV hiding(name)
-import System.IO.Unsafe
-import Data.IORef
 import Debug.Trace
 import Text.Printf
 import Text.PrettyPrint(render)
@@ -30,44 +28,33 @@ substPType x v ty = trace s ty' where
     -}
 
 -- syntax sugars
-assume :: B.Term -> B.Term -> B.Term
-assume (B.C True) e = e
-assume (B.C False) _ = B.Omega ""
-assume p e = B.If p e (B.Omega "")
-nondet :: B.Term -> B.Term -> B.Term
-nondet e1 (B.Omega _) = e1
-nondet (B.Omega _) e2 = e2
-nondet (B.C True) (B.C False) = B.TF
-nondet e1 e2 = B.If B.TF e1 e2
+f_assume :: B.Term -> B.Term -> B.Term
+f_assume (B.C True) e = e
+f_assume p e = B.Assume (B.getSort e) p e
+f_branch :: B.Term -> B.Term -> B.Term
+f_branch e1 e2 = B.Branch (B.getSort e1) e1 e2
+f_let :: B.Symbol -> B.Term -> B.Term -> B.Term
+f_let x ex e = B.Let (B.getSort e) x ex e
+f_app :: B.Term -> B.Term -> B.Term
+f_app e1 e2 = 
+    let _ B.:-> s2 = B.getSort e1 in 
+    B.App s2 e1 e2
+f_proj :: B.Index -> B.Size -> B.Term -> B.Term
+f_proj i n e = 
+    let B.Tuple ts = B.getSort e in
+    B.Proj (ts !! i) i n e
 
-fAnd :: B.Term -> B.Term -> B.Term
-fAnd (B.C True) t = t
-fAnd t1 t2 = B.App (B.V "and") (B.T [t1,t2])
-
-fOr  :: B.Term -> B.Term -> B.Term
-fOr t1 t2 = B.App (B.V "or") (B.T [t1,t2])
-
-fNot  :: B.Term -> B.Term
-fNot t1 = B.App (B.V "not") t1
-
-tAnd :: B.Term
-tAnd = 
-    let x = B.V "x" in
-    let fx = B.Proj (B.ProjN 0) (B.ProjD 2) x in
-    let sx = B.Proj (B.ProjN 1) (B.ProjD 2) x in
-    B.Lam "x" (B.If fx sx (B.C False))
-
-tOr :: B.Term
-tOr =
-    let x = B.V "x" in
-    let fx = B.Proj (B.ProjN 0) (B.ProjD 2) x in
-    let sx = B.Proj (B.ProjN 1) (B.ProjD 2) x in
-    B.Lam "x" (B.If fx (B.C True) sx)
-
-tNot :: B.Term
-tNot =
-    let x = B.V "x" in
-    B.Lam "x" (B.If x (B.C False) (B.C True))
+f_not :: B.Term -> B.Term
+f_not = B.Not
+f_and, f_or :: B.Term -> B.Term -> B.Term
+f_and (B.C True) x2 = x2
+f_and x1 (B.C True) = x1
+f_and (B.C False) _ = B.C False
+f_and x1 x2 = B.And x1 x2
+f_or (B.C False) x2 = x2
+f_or x1 (B.C False) = x1
+f_or (B.C True) _ = B.C False
+f_or x1 x2 = B.Or x1 x2
 
 infixl 9 !
 (!) :: (Show key,Ord key) => M.Map key v -> key -> v
@@ -79,22 +66,28 @@ convert p = do
     let env = M.fromList [ (name x,Left ty) | (x,ty,_) <- functions p ]
     ds <- forM (functions p) $ \(x,ty,e) -> do
         liftIO $ printf "Abstracting function %s\n" $ name x
-        (,) (name x) <$> convertE [] env ty e
-    let ps = [("and",tAnd),("or",tOr),("not",tNot)]
+        t <- convertE [] env ty e
+        return (B.Symbol (B.getSort t) (name x),t)
     t <- convertE [] env (PInt []) (mainTerm p)
-    return $ B.Program (ps++ds) t
+    return $ B.Program ds t
 
 getPType :: Env -> Value -> (B.Term, PType)
 getPType env (Var y) = 
-    let Left pty = env ! (name y) in (B.V (name y),pty)
+    let Left pty = env ! (name y) in (B.V (B.Symbol (toSort pty) (name y)),pty)
 getPType env (Op (OpFst _ v)) =
     let (t,PPair _ p1 _) = getPType env v in 
-    (B.Proj (B.ProjN 0) (B.ProjD 2) t, p1)
+    (f_proj 0 2 t, p1)
 getPType env (Op (OpSnd _ v)) =
     let (t,PPair _ p1 (x0,p2)) = getPType env v
         p2' = substPType x0 (Op (OpFst (getType p1) v)) p2 in
-    (B.Proj (B.ProjN 1) (B.ProjD 2) t, p2')
+    (f_proj 1 2 t, p2')
 getPType _ _ = error "failed to infer type"
+
+toSort :: PType -> B.Sort
+toSort (PInt ps) = B.Tuple (map (const B.Bool) ps)
+toSort (PBool ps) = B.Tuple (map (const B.Bool) ps)
+toSort (PPair _ ty_f (_,ty_s)) = B.Tuple [toSort ty_f,toSort ty_s]
+toSort (PFun  _ ty_x (_,ty_r)) = toSort ty_x B.:-> toSort ty_r
 
 convertE :: (MonadIO m, MonadId m,Applicative m) =>  Constraints -> Env -> PType -> Exp -> m B.Term
 convertE cts env sigma _e = case _e of
@@ -106,36 +99,43 @@ convertE cts env sigma _e = case _e of
             _ -> do
                 let (t,pty) = getPType env v 
                 let s = render $ pprintP 0 pty
+                let x' = B.Symbol (toSort pty) (name x)
                 liftIO $ print $ "PType = " ++ s
-                B.Let (name x) t <$> convertE cts (addE env (name x) pty) sigma e
+                f_let x' t <$> convertE cts (addE env (name x) pty) sigma e
     Let _ x (LApp _ f vs) e -> do
         let Left ty_f = env ! name f
         let (ty_vs,ty_r) = substPTypes ty_f vs
         es <- zipWithM (convertE cts env) ty_vs (map Value vs)
-        B.Let (name x) (foldl B.App (B.V (name f)) es) <$> convertE cts (addE env (name x) ty_r) sigma e
+        let x' = B.Symbol (toSort ty_r) (name x)
+        let f' = B.Symbol (toSort ty_f) (name f)
+        f_let x' (foldl f_app (B.V f') es) <$> convertE cts (addE env (name x) ty_r) sigma e
     Let _ x (LExp ty_v ev) e -> 
-        B.Let (name x) <$> convertE cts env ty_v ev <*> convertE cts (addE env (name x) ty_v) sigma e
+        let x' = B.Symbol (toSort ty_v) (name x) in
+        f_let x' <$> convertE cts env ty_v ev <*> convertE cts (addE env (name x) ty_v) sigma e
     Assume _ v e ->
-        assume <$> convertP cts env v <*> convertE (addC cts v) env sigma e
+        f_assume <$> convertP cts env v <*> convertE (addC cts v) env sigma e
     Lambda _ x e -> 
         let PFun _ ty_x (y,ty_r) = sigma in
-        B.Lam (name x) <$> convertE cts (addE env (name x) ty_x) (substPType y (Var x) ty_r) e
-    Fail _ -> return $ B.Fail ""
-    Branch _ e1 e2 -> nondet <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
+        let x' = B.Symbol (toSort ty_x) (name x) in
+        B.Lam x' <$> convertE cts (addE env (name x) ty_x) (substPType y (Var x) ty_r) e
+    Fail _ -> return $ B.Fail (B.Symbol (toSort sigma) "")
+    Branch _ e1 e2 -> f_branch <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
 
 convertV :: (MonadIO m, MonadId m,Applicative m) => Constraints -> Env -> PType -> Value -> m B.Term
 convertV cts env (PInt ps) v = do
     pnames <- replicateM (length ps) (freshId "int")
+    let pnames' = map (B.Symbol B.Bool) pnames
     let bs = map (\(x,w) -> substV x v w) ps
     let envs = scanl (uncurry . addE') env $ zip pnames bs
     es <- zipWithM (\env_i b_i -> convertP cts env_i b_i) envs bs
-    return $ foldr (uncurry B.Let) (B.T (map B.V pnames)) $ zip pnames es
+    return $ foldr (uncurry f_let) (B.T (map B.V pnames')) $ zip pnames' es
 convertV cts env (PBool ps) v = do
     pnames <- replicateM (length ps) (freshId "bool")
+    let pnames' = map (B.Symbol B.Bool) pnames
     let bs = map (\(x,w) -> substV x v w) ps
     let envs = scanl (uncurry . addE') env $ zip pnames bs
     es <- zipWithM (\env_i b_i -> convertP cts env_i b_i) envs bs
-    return $ foldr (uncurry B.Let) (B.T (map B.V pnames)) $ zip pnames es
+    return $ foldr (uncurry f_let) (B.T (map B.V pnames')) $ zip pnames' es
 convertV cts env t1@(PPair _ ty_f (x0,ty_s)) v = do
     liftIO $ putStrLn $ render $ pprintP 0 t1
     liftIO $ putStrLn $ render $ pprintV 0 v
@@ -144,7 +144,8 @@ convertV cts env t1@(PPair _ ty_f (x0,ty_s)) v = do
             Var (Id (TPair t1 t2) _) -> (Op $ OpFst t1 v,Op $ OpSnd t2 v)
             _ -> error $ "expecting a pair or a variable but found : " ++ (render $ pprintV 0 v) ++ show (getType v)
     x <- freshId "x"
-    B.Let x <$> convertV cts env ty_f vf <*> do
+    let x' = B.Symbol (toSort ty_f) x
+    f_let x' <$> convertV cts env ty_f vf <*> do
         let env1 = addE env x ty_f
         let vx = Var $ Id (getType x0) x
         let cts1 = foldl addC (eqs (getType x0) vx vf) cts
@@ -161,34 +162,38 @@ convertV cts env t1@(PPair _ ty_f (x0,ty_s)) v = do
                 eqs t1 v1f v2f <|> eqs t2 v1s v2s
             eqs (TFun _ _) v1 v2 = empty
         y <- freshId "y"
-        B.Let y <$> convertV cts env1 (substPType x0 vf ty_s) vs <*> do
-            return $ B.T [B.V x,B.V y]
+        let y' = B.Symbol (toSort ty_s) y
+        f_let y' <$> convertV cts env1 (substPType x0 vf ty_s) vs <*> do
+            return $ B.T [B.V x',B.V y']
 convertV cts env t1@(PFun ty ty_x (x0,ty_r)) v = do
     let (vf,t2@(PFun _ ty_x' (x0',ty_r'))) = getPType env v
     if t1 == t2 then
         return $ vf
     else do
         x <- freshId "x"
-        B.Lam x <$> do
+        let x' = B.Symbol (toSort ty_x) x
+        B.Lam x' <$> do
             y <- freshId "y"
+            let y' = B.Symbol (toSort ty_x') y
             let env1 = addE env x ty_x
             let vx = Var $ Id (getType x0) x
-            B.Let y <$> convertV cts env1 ty_x' vx <*> do
+            f_let y' <$> convertV cts env1 ty_x' vx <*> do
                 z <- freshId "z"
+                let z' = B.Symbol (toSort ty_r') z
                 let vz = Var $ Id (getType ty_r) z
                 let env2 = addE (addE env1 y ty_x') z (substPType x0' vx ty_r')
-                B.Let z (B.App vf (B.V y)) <$> convertV cts env2 (substPType x0 vx ty_r) vz
+                f_let z' (f_app vf (B.V y')) <$> convertV cts env2 (substPType x0 vx ty_r) vz
 
 convertP :: MonadIO m => Constraints -> Env -> Value -> m B.Term
 convertP cts env b = liftIO $ do
     et <- liftIO $ model (addC cts b) env
     ef <- liftIO $ model (addC cts (Op (OpNot b))) env
     if et == B.C False then
-        return $ assume ef (B.C False)
+        return $ f_assume ef (B.C False)
     else if ef == B.C False then
-        return $ assume et (B.C True)
+        return $ f_assume et (B.C True)
     else
-        return $ assume et (B.C True) `nondet` assume ef (B.C False)
+        return $ f_assume et (B.C True) `f_branch` f_assume ef (B.C False)
 
 printConstraints :: Constraints -> IO ()
 printConstraints cts = do
@@ -243,7 +248,7 @@ model cts env = handle ((\e -> model cts env) :: SomeException -> IO B.Term) $ d
             case _res of
                 Unsatisfiable _ -> do
                     putStrLn $ "found: " ++ (render $ pprintV 0 p1)
-                    return (fAnd acc t1)
+                    return (f_and acc t1)
                 _ -> case mp2 of 
                     [] -> return acc
                     (p2,t2):_ -> do
@@ -251,18 +256,18 @@ model cts env = handle ((\e -> model cts env) :: SomeException -> IO B.Term) $ d
                         case _res of 
                             Unsatisfiable _ -> do
                                 putStrLn $ "found:" ++ (render $ pprintV 0 p2)
-                                return (fAnd acc t2)
+                                return (f_and acc t2)
                             _ -> return acc
-        let ps' = [ [(p,t), (Op $ OpNot p, fNot t)] | (p,t) <- ps ] ++ 
-                  [ [(Op $ OpNot $ Op $ OpAnd p q, fNot $ fAnd t s)]
+        let ps' = [ [(p,t), (Op $ OpNot p, f_not t)] | (p,t) <- ps ] ++ 
+                  [ [(Op $ OpNot $ Op $ OpAnd p q, f_not $ f_and t s)]
                     | ((p,t),i) <- zip ps [0..], 
                       ((q,s),j) <- zip ps [0..], 
-                      i < (j :: Int) ] ++
-                  [ [(Op $ OpNot $ Op $ OpAnd (Op $ OpAnd p q) r, fNot $ fAnd t (fAnd s u))]
+                      i < (j :: Int) ]  ++
+                  [ [(Op $ OpNot $ Op $ OpAnd (Op $ OpAnd p q) r, f_not $ f_and t (f_and s u))]
                     | ((p,t),i) <- zip ps [0..], 
                       ((q,s),j) <- zip ps [0..], 
                       ((r,u),k) <- zip ps [0..],
-                      i < (j :: Int) &&  j < k ]
+                      i < (j :: Int) &&  j < k ] 
         foldM step (B.C True) ps'
         
 toSBV :: M.Map String SBool -> M.Map String SInteger -> Value -> SBool
@@ -313,18 +318,20 @@ predicates :: Env -> [(Value,B.Term)]
 predicates env = (do
     (x,e) <- M.assocs env
     case e of 
-        Right p -> pure (p,B.V x)
-        Left ty -> go (Var $ Id (getType ty) x) (B.V x) ty) where
+        Right p -> pure (p,B.V (B.Symbol B.Bool x))
+        Left ty -> 
+            let x' = B.Symbol (toSort ty) x in
+            go (Var $ Id (getType ty) x) (B.V x') ty) where
     f t bt xs = do
-        let n = B.ProjD $ length xs
+        let n = length xs
         (i,(y,pv)) <- zip [0..] xs
         let pv' = substV y t pv
-        pure (pv', B.Proj (B.ProjN i) n bt)
+        pure (pv', f_proj i n bt)
     go t bt (PInt xs) = f t bt xs 
     go t bt (PBool xs) = f t bt xs
     go t bt (PPair _ p1 (x0,p2)) = 
-        let bfst = B.Proj (B.ProjN 0) (B.ProjD 2) bt
-            bsnd = B.Proj (B.ProjN 1) (B.ProjD 2) bt
+        let bfst = f_proj 0 2 bt
+            bsnd = f_proj 1 2 bt
             tfst = Op $ OpFst (getType p1) t
             tsnd = Op $ OpSnd (getType p2) t in
         go tfst bfst p1 <|> go tsnd bsnd (substPType x0 tfst p2)

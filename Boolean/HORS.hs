@@ -1,6 +1,6 @@
 module Boolean.HORS where
-import Boolean.Syntax hiding(freeVariables)
-import Boolean.CPS(cps,STerm(..))
+import Boolean.Syntax.Typed 
+import Boolean.CPS(cps,elimTupleP,STerm(..),Simple(..))
 import Control.Monad.State
 import Control.Arrow
 import Control.Applicative
@@ -21,7 +21,7 @@ type M m a = StateT [Rule] m a
 
 toHORS :: (MonadId m,Applicative m) => Program -> m HORS
 toHORS p = do
-    (ds,t0) <- cps p
+    (ds,t0) <- cps p >>= elimTupleP
     let l = ["br","end","fail","true","false"]
     let trs = [ [("q0",["q0","q0"]),("q1",["q1","q1"])] -- br
               , [("q0",[]),("q1",[])]                   -- end
@@ -34,7 +34,7 @@ toHORS p = do
     (sym,rs) <- flip runStateT [] $ do
         forM_ ds $ \(f,t) -> do
             let (xs,tb) = decompose t
-            let f' = capitalize f
+            let f' = capitalize $ name f
             tb' <- lambdaLifting tenv (S.fromList xs) tb 
             registerRule f' xs tb'
         t0' <- lambdaLifting tenv S.empty t0
@@ -47,14 +47,14 @@ capitalize :: String -> String
 capitalize (x:xs) = toUpper x : xs
 capitalize _ = error "capitalizing an empty string"
 
-decompose :: STerm -> ([String],STerm)
-decompose (SLam x t) = first (x:) $ decompose t
+decompose :: STerm Simple -> ([String],STerm Simple)
+decompose (SLam (Simple x) t) = first (name x:) $ decompose t
 decompose t = ([],t)
 
-lambdaLifting :: (Monad m,Applicative m,MonadId m) => M.Map String ATerm -> S.Set String -> STerm -> M m ATerm
+lambdaLifting :: (Monad m,Applicative m,MonadId m) => M.Map String ATerm -> S.Set String -> STerm Simple -> M m ATerm
 lambdaLifting tenv xs _t = case _t of
-    SV x -> pure $ Var $ if S.member x xs then x else capitalize x
-    SApp t1 t2 -> liftA2 (:@) (lambdaLifting tenv xs t1) (lambdaLifting tenv xs t2)
+    SV x -> pure $ Var $ if S.member (name x) xs then (name x) else capitalize (name x)
+    SApp _ t1 (Simple t2) -> liftA2 (:@) (lambdaLifting tenv xs t1) (lambdaLifting tenv xs t2)
     SLam _ _ -> do
         let (ys,t') = decompose _t
         let zs = freeVariables _t
@@ -72,9 +72,9 @@ lambdaLifting tenv xs _t = case _t of
 registerRule :: Monad m => String -> [String] -> ATerm -> M m ()
 registerRule f xs t = modify ((f,xs,t):)
 
-freeVariables :: STerm -> S.Set String
+freeVariables :: STerm Simple -> S.Set String
 freeVariables _t = execState (go S.empty _t) S.empty where
-    go env (SV x) = unless (S.member x env) $ modify (S.insert x)
-    go env (SLam x t) = go (S.insert x env) t
-    go env (SApp t1 t2) = go env t1 >> go env t2
+    go env (SV x) = unless (S.member (name x) env) $ modify (S.insert (name x))
+    go env (SLam (Simple x) t) = go (S.insert (name x) env) t
+    go env (SApp _ t1 (Simple t2)) = go env t1 >> go env t2
     go _ _ = return ()
