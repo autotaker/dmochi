@@ -2,6 +2,7 @@ module ML.Convert where
 import ML.Syntax.Typed
 import qualified Boolean.Syntax.Typed as B
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Control.Monad
 import Control.Applicative
 import Data.SBV hiding(name)
@@ -12,6 +13,7 @@ import ML.PrettyPrint.Typed
 import Control.Exception
 import Id
 import Control.Monad.IO.Class
+import Data.Maybe(isJust)
 
 type Constraints = [Value]
 type Env = M.Map String (Either PType Value)
@@ -221,7 +223,7 @@ gatherVariables env = do
 
 model :: Constraints -> Env -> IO B.Term
 model cts env = handle ((\e -> model cts env) :: SomeException -> IO B.Term) $ do
-    let ps = predicates env
+    let ps = filter (not.trivial.fst) $ predicates env
     let vs = gatherVariables env
     let bs = [ b | (b,TBool) <- vs ]
     let xs = [ x | (x,TInt)  <- vs ]
@@ -243,32 +245,34 @@ model cts env = handle ((\e -> model cts env) :: SomeException -> IO B.Term) $ d
         putStrLn "constraints are vacuous"
         return (B.C False)
     else do
-        let step acc ((p1,t1):mp2) = do
-            ThmResult _res <- prove $ problem p1
-            case _res of
-                Unsatisfiable _ -> do
-                    putStrLn $ "found: " ++ (render $ pprintV 0 p1)
-                    return (f_and acc t1)
-                _ -> case mp2 of 
-                    [] -> return acc
-                    (p2,t2):_ -> do
-                        ThmResult _res <- prove $ problem p2
-                        case _res of 
-                            Unsatisfiable _ -> do
-                                putStrLn $ "found:" ++ (render $ pprintV 0 p2)
-                                return (f_and acc t2)
-                            _ -> return acc
-        let ps' = [ [(p,t), (Op $ OpNot p, f_not t)] | (p,t) <- ps ] ++ 
-                  [ [(Op $ OpNot $ Op $ OpAnd p q, f_not $ f_and t s)]
+        let contain memo key = any (flip S.member memo) $ subset key
+            subset = foldr (\x acc -> acc <|> (x:) <$> acc) (pure [])
+        let step (acc,memo) ((p1,t1,key1):mp2) = if contain memo key1 then return (acc,memo) else  do
+                ThmResult _res <- prove $ problem p1
+                case _res of
+                    Unsatisfiable _ -> do
+                        putStrLn $ "found: " ++ (render $ pprintV 0 p1)
+                        return (f_and acc t1,S.insert key1 memo)
+                    _ -> case mp2 of 
+                        [] -> return (acc,memo)
+                        (p2,t2,key2):_ -> do
+                            ThmResult _res <- prove $ problem p2
+                            case _res of 
+                                Unsatisfiable _ -> do
+                                    putStrLn $ "found:" ++ (render $ pprintV 0 p2)
+                                    return (f_and acc t2,S.insert key2 memo)
+                                _ -> return (acc,memo)
+        let ps' = [ [(p,t,[i]), (Op $ OpNot p, f_not t,[-i])] | ((p,t),i) <- zip ps [0..] ] ++ 
+                  [ [(Op $ OpNot $ Op $ OpAnd p q, f_not $ f_and t s,[-i,-j])]
                     | ((p,t),i) <- zip ps [0..], 
                       ((q,s),j) <- zip ps [0..], 
-                      i < (j :: Int) ]  ++
-                  [ [(Op $ OpNot $ Op $ OpAnd (Op $ OpAnd p q) r, f_not $ f_and t (f_and s u))]
+                      i < (j :: Int) ]   ++
+                  [ [(Op $ OpNot $ Op $ OpAnd (Op $ OpAnd p q) r, f_not $ f_and t (f_and s u),[-i,-j,-k])]
                     | ((p,t),i) <- zip ps [0..], 
                       ((q,s),j) <- zip ps [0..], 
                       ((r,u),k) <- zip ps [0..],
-                      i < (j :: Int) &&  j < k ] 
-        foldM step (B.C True) ps'
+                      i < (j :: Int) &&  j < k ]
+        fst <$>foldM step (B.C True,S.empty) ps'
         
 toSBV :: M.Map String SBool -> M.Map String SInteger -> Value -> SBool
 toSBV boolTbl intTbl = goBool where
@@ -336,6 +340,35 @@ predicates env = (do
             tsnd = Op $ OpSnd (getType p2) t in
         go tfst bfst p1 <|> go tsnd bsnd (substPType x0 tfst p2)
     go _ _ (PFun _ _ _) = empty
+
+trivial :: Value -> Bool
+trivial t = isJust (eval t) where
+    eval :: Value -> Maybe (Either Bool Integer)
+    eval (CInt i) = return $ Right i
+    eval (CBool b) = return $ Left b
+    eval (Op op) = case op of
+        OpAdd e1 e2 -> Right <$> intOp (+) e1 e2
+        OpSub e1 e2 -> Right <$> intOp (-) e1 e2
+        OpEq  e1 e2 -> case getType e1 of
+            TInt -> Left <$> intOp (==) e1 e2
+            TBool -> Left <$> boolOp (==) e1 e2
+            _ -> Nothing
+        OpLt  e1 e2 -> Left <$> intOp (<) e1 e2
+        OpLte e1 e2 -> Left <$> intOp (<=) e1 e2
+        OpAnd e1 e2 -> Left <$> boolOp (&&) e1 e2
+        OpOr  e1 e2 -> Left <$> boolOp (||) e1 e2
+        OpFst _ _ -> Nothing
+        OpSnd _ _ -> Nothing
+        OpNot e -> Left . not <$> (eval e >>= toBool)
+    eval _ = Nothing
+    toInt (Right i) = return i
+    toInt _ = Nothing
+    toBool (Left b) = return b
+    toBool _ = Nothing
+    intOp op e1 e2 = op <$> (eval e1 >>= toInt) <*> (eval e2 >>= toInt)
+    boolOp op e1 e2 = op <$> (eval e1 >>= toBool) <*> (eval e2 >>= toBool)
+
+
 
 substPTypes :: PType -> [Value] -> ([PType],PType)
 substPTypes ty [] = ([],ty)

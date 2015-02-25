@@ -37,6 +37,7 @@ instance Show MainError where
 
 main :: IO ()
 main = do
+    hSetBuffering stdout NoBuffering
     m <- runFreshT $ runExceptT doit
     case m of
         Left err -> print err
@@ -73,6 +74,7 @@ doit = do
     typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
     liftIO $ Typed.printProgram typedProgram
     t_type_checking_end <- liftIO $ getCurrentTime
+
 
     -- predicate abst
     t_predicate_abst_begin <- liftIO $ getCurrentTime
