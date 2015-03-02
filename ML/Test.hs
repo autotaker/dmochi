@@ -9,6 +9,7 @@ import qualified Boolean.CPS    as B
 import qualified Boolean.HORS   as B
 import Boolean.Syntax.Typed as B(toUnTyped,tCheck)
 import Boolean.PrettyPrint.HORS(pprintHORS,printHORS)
+import Boolean.PrettyPrint.Typed as B(pprintProgram)
 import qualified ML.Syntax.Typed as Typed
 import ML.Convert
 import ML.PrettyPrint.UnTyped
@@ -86,6 +87,7 @@ doit = do
             forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
                 printf "Context %d: %s\n" i (show t)
         Right _ -> return ()
+    liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
     liftIO $ B.printProgram boolProgram
     t_predicate_abst_end <- liftIO $ getCurrentTime
 
