@@ -3,3 +3,10 @@
 *.hi
 Test
 tmp/
+ML/sample/*.log
+ML/sample/*.hrs
+ML/sample/*.rnd
+ML/sample/*.bool
+ML/sample/*.horsat
+ML/sample/*.preface
+

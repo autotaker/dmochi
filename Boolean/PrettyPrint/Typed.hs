@@ -15,7 +15,7 @@ pprintSort :: Sort -> Doc
 pprintSort = go 0 where
     go _ X = text "X"
     go _ Bool = text "Bool"
-    go _ (Tuple ss) = parens $ hsep $ punctuate comma $ map (go 0) ss
+    go _ (Tuple ss) = brackets $ hsep $ punctuate comma $ map (go 0) ss
     go p (s1 :-> s2) = 
         parenPrec 0 p $ 
             go 1 s1 <+> text "->" <+> go 0 s2
@@ -65,7 +65,7 @@ pprintTerm p _t = parenPrec (prec _t) p $ case _t of
     C False -> text "false"
     V x     -> text $ name x
     T ts    -> 
-        parens $ hsep $ int (length ts) : map (pprintTerm 0) ts
+        parens $ hsep $ int (length ts) : map (pprintTerm 5) ts
     App _ t1 t2 -> 
         let d1 = pprintTerm (prec _t) t1
             d2 = pprintTerm (prec _t+1) t2 in 
@@ -74,7 +74,7 @@ pprintTerm p _t = parenPrec (prec _t) p $ case _t of
         let proj = parens $ int idx <> text "/" <> int size in
         pprintTerm (prec _t) t <> text "." <> proj 
     Lam x t -> 
-        text "fun" <+> pprintSym x <+> text "->"  $+$
+        text "fun" <+> parens (pprintSym x) <+> text "->"  $+$
         indent (pprintTerm 0 t)
     Let _ x tx t ->
         text "let" <+> pprintSym x <+> text "=" $+$
@@ -97,4 +97,4 @@ pprintTerm p _t = parenPrec (prec _t) p $ case _t of
         pprintTerm (prec _t+1) t2
     Not t1 ->
         text "not" <+> pprintTerm (prec _t+1) t1
-    Fail _ -> text "fail"
+    Fail x -> text "fail" <> parens (pprintSort (getSort x))

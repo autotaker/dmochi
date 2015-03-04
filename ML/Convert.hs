@@ -29,35 +29,6 @@ substPType x v ty = trace s ty' where
     sty' = render $ pprintP 0 ty'
     -}
 
--- syntax sugars
-f_assume :: B.Term -> B.Term -> B.Term
-f_assume (B.C True) e = e
-f_assume p e = B.Assume (B.getSort e) p e
-f_branch :: B.Term -> B.Term -> B.Term
-f_branch e1 e2 = B.Branch (B.getSort e1) e1 e2
-f_let :: B.Symbol -> B.Term -> B.Term -> B.Term
-f_let x ex e = B.Let (B.getSort e) x ex e
-f_app :: B.Term -> B.Term -> B.Term
-f_app e1 e2 = 
-    let _ B.:-> s2 = B.getSort e1 in 
-    B.App s2 e1 e2
-f_proj :: B.Index -> B.Size -> B.Term -> B.Term
-f_proj i n e = 
-    let B.Tuple ts = B.getSort e in
-    B.Proj (ts !! i) i n e
-
-f_not :: B.Term -> B.Term
-f_not = B.Not
-f_and, f_or :: B.Term -> B.Term -> B.Term
-f_and (B.C True) x2 = x2
-f_and x1 (B.C True) = x1
-f_and (B.C False) _ = B.C False
-f_and x1 x2 = B.And x1 x2
-f_or (B.C False) x2 = x2
-f_or x1 (B.C False) = x1
-f_or (B.C True) _ = B.C False
-f_or x1 x2 = B.Or x1 x2
-
 infixl 9 !
 (!) :: (Show key,Ord key) => M.Map key v -> key -> v
 (!) m key | M.member key m = m M.! key
@@ -78,11 +49,11 @@ getPType env (Var y) =
     let Left pty = env ! (name y) in (B.V (B.Symbol (toSort pty) (name y)),pty)
 getPType env (Op (OpFst _ v)) =
     let (t,PPair _ p1 _) = getPType env v in 
-    (f_proj 0 2 t, p1)
+    (B.f_proj 0 2 t, p1)
 getPType env (Op (OpSnd _ v)) =
     let (t,PPair _ p1 (x0,p2)) = getPType env v
         p2' = substPType x0 (Op (OpFst (getType p1) v)) p2 in
-    (f_proj 1 2 t, p2')
+    (B.f_proj 1 2 t, p2')
 getPType _ _ = error "failed to infer type"
 
 toSort :: PType -> B.Sort
@@ -103,25 +74,25 @@ convertE cts env sigma _e = case _e of
                 let s = render $ pprintP 0 pty
                 let x' = B.Symbol (toSort pty) (name x)
                 liftIO $ print $ "PType = " ++ s
-                f_let x' t <$> convertE cts (addE env (name x) pty) sigma e
+                B.f_let x' t <$> convertE cts (addE env (name x) pty) sigma e
     Let _ x (LApp _ f vs) e -> do
         let Left ty_f = env ! name f
         let (ty_vs,ty_r) = substPTypes ty_f vs
         es <- zipWithM (convertE cts env) ty_vs (map Value vs)
         let x' = B.Symbol (toSort ty_r) (name x)
         let f' = B.Symbol (toSort ty_f) (name f)
-        f_let x' (foldl f_app (B.V f') es) <$> convertE cts (addE env (name x) ty_r) sigma e
+        B.f_let x' (foldl B.f_app (B.V f') es) <$> convertE cts (addE env (name x) ty_r) sigma e
     Let _ x (LExp ty_v ev) e -> 
         let x' = B.Symbol (toSort ty_v) (name x) in
-        f_let x' <$> convertE cts env ty_v ev <*> convertE cts (addE env (name x) ty_v) sigma e
+        B.f_let x' <$> convertE cts env ty_v ev <*> convertE cts (addE env (name x) ty_v) sigma e
     Assume _ v e ->
-        f_assume <$> convertP cts env v <*> convertE (addC cts v) env sigma e
+        B.f_assume <$> convertP cts env v <*> convertE (addC cts v) env sigma e
     Lambda _ x e -> 
         let PFun _ ty_x (y,ty_r) = sigma in
         let x' = B.Symbol (toSort ty_x) (name x) in
         B.Lam x' <$> convertE cts (addE env (name x) ty_x) (substPType y (Var x) ty_r) e
     Fail _ -> return $ B.Fail (B.Symbol (toSort sigma) "")
-    Branch _ e1 e2 -> f_branch <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
+    Branch _ e1 e2 -> B.f_branch <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
 
 convertV :: (MonadIO m, MonadId m,Applicative m) => Constraints -> Env -> PType -> Value -> m B.Term
 convertV cts env (PInt ps) v = do
@@ -130,14 +101,14 @@ convertV cts env (PInt ps) v = do
     let bs = map (\(x,w) -> substV x v w) ps
     let envs = scanl (uncurry . addE') env $ zip pnames bs
     es <- zipWithM (\env_i b_i -> convertP cts env_i b_i) envs bs
-    return $ foldr (uncurry f_let) (B.T (map B.V pnames')) $ zip pnames' es
+    return $ foldr (uncurry B.f_let) (B.T (map B.V pnames')) $ zip pnames' es
 convertV cts env (PBool ps) v = do
     pnames <- replicateM (length ps) (freshId "bool")
     let pnames' = map (B.Symbol B.Bool) pnames
     let bs = map (\(x,w) -> substV x v w) ps
     let envs = scanl (uncurry . addE') env $ zip pnames bs
     es <- zipWithM (\env_i b_i -> convertP cts env_i b_i) envs bs
-    return $ foldr (uncurry f_let) (B.T (map B.V pnames')) $ zip pnames' es
+    return $ foldr (uncurry B.f_let) (B.T (map B.V pnames')) $ zip pnames' es
 convertV cts env t1@(PPair _ ty_f (x0,ty_s)) v = do
     liftIO $ putStrLn $ render $ pprintP 0 t1
     liftIO $ putStrLn $ render $ pprintV 0 v
@@ -147,7 +118,7 @@ convertV cts env t1@(PPair _ ty_f (x0,ty_s)) v = do
             _ -> error $ "expecting a pair or a variable but found : " ++ (render $ pprintV 0 v) ++ show (getType v)
     x <- freshId "x"
     let x' = B.Symbol (toSort ty_f) x
-    f_let x' <$> convertV cts env ty_f vf <*> do
+    B.f_let x' <$> convertV cts env ty_f vf <*> do
         let env1 = addE env x ty_f
         let vx = Var $ Id (getType x0) x
         let cts1 = foldl addC (eqs (getType x0) vx vf) cts
@@ -165,7 +136,7 @@ convertV cts env t1@(PPair _ ty_f (x0,ty_s)) v = do
             eqs (TFun _ _) v1 v2 = empty
         y <- freshId "y"
         let y' = B.Symbol (toSort ty_s) y
-        f_let y' <$> convertV cts env1 (substPType x0 vf ty_s) vs <*> do
+        B.f_let y' <$> convertV cts env1 (substPType x0 vf ty_s) vs <*> do
             return $ B.T [B.V x',B.V y']
 convertV cts env t1@(PFun ty ty_x (x0,ty_r)) v = do
     let (vf,t2@(PFun _ ty_x' (x0',ty_r'))) = getPType env v
@@ -179,23 +150,23 @@ convertV cts env t1@(PFun ty ty_x (x0,ty_r)) v = do
             let y' = B.Symbol (toSort ty_x') y
             let env1 = addE env x ty_x
             let vx = Var $ Id (getType x0) x
-            f_let y' <$> convertV cts env1 ty_x' vx <*> do
+            B.f_let y' <$> convertV cts env1 ty_x' vx <*> do
                 z <- freshId "z"
                 let z' = B.Symbol (toSort ty_r') z
                 let vz = Var $ Id (getType ty_r) z
                 let env2 = addE (addE env1 y ty_x') z (substPType x0' vx ty_r')
-                f_let z' (f_app vf (B.V y')) <$> convertV cts env2 (substPType x0 vx ty_r) vz
+                B.f_let z' (B.f_app vf (B.V y')) <$> convertV cts env2 (substPType x0 vx ty_r) vz
 
 convertP :: MonadIO m => Constraints -> Env -> Value -> m B.Term
 convertP cts env b = liftIO $ do
     et <- liftIO $ model (addC cts b) env
     ef <- liftIO $ model (addC cts (Op (OpNot b))) env
     if et == B.C False then
-        return $ f_assume ef (B.C False)
+        return $ B.f_assume ef (B.C False)
     else if ef == B.C False then
-        return $ f_assume et (B.C True)
+        return $ B.f_assume et (B.C True)
     else
-        return $ f_assume et (B.C True) `f_branch` f_assume ef (B.C False)
+        return $ B.f_assume et (B.C True) `B.f_branch` B.f_assume ef (B.C False)
 
 printConstraints :: Constraints -> IO ()
 printConstraints cts = do
@@ -252,7 +223,7 @@ model cts env = handle ((\e -> model cts env) :: SomeException -> IO B.Term) $ d
                 case _res of
                     Unsatisfiable _ -> do
                         putStrLn $ "found: " ++ (render $ pprintV 0 p1)
-                        return (f_and acc t1,S.insert key1 memo)
+                        return (B.f_and acc t1,S.insert key1 memo)
                     _ -> case mp2 of 
                         [] -> return (acc,memo)
                         (p2,t2,key2):_ -> do
@@ -260,14 +231,14 @@ model cts env = handle ((\e -> model cts env) :: SomeException -> IO B.Term) $ d
                             case _res of 
                                 Unsatisfiable _ -> do
                                     putStrLn $ "found:" ++ (render $ pprintV 0 p2)
-                                    return (f_and acc t2,S.insert key2 memo)
+                                    return (B.f_and acc t2,S.insert key2 memo)
                                 _ -> return (acc,memo)
-        let ps' = [ [(p,t,[i]), (Op $ OpNot p, f_not t,[-i])] | ((p,t),i) <- zip ps [0..] ] ++ 
-                  [ [(Op $ OpNot $ Op $ OpAnd p q, f_not $ f_and t s,[-i,-j])]
+        let ps' = [ [(p,t,[i]), (Op $ OpNot p, B.f_not t,[-i])] | ((p,t),i) <- zip ps [0..] ] ++ 
+                  [ [(Op $ OpNot $ Op $ OpAnd p q, B.f_not $ B.f_and t s,[-i,-j])]
                     | ((p,t),i) <- zip ps [0..], 
                       ((q,s),j) <- zip ps [0..], 
                       i < (j :: Int) ]   ++
-                  [ [(Op $ OpNot $ Op $ OpAnd (Op $ OpAnd p q) r, f_not $ f_and t (f_and s u),[-i,-j,-k])]
+                  [ [(Op $ OpNot $ Op $ OpAnd (Op $ OpAnd p q) r, B.f_not $ B.f_and t (B.f_and s u),[-i,-j,-k])]
                     | ((p,t),i) <- zip ps [0..], 
                       ((q,s),j) <- zip ps [0..], 
                       ((r,u),k) <- zip ps [0..],
@@ -330,12 +301,12 @@ predicates env = (do
         let n = length xs
         (i,(y,pv)) <- zip [0..] xs
         let pv' = substV y t pv
-        pure (pv', f_proj i n bt)
+        pure (pv', B.f_proj i n bt)
     go t bt (PInt xs) = f t bt xs 
     go t bt (PBool xs) = f t bt xs
     go t bt (PPair _ p1 (x0,p2)) = 
-        let bfst = f_proj 0 2 bt
-            bsnd = f_proj 1 2 bt
+        let bfst = B.f_proj 0 2 bt
+            bsnd = B.f_proj 1 2 bt
             tfst = Op $ OpFst (getType p1) t
             tsnd = Op $ OpSnd (getType p2) t in
         go tfst bfst p1 <|> go tsnd bsnd (substPType x0 tfst p2)

@@ -1,0 +1,121 @@
+
+(*
+let rec zip (xs:int list) (ys:int list) =
+  match xs with
+      [] ->
+        begin
+          match ys with
+              [] -> []
+            | _ -> assert false
+        end
+    | x::xs' ->
+        match ys with
+            [] -> assert false
+          | y::ys' -> (x,y)::zip xs' ys'
+
+let rec make_list n =
+  if n < 0
+  then []
+  else n :: make_list (n-1)
+
+let main n =
+  let xs = make_list n in
+    zip xs xs
+
+*)
+
+let head_pair : p: (n:int * (i:int -> x : int * int)) -> y : int * int =
+	fun p -> 
+		let f = p.snd in
+		let z = f 0 in
+		z;;
+
+let head_int : p: (n:int * (i:int -> int)) -> int =
+	fun p -> 
+		let f = p.snd in
+		let z = f 0 in
+		z;;
+		
+let tail_pair : p: (n:int * (i:int -> x : int * int)) -> (m:int[m. m = p.fst - 1] * (j:int -> y : int * int)) =
+	fun p ->
+		let n = p.fst in
+		let f = p.snd in
+		let g : j:int -> x : int * int = fun j -> let v = f (j + 1) in v in
+		(n-1,g)
+
+let tail_int : p: (n:int * (i:int -> int)) -> (m:int[m.m = p.fst - 1] * (j:int -> int)) =
+	fun p ->
+		let n = p.fst in
+		let f = p.snd in
+		let g : j:int -> int = fun j -> let v = f (j + 1) in v in
+		(n-1,g)
+
+let nil_int : n:int -> (m:int[m.m = 0] * (j:int -> int)) =
+	fun n -> 
+		let f : j:int -> int = fun j -> 0 in
+		(0,f)
+
+let nil_pair : n:int -> (m:int * (j:int -> x : int * int)) =
+	fun n -> 
+		let f : j:int -> x : int * int= fun j -> (0,0) in
+		(0,f)
+
+let cons_int : x:int -> p:(n:int * (i:int -> int)) -> (m:int[m. m = p.fst + 1] * (j:int -> int)) =
+	fun x -> fun p ->
+		let n = p.fst in
+		let f = p.snd in
+		let g : j:int -> int = fun j ->
+			(assume (j = 0); x) <>
+			(assume (j > 0); 
+			 let z = f (j - 1) in z) in
+		(n+1,g)
+
+let cons_pair : x: (v : int * int) -> p:(n:int * (i:int -> v: int * int)) -> (m:int * (j:int -> v:int * int)) =
+	fun x -> fun p ->
+		let n = p.fst in
+		let f = p.snd in
+		let g : j:int -> v : int * int = fun j ->
+			(assume (j = 0); x) <>
+			(assume (j > 0); 
+			 let z = f (j - 1) in z) in
+		(n+1,g);;
+
+let zip : xs : (n : int * (j : int -> int)) -> ys : (m : int[m. m = xs.fst] * (j : int -> int)) -> (l : int * (j : int -> r:int * int)) =
+  fun xs -> fun ys ->
+    (assume xs.fst = 0;
+     (assume ys.fst = 0; 
+      let r = nil_pair 0 in
+      r) <>
+     (assume ys.fst > 0;
+      Fail)) <>
+    (assume xs.fst > 0;
+     let x = head_int xs in
+     let xs1 = tail_int xs in
+     (assume ys.fst = 0;Fail) <>
+     (assume ys.fst > 0;
+      let y = head_int ys in
+      let ys1 = tail_int ys in
+      let rs1 = zip xs1 ys1 in
+      let rs = cons_pair (x,y) rs1 in
+      rs));;
+      
+let make_list : n : int -> (m : int * (j : int -> int))  =
+  fun n ->
+    (assume (n < 0);
+     let r = nil_int 0 in
+     r) <>
+    (assume (n >= 0);
+     let r = make_list (n - 1) in
+     let z = cons_int n r in
+     z);;
+
+let rand_int : x : int -> int =
+    fun x -> 0;;
+
+let n = rand_int 0 in
+let xs = make_list n in
+let ps = zip xs xs in
+0
+
+ 
+

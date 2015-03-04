@@ -9,13 +9,13 @@ import qualified Boolean.CPS    as B
 import qualified Boolean.HORS   as B
 import Boolean.Syntax.Typed as B(toUnTyped,tCheck)
 import Boolean.PrettyPrint.HORS(pprintHORS,printHORS)
-import Boolean.PrettyPrint.Typed as B(pprintProgram)
 import qualified ML.Syntax.Typed as Typed
 import ML.Convert
 import ML.PrettyPrint.UnTyped
 import ML.Alpha
 import qualified ML.PrettyPrint.Typed as Typed
 import qualified ML.TypeCheck as Typed
+import ML.RandomPredicate(addRandomPredicatesDef)
 import Boolean.Test 
 import Control.Monad.Except
 import Text.Parsec(ParseError)
@@ -38,7 +38,6 @@ instance Show MainError where
 
 main :: IO ()
 main = do
-    hSetBuffering stdout NoBuffering
     m <- runFreshT $ runExceptT doit
     case m of
         Left err -> print err
@@ -70,13 +69,14 @@ doit = do
     liftIO $ putStrLn "Alpha Converted Program"
     liftIO $ printProgram alphaProgram
 
-    -- type checking
-    t_type_checking_begin <- liftIO $ getCurrentTime
-    typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
-    liftIO $ Typed.printProgram typedProgram
-    t_type_checking_end <- liftIO $ getCurrentTime
+    -- add random predicates
+    randomProgram <- addRandomPredicatesDef alphaProgram
+    liftIO $ printProgram randomProgram
+    let file_rand = path ++ ".rnd"
+    liftIO $ writeFile file_rand $ render $ pprintProgram randomProgram
 
 
+{-
     -- predicate abst
     t_predicate_abst_begin <- liftIO $ getCurrentTime
     boolProgram' <- convert typedProgram
@@ -87,16 +87,26 @@ doit = do
             forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
                 printf "Context %d: %s\n" i (show t)
         Right _ -> return ()
-    let file_boolean = path ++ ".bool"
-    liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
     liftIO $ B.printProgram boolProgram
     t_predicate_abst_end <- liftIO $ getCurrentTime
 
     -- cps transformation
     liftIO $ printf "--CPS--\n"
+    {-
+    cps1 <- B.cps boolProgram'
+    cps2 <- B.elimTupleP cps1
+    liftIO $ print cps2
+    case runExcept (B.tCheck1 cps2) of
+        Left (s1,s2,str,ctx) -> liftIO $ do
+            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                printf "Context %d: %s\n" i (show t)
+        Right _ -> return ()
+        -}
+    
     hors <- B.toHORS boolProgram'
     let file_hors = path ++ ".hrs"
-    liftIO $ writeFile file_hors $ (++"\n") $ render $ pprintHORS hors
+    liftIO $ writeFile file_hors $ render $ pprintHORS hors
 --    liftIO $ printHORS hors
 --    liftIO $ B.printProgram cpsProgram
 
@@ -130,5 +140,6 @@ doit = do
         printf "\tPredicate Abst    : %7.3f sec\n" t_predicate_abst
         printf "\tModel Checking    : %7.3f sec\n" t_model_checking
 
+-}
 
 

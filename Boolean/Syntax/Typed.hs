@@ -8,6 +8,14 @@ module Boolean.Syntax.Typed ( Symbol(..)
                             , tCheck
                             , modifySort
                             , order
+                            , f_assume
+                            , f_branch
+                            , f_let
+                            , f_app
+                            , f_proj
+                            , f_not
+                            , f_and
+                            , f_or
                             ) where
 
 import qualified Boolean.Syntax as B
@@ -43,6 +51,34 @@ data Term = C Bool
           | Or  Term Term
           | Not Term
           | Fail Symbol deriving(Ord,Eq,Show)
+
+f_assume :: Term -> Term -> Term
+f_assume (C True) e = e
+f_assume p e = Assume (getSort e) p e
+f_branch :: Term -> Term -> Term
+f_branch e1 e2 = Branch (getSort e1) e1 e2
+f_let :: Symbol -> Term -> Term -> Term
+f_let x ex e = Let (getSort e) x ex e
+f_app :: Term -> Term -> Term
+f_app e1 e2 = 
+    let _ :-> s2 = getSort e1 in 
+    App s2 e1 e2
+f_proj :: Index -> Size -> Term -> Term
+f_proj i n e = 
+    let Tuple ts = getSort e in
+    Proj (ts !! i) i n e
+
+f_not :: Term -> Term
+f_not = Not
+f_and, f_or :: Term -> Term -> Term
+f_and (C True) x2 = x2
+f_and x1 (C True) = x1
+f_and (C False) _ = C False
+f_and x1 x2 = And x1 x2
+f_or (C False) x2 = x2
+f_or x1 (C False) = x1
+f_or (C True) _ = C False
+f_or x1 x2 = Or x1 x2
 
 class HasSort m where
     getSort :: m -> Sort

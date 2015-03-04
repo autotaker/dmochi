@@ -1,0 +1,5 @@
+let rand_int : x:int -> int = fun x -> 0;;
+let x = rand_int 0 in
+assume (x > 0);
+assume (x < 0);
+Fail

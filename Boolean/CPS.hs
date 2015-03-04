@@ -1,7 +1,7 @@
 {-# LANGUAGE FlexibleInstances, FlexibleContexts, StandaloneDeriving #-}
     
 module Boolean.CPS where
-import Boolean.Syntax.Typed
+import Boolean.Syntax.Typed hiding(f_app)
 import Control.Monad.Except hiding(mapM_,forM_,mapM,forM)
 import Control.Applicative
 import qualified Data.Map as M
