@@ -4,7 +4,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Applicative
 import Boolean.Syntax
-import Boolean.Flow(ReducedFlowGraph,Id)
+import Boolean.Flow(FlowGraph,Id)
 import Control.Arrow(second)
 import Control.Monad
 import Boolean.Util
@@ -30,7 +30,7 @@ instance Show VType where
         _ -> concat $ intersperse "^" $ map (\(ty1,ty2) -> "("++show ty1 ++ " -> " ++ show ty2++")") l
 
 data Context = Context { flowEnv :: M.Map Symbol [VType]
-                       , symEnv  :: M.Map Symbol VType } deriving(Eq,Show)
+                       , symEnv  :: M.Map Symbol  VType } deriving(Eq,Show)
 
 printContext :: Context -> IO ()
 printContext (Context flow sym) = do
@@ -46,19 +46,19 @@ printContext (Context flow sym) = do
         putStrLn ""
 
 
-initContext :: Program -> ReducedFlowGraph -> Context
+initContext :: Program -> FlowGraph -> Context
 initContext (Program defs _) (_,mapSym,_) = 
     Context (fmap (const []) mapSym) (M.fromList (map (second (const (VFun []))) defs))
 
-saturate :: Program -> ReducedFlowGraph -> [Context]
+saturate :: Program -> FlowGraph -> [Context]
 saturate p flow = iterate (saturateSub (definitions p) flow) (initContext p flow)
 
-saturateSub :: [Def] -> ReducedFlowGraph -> Context -> Context
+saturateSub :: [Def] -> FlowGraph -> Context -> Context
 saturateSub defs flow ctx = Context { flowEnv=env1, symEnv=env2 } where
     env1 = saturateFlow flow (symEnv ctx)
     env2 = saturateSym env1 (symEnv ctx) defs
 
-saturateFlow :: ReducedFlowGraph -> M.Map Symbol VType -> M.Map Symbol [VType]
+saturateFlow :: FlowGraph -> M.Map Symbol VType -> M.Map Symbol [VType]
 saturateFlow (edgeTbl,symMap,leafTbl) env = fmap (tbl!) symMap  where
     terms :: [Term]
     terms = catMaybes $ elems leafTbl

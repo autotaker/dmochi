@@ -20,7 +20,7 @@ main = do
             res <- runExceptT $ do
                 p <- withExceptT show $ ExceptT $ parseFile path
                 liftIO $ putStrLn $ render $ pprintProgram p
-                test $ Typed.toUnTyped p
+                test path $ Typed.toUnTyped p
             case res of
                 Left err -> putStrLn err
                 Right r -> print r

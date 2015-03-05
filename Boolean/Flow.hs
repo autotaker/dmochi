@@ -137,12 +137,6 @@ buildGraph senv p = runST $ do
     es <- calcClosure ctx (S.elems edgeSet)
     lbl <- getNodes ctx
     let edgeTbl = accumArray (flip (:)) [] (bounds lbl) es
-    {-
-    _ <- do
-        n <- readSTRef $ counter ctx
-        arr <- array (0,n-1) <$> HT.toList (labelTable ctx)
-        return ()
-        -}
     return ((lbl,edgeTbl),fmap (termId . fst) env)
 
 newContext :: ST s (Context s)
@@ -278,28 +272,92 @@ calcClosure ctx = go [] [] where
                     return (pi1,pi2,s)
                 go acc' es (l++qs)
 
-type ReducedFlowGraph = (Array Id [Id],M.Map Symbol Id,Array Id (Maybe Term))
+type FlowGraph = (Array Id [Id], M.Map Symbol Id, Array Id (Maybe Term))
 
-reduce1 :: Array Id (Maybe Term) -> Array Id [Id] -> M.Map Symbol Id -> ReducedFlowGraph
-reduce1 tlbl g label = (g2,label',lbl')
-    where
+reduce1 :: Array Id (Maybe Term) -> Array Id [Id] -> M.Map Symbol Id -> FlowGraph
+reduce1 tlbl g label = (g2,label',lbl') where
     bb = bounds g
     rename = runSTUArray $ do
         arr <- newArray bb (-1)
-        c <- newSTRef 0
+        c   <- newSTRef 0
         let dfs v = do
-            x <- readArray arr v
-            when ( x == -1 ) $ do
-                incr c >>= writeArray arr v
-                forM_ (g1 ! v) dfs
+                x <- readArray arr v
+                when (x == -1) $ do
+                    i <- incr c
+                    writeArray arr v i
+                    forM_ (g1 ! v) sub
+            sub v = do
+                x <- readArray arr v
+                if x == -1 then
+                    case g1 ! v of
+                        [w] | tlbl ! v == Nothing -> do
+                            i <- sub w 
+                            writeArray arr v i
+                            return i
+                        l   -> do
+                            i <- incr c
+                            writeArray arr v i
+                            forM_ l sub
+                            return i
+                else
+                    return x
         forM_ (M.elems label) dfs
         return arr
     n = maximum $ elems rename
     g1 :: Array Id [Id]
-    g1 = listArray bb [ l | (_,l) <- assocs g]
-    g2 = array (0,n) [ (rename ! i,map (rename!) l) | (i,l) <- assocs g1, rename ! i /= -1 ]
+    g1 = array bb $ do (i,l) <- assocs g 
+                       case tlbl ! i of
+                         Just (V _) -> return (i,l)
+                         Just _ -> return (i,[])
+                         Nothing -> return (i,l)
+    g2 = accumArray (flip (:)) [] (0,n) $ do 
+            (i,l) <- assocs g1
+            guard (rename ! i  /= -1)
+            j <- l
+            let i' = rename ! i
+                j' = rename ! j
+            guard $ i' /= j'
+            return (i',j')
     label' = M.fromList [ (x,rename ! i) | (x,i) <- M.toList label]
-    lbl' = array (0,n) [ (j,tlbl ! i) | (i,j) <- assocs rename, j /= -1 ]
+    lbl' = accumArray add empty (0,n) [ (j,tlbl ! i) | (i,j) <- assocs rename, j /= -1 ]
+
+add Nothing a = a
+add a Nothing = a
+add _ _ = undefined
+
+{-
+reduce2 :: FlowGraph -> FlowGraph
+reduce2 (g,symMap,label) = (g',symMap',label')
+    bb = bounds g
+    rename = runSTUArray $ do
+        arr <- newArray bb (-1)
+        c   <- newSTRef 0
+        let dfs v = do
+                x <- readArray arr v
+                if  x == -1 then do
+                    i <- incr c
+                    writeArray arr v i
+                    forM_ l sub
+                    return i
+                else 
+                    return x
+            sub v = do
+                x <- readArray arr v
+                if x == -1 then
+                    case g ! v of
+                        [w] -> do
+                            i <- sub w 
+                            writeArray arr v i
+                            return i
+                        l   -> do
+                            i <- incr c
+                            writeArray arr v i
+                            forM_ l sub
+                            return i
+                else
+                    return x
+        forM_ (M.elems label) dfs
+        -}
 
 -- pretty printing
 ppGraph :: (Show a) => Array Id a -> Array Id [Id] -> String

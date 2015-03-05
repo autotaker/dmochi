@@ -102,7 +102,7 @@ doit = do
 
     -- model checking
     t_model_checking_begin <- liftIO $ getCurrentTime
-    r <- withExceptT BooleanError $ test boolProgram
+    r <- withExceptT BooleanError $ test file_boolean boolProgram
     liftIO $ print r
     t_model_checking_end <- liftIO $ getCurrentTime
 

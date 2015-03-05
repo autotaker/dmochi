@@ -1,6 +1,7 @@
 *.swp
 *.o
 *.hi
+*.dot
 Test
 tmp/
 ML/sample/*.log

@@ -9,8 +9,8 @@ import Boolean.Syntax
 import Control.Monad.Except
 import qualified Data.Map as M
 
-test :: Program -> ExceptT String IO [TType]
-test input = do
+test :: MonadIO m => FilePath -> Program -> ExceptT String m [TType]
+test path input = do
     (p,syms) <- ExceptT $ return $ alphaConversion input
     liftIO $ mapM print (definitions p)
     --liftIO $ print p
@@ -19,7 +19,8 @@ test input = do
     let env = M.fromList [ (x,(s,t)) | (x,t) <- syms, let s = senv M.! x]
     let ((lbl,edges),env') = buildGraph env p
     let g@(x,_,y) = reduce1 lbl edges env'
-    liftIO $ putStrLn $ ppGraph (fmap (\t -> case t of
+    let graph_path = path ++ ".dot"
+    liftIO $ writeFile graph_path $ ppGraph (fmap (\t -> case t of
         Just x -> x
         Nothing -> V "") y) x
     let l = saturate p g
@@ -36,7 +37,7 @@ main = do
         [path] -> do
             res <- runExceptT $ do
                 p <- withExceptT show $ ExceptT $ parseFile path
-                test p
+                test path p
             case res of
                 Left err -> putStrLn err
                 Right r -> print r
