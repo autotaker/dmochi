@@ -15,7 +15,7 @@ import ML.PrettyPrint.UnTyped
 import ML.Alpha
 import qualified ML.PrettyPrint.Typed as Typed
 import qualified ML.TypeCheck as Typed
-import ML.RandomPredicate(addRandomPredicatesDef)
+import ML.RandomPredicate3(addRandomPredicatesDef)
 import Boolean.Test 
 import Control.Monad.Except
 import Text.Parsec(ParseError)

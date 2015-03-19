@@ -325,40 +325,6 @@ add Nothing a = a
 add a Nothing = a
 add _ _ = undefined
 
-{-
-reduce2 :: FlowGraph -> FlowGraph
-reduce2 (g,symMap,label) = (g',symMap',label')
-    bb = bounds g
-    rename = runSTUArray $ do
-        arr <- newArray bb (-1)
-        c   <- newSTRef 0
-        let dfs v = do
-                x <- readArray arr v
-                if  x == -1 then do
-                    i <- incr c
-                    writeArray arr v i
-                    forM_ l sub
-                    return i
-                else 
-                    return x
-            sub v = do
-                x <- readArray arr v
-                if x == -1 then
-                    case g ! v of
-                        [w] -> do
-                            i <- sub w 
-                            writeArray arr v i
-                            return i
-                        l   -> do
-                            i <- incr c
-                            writeArray arr v i
-                            forM_ l sub
-                            return i
-                else
-                    return x
-        forM_ (M.elems label) dfs
-        -}
-
 -- pretty printing
 ppGraph :: (Show a) => Array Id a -> Array Id [Id] -> String
 ppGraph lbl edges = renderDot g where

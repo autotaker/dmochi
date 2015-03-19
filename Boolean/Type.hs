@@ -45,7 +45,6 @@ printContext (Context flow sym) = do
         forM_ l $ \(tys,ty) -> putStrLn $ "\t" ++ show tys ++ " -> " ++ show ty
         putStrLn ""
 
-
 initContext :: Program -> FlowGraph -> Context
 initContext (Program defs _) (_,mapSym,_) = 
     Context (fmap (const []) mapSym) (M.fromList (map (second (const (VFun []))) defs))
@@ -60,17 +59,17 @@ saturateSub defs flow ctx = Context { flowEnv=env1, symEnv=env2 } where
 
 saturateFlow :: FlowGraph -> M.Map Symbol VType -> M.Map Symbol [VType]
 saturateFlow (edgeTbl,symMap,leafTbl) env = fmap (tbl!) symMap  where
-    terms :: [Term]
-    terms = catMaybes $ elems leafTbl
-    fvarMap :: M.Map Term [Symbol]
-    fvarMap = M.fromList $ map (\t -> (t,freeVariables t \\ (M.keys env))) terms
-    bvarMap :: M.Map Term [Symbol]
-    bvarMap = M.fromList $ map (\t -> (t,boundVariables t)) terms
+    terms :: [(Id,Term)]
+    terms = [ (i,t)     | (i,Just t) <- assocs leafTbl ]
+    fvarMap :: M.Map Id [Symbol]
+    fvarMap = M.fromList $ map (\(i,t) -> (i,freeVariables t \\ (M.keys env))) terms
+    bvarMap :: M.Map Id [Symbol]
+    bvarMap = M.fromList $ map (\(i,t) -> (i,boundVariables t)) terms
     bb = bounds edgeTbl
     depTbl :: Array Id [Id]
     depTbl = accumArray (flip (:)) [] bb $ 
              [ (t,s) | (s,ts) <- assocs edgeTbl, t <- ts ] ++ 
-             [ (symMap M.! x,s) | (s,Just t) <- assocs leafTbl, x <- nub $ (fvarMap M.! t) ++ (bvarMap M.! t)]
+             [ (symMap M.! x,s) | (s,Just t) <- assocs leafTbl, x <- nub $ (fvarMap M.! s) ++ (bvarMap M.! s)]
     tbl :: Array Id [VType]
     tbl = runSTArray $ do
         arr <- newArray (bounds leafTbl) []
@@ -88,8 +87,8 @@ saturateFlow (edgeTbl,symMap,leafTbl) env = fmap (tbl!) symMap  where
                         let res = nub $ concat $ ty : tys
                         return res
                     Just t -> do
-                        let fvars = fvarMap M.! t
-                            bvars = bvarMap M.! t
+                        let fvars = fvarMap M.! v
+                            bvars = bvarMap M.! v
                         tys <- forM fvars $ \f -> readArray arr $ symMap M.! f
                         m <- M.fromList <$> forM bvars (\xs -> (xs,) <$> readArray arr (symMap M.! xs))
                         let cands = sequence tys
@@ -148,7 +147,7 @@ saturateTerm _flowEnv = go where
                  msum (map (\tyx -> go (M.insert x tyx env) t2) ty1')
     go env (Proj n _ t) = 
         let tys = go env t in 
-        map (\ty -> case ty of
+        nub $ map (\ty -> case ty of
             TFail -> TFail
             TPrim (VTup ts) -> TPrim (ts !! projN n)
             TPrim _ -> undefined) tys
