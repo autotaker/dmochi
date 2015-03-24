@@ -114,19 +114,19 @@ toUnTyped :: Program -> B.Program
 toUnTyped (Program ds t0) = B.Program ds' t0' where
     ds' = map (\(x,t) -> (name x,convert t)) ds
     t0' = convert t0
-    convert (C b) = B.C b
-    convert (V x) = B.V (name x)
-    convert (T ts) = B.T (map convert ts)
-    convert (Lam x t) = B.Lam (name x) (convert t)
-    convert (Let _ x tx t) = B.Let (name x) (convert tx) (convert t)
-    convert (App _ t1 t2) = B.App (convert t1) (convert t2)
-    convert (Proj _ i s t) = B.Proj (B.ProjN i) (B.ProjD s) (convert t)
-    convert (Assume _ p t) = B.If (convert p) (convert t) (B.Omega "")
-    convert (Branch _ t1 t2) = B.If B.TF (convert t1) (convert t2)
-    convert (And t1 t2) = B.If (convert t1) (convert t2) (B.C False)
-    convert (Or t1 t2) = B.If (convert t1) (B.C True) (convert t2)
-    convert (Not t) = B.If (convert t) (B.C False) (B.C True)
-    convert (Fail x) = B.Fail (name x)
+    convert (C b) = B.C () b
+    convert (V x) = B.V () (name x)
+    convert (T ts) = B.T () (map convert ts)
+    convert (Lam x t) = B.Lam () (name x) (convert t)
+    convert (Let _ x tx t) = B.Let () (name x) (convert tx) (convert t)
+    convert (App _ t1 t2) = B.App () (convert t1) (convert t2)
+    convert (Proj _ i s t) = B.Proj () (B.ProjN i) (B.ProjD s) (convert t)
+    convert (Assume _ p t) = B.If () (convert p) (convert t) (B.Omega () "")
+    convert (Branch _ t1 t2) = B.If () (B.TF ()) (convert t1) (convert t2)
+    convert (And t1 t2) = B.If () (convert t1) (convert t2) (B.C () False)
+    convert (Or t1 t2) = B.If () (convert t1) (B.C () True) (convert  t2)
+    convert (Not t) = B.If () (convert t) (B.C () False) (B.C () True)
+    convert (Fail x) = B.Fail () (name x)
 
 tCheck :: Program -> Except (Sort,Sort,String,[Term]) ()
 tCheck (Program ds t0) = doit where

@@ -59,17 +59,15 @@ saturateSub defs flow ctx = Context { flowEnv=env1, symEnv=env2 } where
 
 saturateFlow :: FlowGraph -> M.Map Symbol VType -> M.Map Symbol [VType]
 saturateFlow (edgeTbl,symMap,leafTbl) env = fmap (tbl!) symMap  where
-    terms :: [(Id,Term)]
+    terms :: [(Id,Term ())]
     terms = [ (i,t)     | (i,Just t) <- assocs leafTbl ]
-    fvarMap :: M.Map Id [Symbol]
     fvarMap = M.fromList $ map (\(i,t) -> (i,freeVariables t \\ (M.keys env))) terms
-    bvarMap :: M.Map Id [Symbol]
     bvarMap = M.fromList $ map (\(i,t) -> (i,boundVariables t)) terms
     bb = bounds edgeTbl
     depTbl :: Array Id [Id]
     depTbl = accumArray (flip (:)) [] bb $ 
              [ (t,s) | (s,ts) <- assocs edgeTbl, t <- ts ] ++ 
-             [ (symMap M.! x,s) | (s,Just t) <- assocs leafTbl, x <- nub $ (fvarMap M.! s) ++ (bvarMap M.! s)]
+             [ (symMap M.! x,s) | (s,Just _) <- assocs leafTbl, x <- nub $ (fvarMap M.! s) ++ (bvarMap M.! s)]
     tbl :: Array Id [VType]
     tbl = runSTArray $ do
         arr <- newArray (bounds leafTbl) []
@@ -82,7 +80,7 @@ saturateFlow (edgeTbl,symMap,leafTbl) env = fmap (tbl!) symMap  where
                         tys <- forM (edgeTbl  ! v) $ readArray arr
                         let res = nub $ concat $ ty : tys
                         return res
-                    Just (V _) -> do
+                    Just (V _ _) -> do
                         tys <- forM (edgeTbl  ! v) $ readArray arr
                         let res = nub $ concat $ ty : tys
                         return res
@@ -113,16 +111,16 @@ saturateSym :: M.Map Symbol [VType] -> M.Map Symbol VType -> [Def] -> M.Map Symb
 saturateSym _flowEnv _symEnv defs = 
     M.fromList $ [ (x,ty) | (x,t) <- defs, let [TPrim ty] = saturateTerm _flowEnv _symEnv t ]
 
-saturateTerm :: M.Map Symbol [VType] -> M.Map Symbol VType -> Term -> [TType]
+saturateTerm :: M.Map Symbol [VType] -> M.Map Symbol VType -> Term () -> [TType]
 saturateTerm _flowEnv = go where
-    go _ (C True) = pure $ TPrim VT
-    go _ (C False) = pure $ TPrim VF
-    go env (V x) = pure $ TPrim (env M.! x)
-    go _ (Fail _) = pure $ TFail
-    go _ TF     = pure (TPrim VT) <|> pure (TPrim VF)
-    go _ (Omega _) = empty
-    go env (Lam x t) = pure $ TPrim (VFun [(tyx,ty) | tyx <- _flowEnv M.! x, ty <- go (M.insert x tyx env) t ])
-    go env (App t1 t2) = 
+    go _ (C _ True) = pure $ TPrim VT
+    go _ (C _ False) = pure $ TPrim VF
+    go env (V _ x) = pure $ TPrim (env M.! x)
+    go _ (Fail _ _) = pure $ TFail
+    go _ (TF _)    = pure (TPrim VT) <|> pure (TPrim VF)
+    go _ (Omega _ _) = empty
+    go env (Lam _ x t) = pure $ TPrim (VFun [(tyx,ty) | tyx <- _flowEnv M.! x, ty <- go (M.insert x tyx env) t ])
+    go env (App _ t1 t2) = 
         let ty1 = go env t1
             ty2 = go env t2 in
         nub $ (pure TFail <* guard (TFail `elem` ty1)) <|> 
@@ -130,22 +128,22 @@ saturateTerm _flowEnv = go where
               (do (ty2',ty) <- [ v | TPrim (VFun l) <- ty1, v <- l]
                   guard (any (contain ty2') [ _ty | TPrim _ty <- ty2])
                   return ty)
-    go env (If t1 t2 t3) =
+    go env (If _ t1 t2 t3) =
         let ty1 = go env t1 in
         nub $ (pure TFail <* guard (TFail `elem` ty1)) <|>
               (go env t2  <* guard (TPrim VT `elem` ty1)) <|>
               (go env t3  <* guard (TPrim VF `elem` ty1))
-    go env (T ts) = 
+    go env (T _ ts) = 
         let check = foldr (\tyi acc -> (TFail `elem` tyi) || (not (null tyi) && acc)) False
             tys = map (go env) ts 
             tys' = map (\l -> [ ty | TPrim ty <- l]) tys
         in (pure TFail <* guard (check tys)) <|> (TPrim . VTup <$> sequence tys')
-    go env (Let x t1 t2) =
+    go env (Let _ x t1 t2) =
         let ty1  = go env t1
             ty1' = [ tyx | TPrim tyx <- ty1 ]
         in nub $ (pure TFail <* guard (TFail `elem` ty1)) <|>
                  msum (map (\tyx -> go (M.insert x tyx env) t2) ty1')
-    go env (Proj n _ t) = 
+    go env (Proj _ n _ t) = 
         let tys = go env t in 
         nub $ map (\ty -> case ty of
             TFail -> TFail

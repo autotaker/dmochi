@@ -15,6 +15,7 @@ import qualified Data.HashTable.IO as H
 import Data.Hashable
 import Data.IORef
 import Control.Monad.Reader
+import Control.Monad.State
 import Data.List hiding (elem)
 import Prelude hiding(elem)
 import Data.Function(on)
@@ -22,6 +23,56 @@ import qualified Heap
 import Text.PrettyPrint
 import Text.Printf
 
+incrId :: State Id Id
+incrId = do
+    i <- get
+    put $! i + 1
+    return i
+
+assignId' :: Term a -> Term (Id,S.Set String)
+assignId' t = evalState (assignId t) 0
+
+assignId :: Term a -> State Id (Term (Id,S.Set String))
+assignId (C _ b) = C <$> ((,S.empty) <$> incrId) <*> pure b
+assignId (V _ x) = V <$> ((,S.singleton x) <$> incrId) <*> pure x
+assignId (Fail _ s) = Fail <$> ((,S.empty) <$> incrId) <*> pure s
+assignId (Omega _ s) = Omega <$> ((,S.empty) <$> incrId) <*> pure s
+assignId (T _ ts) = do
+    ts' <- mapM assignId ts
+    let s = S.unions $ map (snd.getValue) ts'
+    i <- incrId
+    return $ T (i,s) ts'
+assignId (TF _) = TF <$> ((,S.empty) <$> incrId)
+assignId (Lam _ x t) = do
+    t' <- assignId t
+    let s = S.delete x $ snd (getValue t')
+    i <- incrId
+    return $ Lam (i,s) x t'
+assignId (Let _ x tx t) = do
+    tx' <- assignId tx
+    t'  <- assignId t
+    let s = S.union (S.delete x (snd $ getValue t')) (snd $ getValue tx')
+    i <- incrId
+    return $ Let (i,s) x tx' t'
+assignId (Proj _ n d t) = do
+    t' <- assignId t
+    let s = snd $ getValue t'
+    i <- incrId
+    return $ Proj (i,s) n d t'
+assignId (App _ t1 t2) = do
+    t1' <- assignId t1
+    t2' <- assignId t2
+    let s = (snd $ getValue t1') `S.union` (snd $ getValue t2')
+    i <- incrId
+    return $ App (i,s) t1' t2'
+assignId (If _ t1 t2 t3) = do
+    t1' <- assignId t1
+    t2' <- assignId t2
+    t3' <- assignId t3
+    let s = S.unions $ map (snd . getValue) [t1',t2',t3']
+    i <- incrId
+    return $ If (i,s) t1' t2' t3'
+                                    
 data VType = VT Id
            | VF Id
            | VTup Id ![VType]
@@ -29,7 +80,7 @@ data VType = VT Id
 
 data VFunType = VNil Id | VAnd Id !VType !TType !VFunType
 data TType = TPrim !VType | TFail
-data TTypeList = LNil Id | LFail Id | LCons Id VType TTypeList
+data TTypeList = LNil Id | LFail Id | LCons Id VType TTypeList deriving(Show)
 
 instance Show VType where
     showsPrec _ (VT _) = showString "T"
@@ -135,6 +186,9 @@ data Factory = Factory { vTypeTable :: HashTable VType VType
                        , applyCounter :: IORef Int
                        , insertCounter :: IORef Int
                        , singleCounter :: IORef Int
+                       , costCounter :: IORef Int
+                       , termCounter :: IORef Int
+                       , combCounter :: IORef Int
                        }
 
 instance Hashable VType where
@@ -180,8 +234,10 @@ fnil = VNil
 fand :: VType -> TType -> VFunType -> VFunTypeCstr
 fand tx tb ts = \i -> VAnd i tx tb ts
 
+{-
 fand' :: VType -> VType -> VFunType -> VFunTypeCstr
 fand' tx tb ts = \i -> VAnd i tx (TPrim tb) ts
+-}
 
 lnil :: TTypeListCstr
 lnil = LNil
@@ -200,6 +256,9 @@ newFactory = Factory <$> H.new
                      <*> H.new
                      <*> H.new
                      <*> H.new
+                     <*> newIORef 0
+                     <*> newIORef 0
+                     <*> newIORef 0
                      <*> newIORef 0
                      <*> newIORef 0
                      <*> newIORef 0
@@ -266,7 +325,6 @@ singleton t = do
             liftIO $ H.insert tbl (getId t) t'
             return t'
 
-
 toFunType :: (MonadReader Factory m, MonadIO m, Functor m) => [(VType,TTypeList)] -> m VFunType
 toFunType ts = do
     let ts1 = reverse $ sortBy (compare `on` getId.fst) ts
@@ -286,6 +344,7 @@ applyType :: TTypeList -> TTypeList -> M TTypeList
 applyType t1@(LNil _) _ = return t1
 applyType t1@(LFail _) _ = return t1
 applyType _ t2@(LFail _) = return t2
+applyType _ t2@(LNil _)  = return t2
 applyType ts tx = do
     tbl <- applyMemo <$> ask
     incr applyCounter
@@ -304,14 +363,22 @@ applyType ts tx = do
             t0 <- {-# SCC buildTypeList294 #-} buildTypeList lnil
             t <- foldM (\acc t -> insertType t acc) t0 $ sortBy (compare `on` getId) res
             liftIO $ H.insert tbl key t
+            {-
+            liftIO $ do
+                putStrLn "APPLY"
+                putStrLn "func:"
+                putStrLn $ render $ vcat $ map (ppV 0) $ unfoldV ts
+                putStrLn "arg:"
+                putStrLn $ render $ vcat $ map (ppV 0) $ unfoldV tx
+                -}
             return t
 
 
 mergeTypeList :: TTypeList -> TTypeList -> M TTypeList
 mergeTypeList (LNil _) t2 = return t2
 mergeTypeList t1 (LNil _) = return t1
-mergeTypeList (LFail _) _ = {-# SCC buildTypeList303 #-} buildTypeList lfail
-mergeTypeList _ (LFail _) = {-# SCC buildTypeList304 #-} buildTypeList lfail
+mergeTypeList (LFail _) _ = buildTypeList lfail
+mergeTypeList _ (LFail _) = buildTypeList lfail
 mergeTypeList t1@(LCons k1 vx1 vs1) t2@(LCons k2 vx2 vs2) = do
     tbl <- mergeMemo <$> ask
     incr mergeCounter
@@ -338,7 +405,7 @@ instance (Ord a,Eq b) => Ord (Fst a b) where
     compare = compare `on` fst . unFst
 
 concatTypeList :: [TTypeList] -> M TTypeList
-concatTypeList [] = {-# SCC buildTypeList331 #-} buildTypeList lnil
+concatTypeList [] = buildTypeList lnil
 concatTypeList ts = go q0 where
     q0 = foldr (\x acc -> Heap.insert (Fst (lsize x,x)) acc) Heap.empty ts
     go queue = do
@@ -361,7 +428,8 @@ type M a = ReaderT Factory IO a
 data Context = Context { flowEnv :: M.Map Symbol TTypeList
                        , symEnv  :: M.Map Symbol  VType } deriving(Eq)
 
-saturateFlow :: FlowGraph -> M.Map Symbol VType -> M (M.Map Symbol TTypeList)
+
+saturateFlow ::  (Array Id [Id], M.Map Symbol Id, Array Id (Maybe (Term (Id,S.Set String)))) -> M.Map Symbol VType -> M (M.Map Symbol TTypeList)
 saturateFlow (edgeTbl,symMap,leafTbl) env = do
     let terms = [ (i,t) | (i,Just t) <- assocs leafTbl]
         fvarMap = M.fromList $ map (\(i,t) -> (i,freeVariables t \\ M.keys env)) terms
@@ -382,97 +450,146 @@ saturateFlow (edgeTbl,symMap,leafTbl) env = do
                 Nothing -> do
                     tys <- forM (edgeTbl ! v) $ liftIO . readArray arr
                     concatTypeList $ ty : tys
-                Just (V _) -> do
+                Just (V _ x) -> do
                     tys <- forM (edgeTbl ! v) $ liftIO . readArray arr
-                    concatTypeList $ ty : tys
+                    r <- concatTypeList $ ty : tys
+                    return r
                 Just t -> do
                     let fvars = fvarMap M.! v
                     let bvars = bvarMap M.! v
                     tys <- forM fvars $ liftIO . readArray arr . (symMap M.!)
                     m <- M.fromList <$> forM bvars (\x -> (x,) <$> liftIO (readArray arr (symMap M.! x)))
-                    ls <- forM (sequence $ map unfoldV tys) $ \l -> do
+                    let cands = sequence $ map unfoldV tys
+                        c = length cands
+                    ref <- liftIO $ newIORef M.empty
+                    ls <- forM cands $ \l -> do
                         let env' = updateEnv env (zip fvars l)
-                        res <- saturateTerm m env' t 
+                        res <- saturateTerm ref c m env' t 
                         case res of
                             LFail _ -> {-# SCC buildTypeList387 #-} buildTypeList lnil
                             tyl -> return tyl
                     concatTypeList ls
             if ty' === ty 
                 then go vs
-                else liftIO (writeArray arr v ty') >> go (foldr S.insert vs (depTbl ! v))
+                else do
+                    liftIO (writeArray arr v ty')
+                    go (foldr S.insert vs (depTbl ! v))
     go $ S.fromList $ [ i | (i,Just _) <- assocs leafTbl]
     fmap M.fromList $ forM (M.assocs symMap) $ \(f,i) -> do
         v <- liftIO $ readArray arr i
         return (f,v)
 
-saturateSym :: M.Map Symbol TTypeList -> M.Map Symbol VType -> [Def] -> M (M.Map Symbol VType)
+saturateSym :: M.Map Symbol TTypeList -> M.Map Symbol VType -> [(Symbol,Term (Id,S.Set String))] -> M (M.Map Symbol VType)
 saturateSym _flowEnv _symEnv defs = do
     fmap M.fromList $ forM defs $ \(x,t) -> do
-        LCons _ ty _  <- saturateTerm _flowEnv _symEnv t
-        return (x,ty)
+        ref <- liftIO $ newIORef $ M.empty
+        LCons _ ty _  <- saturateTerm ref 1 _flowEnv _symEnv t
+        let VFun _ ty1 = ty
+            VFun _ ty2 = _symEnv M.! x
+        let mergeFun (VNil _) t2 = return t2
+            mergeFun t1 (VNil _) = return t1
+            mergeFun t1@(VAnd _ vx1 vt1 t1') t2@(VAnd _ vx2 vt2 t2') 
+                | k1 < k2 = do
+                    ts <- mergeFun t1 t2'
+                    buildFunType (fand vx2 vt2 ts)
+                | k1 == k2 = do
+                    ts <- mergeFun t1' t2'
+                    buildFunType (fand vx1 vt1 ts)
+                | otherwise = do
+                    ts <- mergeFun t1' t2
+                    buildFunType (fand vx1 vt1 ts)
+                where k1 = (getId vx1,getId vt1)
+                      k2 = (getId vx2,getId vt2)
+        ty' <- mergeFun ty1 ty2 >>= buildType . func
+        return (x,ty')
 
 updateEnv :: M.Map Symbol VType -> [(Symbol,VType)] -> M.Map Symbol VType
 updateEnv = foldl (\acc (x,ty) -> M.insert x ty acc)
 
-saturateTerm :: M.Map Symbol TTypeList -> M.Map Symbol VType -> Term -> M TTypeList
-saturateTerm _flowEnv _t = {-# SCC saturateTerm_go #-} go _t where
-    go _ (C b) = {-# SCC saturateTerm_go_C #-} buildType (bool b) >>= singleton
-    go env (V x) = {-# SCC saturateTerm_go_V #-}singleton (env M.! x)
-    go _ (Fail _) = {-# SCC saturateTerm_go_Fail #-}{-# SCC buildTypeList411 #-} buildTypeList lfail
-    go _ TF = {-# SCC saturateTerm_go_TF #-}
+saturateTerm :: IORef (M.Map (Id,[Id]) TTypeList) -> Int -> M.Map Symbol TTypeList -> M.Map Symbol VType -> Term (Id,S.Set String) -> M TTypeList
+saturateTerm ref _c _flowEnv _env _t = incr termCounter >> go _c _env _t where
+    {- 
+    memo env t action = do
+        let (i,s) = getValue t
+        let l = [ getId (env M.! x) | x <- S.toList s ]
+        m <- liftIO $ readIORef ref
+        case M.lookup (i,l) m of
+            Just ty -> do
+                return ty
+            Nothing -> do
+                ty <- action
+                liftIO $ writeIORef ref $! M.insert (i,l) ty m
+                return ty -}
+    go c env _t = {- memo env _t $ -} do
+        incr costCounter
+        comb <- fmap combCounter ask
+        liftIO $ do
+            m <- readIORef comb
+            writeIORef comb $! max m c
+        case _t of
+            C _ b -> buildType (bool b) >>= singleton
+            V _ x -> singleton (env M.! x)
+            Fail _ _ -> buildTypeList lfail
+            TF _ ->
               do t1 <- buildType (bool True)  >>= singleton
                  t2 <- buildType (bool False) >>= singleton
                  mergeTypeList t1 t2
-    go _ (Omega _) = {-# SCC saturateTerm_go_Omega #-} {-# SCC buildTypeList415 #-} buildTypeList lnil
-    go env (Lam x t) = {-# SCC saturateTerm_go_Lam #-}do
-        as <- forM (unfoldV $ _flowEnv M.! x) $ \tyx -> do
-            tl <- go (M.insert x tyx env) t
-            return $ (tyx,tl)
-        toFunType as >>= buildType . func >>= singleton
-    go env (App t1 t2) = {-# SCC saturateTerm_go_App #-}do
-        ty1 <- go env t1
-        ty2 <- go env t2
-        applyType ty1 ty2
-    go env (If t1 t2 t3) = {-# SCC saturateTerm_go_If #-}do
-        ty1 <- go env t1
-        case ty1 of
-            LFail _ -> {-# SCC buildTypeList428 #-} buildTypeList lfail
-            LNil  _ -> {-# SCC buildTypeList429 #-} buildTypeList lnil
-            _       -> do
-                xs <- if VT undefined `elem` ty1 then 
-                        go env t2 
-                      else {-# SCC buildTypeList433 #-} buildTypeList lnil
-                ys <- if VF undefined `elem` ty1 then 
-                        go env t3 
-                      else {-# SCC buildTypeList436 #-} buildTypeList lnil
-                mergeTypeList xs ys
-    go env (T ts) = {-# SCC saturateTerm_go_T #-}do
-        tys <- forM ts $ go env 
-        let check = foldr (\tyi acc -> 
-                        (LFail undefined == tyi) || (LNil undefined /= tyi && acc)) False
-        if check tys then
-            {-# SCC buildTypeList443 #-} buildTypeList lfail
-        else do
-            let tys' = map unfoldV tys
-            -- can be exponatial
-            tys'' <- forM (sequence tys') $ buildType . tup
-            let sorted = sortBy (compare `on` getId) tys''
-            t0 <- {-# SCC buildTypeList449 #-} buildTypeList lnil
-            foldM (\acc t -> {-# SCC buildTypeList450 #-} buildTypeList $ lcons t acc) t0 sorted
-    go env (Let x t1 t2) = {-# SCC saturateTerm_go_Let #-}do
-        ty1 <- go env t1
-        case ty1 of
-            LFail _ -> {-# SCC buildTypeList454 #-} buildTypeList lfail
-            _ -> (forM (unfoldV ty1) $ \tyx -> go (M.insert x tyx env) t2) >>= concatTypeList
-    go env (Proj n _ t) = {-# SCC saturateTerm_go_Proj #-}do
-        tys <- go env t
-        case tys of
-            LFail _ -> {-# SCC buildTypeList459 #-} buildTypeList lfail
-            _ -> do
-                let tys' = map (\(VTup _ ts) -> ts !! projN n) $ unfoldV tys
-                let sorted = map head $ groupBy (===) $ sortBy (compare `on` getId) tys'
-                t0 <- {-# SCC buildTypeList463 #-} buildTypeList lnil
-                foldM (\acc _t -> {-# SCC buildTypeList464 #-} buildTypeList $ lcons _t acc) t0 sorted
+            Omega _ _ -> buildTypeList lnil
+            Lam _ x t -> do
+                let l = unfoldV $ _flowEnv M.! x
+                let c' = c * length l
+                as <- forM l $ \tyx -> do
+                    tl <- go c' (M.insert x tyx env) t
+                    return $ (tyx,tl)
+                toFunType as >>= buildType . func >>= singleton
+            App _ t1 t2 -> do
+                ty1 <- go c env t1
+                case ty1 of
+                    LNil _ -> return ty1
+                    LFail _ -> return ty1
+                    _ -> do
+                        ty2 <- go c env t2
+                        applyType ty1 ty2
+            If _ t1 t2 t3 -> do
+                ty1 <- go c env t1
+                case ty1 of
+                    LFail _ -> return ty1
+                    LNil  _ -> return ty1
+                    _       -> do
+                        xs <- if VT undefined `elem` ty1 then 
+                                go c env t2 
+                              else buildTypeList lnil
+                        ys <- if VF undefined `elem` ty1 then 
+                                go c env t3 
+                              else buildTypeList lnil
+                        mergeTypeList xs ys
+            T _ ts -> do
+                tys <- forM ts $ go c env 
+                let check = foldr (\tyi acc -> 
+                                (LFail undefined == tyi) || (LNil undefined /= tyi && acc)) False
+                if check tys then
+                    {-# SCC buildTypeList443 #-} buildTypeList lfail
+                else do
+                    let tys' = map unfoldV tys
+                    -- can be exponatial
+                    tys'' <- forM (sequence tys') $ buildType . tup
+                    let sorted = sortBy (compare `on` getId) tys''
+                    t0 <- {-# SCC buildTypeList449 #-} buildTypeList lnil
+                    foldM (\acc t -> {-# SCC buildTypeList450 #-} buildTypeList $ lcons t acc) t0 sorted
+            Let _ x t1 t2 -> do
+                ty1 <- go c env t1
+                case ty1 of
+                    LFail _ -> {-# SCC buildTypeList454 #-} buildTypeList lfail
+                    _ -> (forM (unfoldV ty1) $ \tyx -> go c (M.insert x tyx env) t2) >>= concatTypeList
+            Proj _ n _ t -> do
+                tys <- go c env t
+                case tys of
+                    LFail _ -> {-# SCC buildTypeList459 #-} buildTypeList lfail
+                    _ -> do
+                        let tys' = map (\(VTup _ ts) -> ts !! projN n) $ unfoldV tys
+                        let sorted = map head $ groupBy (===) $ sortBy (compare `on` getId) tys'
+                        t0 <- {-# SCC buildTypeList463 #-} buildTypeList lnil
+                        foldM (\acc _t -> {-# SCC buildTypeList464 #-} buildTypeList $ lcons _t acc) t0 sorted
 
 initContext :: Program -> FlowGraph -> M Context
 initContext (Program defs _) (_,mapSym,_) = do
@@ -481,27 +598,35 @@ initContext (Program defs _) (_,mapSym,_) = do
     return $ Context (fmap (const nil) mapSym) (M.fromList (map (second (const ty)) defs))
 
 saturate :: Program -> FlowGraph -> IO (Bool,Context)
-saturate p flow = newFactory >>= runReaderT (loop =<< initContext p flow) where
-    loop ctx = do
-        env1 <- saturateFlow flow (symEnv ctx)
-        env2 <- saturateSym env1 (symEnv ctx) (definitions p)
+saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flow) where
+    t0' = assignId' (mainTerm p)
+    ds' = map (second assignId') (definitions p)
+    flow' = let (a,b,c) = flow in (a,b,fmap (fmap assignId') c)
+    loop i ctx = do
+        env1 <- saturateFlow flow' (symEnv ctx)
+        env2 <- saturateSym env1 (symEnv ctx) ds'
         factory <- ask
         liftIO $ do
             putStrLn "----------ENV----------" 
             forM_ (M.assocs env2) $ \ (x,l) -> do
-                putStrLn $ x ++ ":"
+                putStrLn $ x ++ " " ++ show (getId l) ++ ":" 
                 putStrLn $ render $ nest 4 $ ppV 0 l
                 putStrLn ""
+            printf                                      "Round   :%8d\n" i
             readIORef (counter      factory) >>= printf "Counter :%8d\n"
             readIORef (queryCounter factory) >>= printf "Queries :%8d\n"
             readIORef (mergeCounter factory) >>= printf "Merge   :%8d\n"
             readIORef (applyCounter factory) >>= printf "Apply   :%8d\n"
             readIORef (insertCounter factory)>>= printf "Insert  :%8d\n"
             readIORef (singleCounter factory)>>= printf "Single  :%8d\n"
+            readIORef (termCounter factory)  >>= printf "Term    :%8d\n"
+            readIORef (costCounter factory)  >>= printf "Cost    :%8d\n"
+            readIORef (combCounter factory)  >>= printf "Comb    :%8d\n"
             putStrLn ""
-        t0 <- saturateTerm env1 env2 (mainTerm p)
+        ref <- liftIO $ newIORef M.empty
+        t0 <- saturateTerm ref 1 env1 env2 t0'
         let ctx' = Context env1 env2
         case t0 of
             LFail _ -> return (False,ctx')
             _ | env2 == symEnv ctx -> return (True,ctx')
-              | otherwise          -> loop ctx'
+              | otherwise          -> loop (i+1) ctx'

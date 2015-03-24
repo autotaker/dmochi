@@ -51,26 +51,26 @@ gatherP (Program defs t0) env = do
     s0 <- gatherT t0 env
     s0 `shouldBe` STup []
 
-gatherT :: Term -> Env -> SWM SortLike
+gatherT :: Term a -> Env -> SWM SortLike
 gatherT _t env = go _t where
     go _t = case _t of
-        C _ -> pure SBase
-        TF  -> pure SBase
-        V x -> pure $ env M.! x
-        T ts -> STup <$> mapM go ts
-        Fail x -> pure $ env M.! x
-        Omega x -> pure $ env M.! x
-        Lam x t -> SFun (env M.! x) <$> go t
-        Proj n d t -> do
+        C _ _ -> pure SBase
+        TF _ -> pure SBase
+        V _ x -> pure $ env M.! x
+        T _ ts -> STup <$> mapM go ts
+        Fail _ x -> pure $ env M.! x
+        Omega _ x -> pure $ env M.! x
+        Lam _ x t -> SFun (env M.! x) <$> go t
+        Proj _ n d t -> do
             st <- go t
             l <- replicateM (projD d) genFresh
             st `shouldBe` STup l
             return (l !! (projN n))
-        Let x t1 t2 -> do
+        Let _ x t1 t2 -> do
             s1 <- go t1
             s1 `shouldBe` (env M.! x)
             go t2
-        App t1 t2 -> do
+        App _ t1 t2 -> do
             ss <- go t2
             s  <- go t1
             s1  <- genFresh
@@ -83,7 +83,7 @@ gatherT _t env = go _t where
             s1 `shouldBe` s2
             return s1
             -}
-        If tp tt te -> do
+        If _ tp tt te -> do
             sp <- go tp
             st <- go tt
             se <- go te

@@ -19,7 +19,6 @@ import Control.Monad.ST
 import Data.Array.Unboxed
 import Data.Array.ST
 import Data.Function
-import Debug.Trace
 
 import Language.Dot hiding(Id)
 
@@ -124,10 +123,10 @@ cod t i = Cod i t
 type Constructor = Id -> FlowTerm
 data Context s = Context { nodeTable     :: HashTable s FlowKey FlowTerm
                          , labelTable    :: HashTable s Id FlowTerm
-                         , termTable     :: HashTable s Id (Maybe Term)
+                         , termTable     :: HashTable s Id (Maybe (Term ()))
                          , counter       :: STRef s Id }
 
-buildGraph :: M.Map Symbol (Sort,Term) -> Program -> ((Array Id (Maybe Term),Array Id [Id]),M.Map Symbol Id)
+buildGraph :: M.Map Symbol (Sort,Term ()) -> Program -> ((Array Id (Maybe (Term ())),Array Id [Id]),M.Map Symbol Id)
 buildGraph senv p = runST $ do
     ctx <- newContext
     env <- fmap M.fromList $ forM (zip (M.assocs senv) [0..]) $ \((x,(s,t)),i) -> do
@@ -142,7 +141,7 @@ buildGraph senv p = runST $ do
 newContext :: ST s (Context s)
 newContext = Context <$> HT.new <*> HT.new <*> HT.new <*> newSTRef 0
 
-getNodes :: Context s -> ST s (Array Id (Maybe Term))
+getNodes :: Context s -> ST s (Array Id (Maybe (Term ())))
 getNodes ctx = do
     n <- readSTRef $ counter ctx
     array (0,n-1) <$> HT.toList (termTable ctx)
@@ -163,15 +162,15 @@ varId :: FlowTerm -> VarId
 varId (Var _ v) = v
 varId _ = undefined
 
-gatherPrimTerm :: Context s -> M.Map Symbol (FlowTerm,Sort) -> Term -> StateT (S.Set (Id,Id,Sort)) (ST s) (FlowTerm,Sort)
+gatherPrimTerm :: Context s -> M.Map Symbol (FlowTerm,Sort) -> Term () -> StateT (S.Set (Id,Id,Sort)) (ST s) (FlowTerm,Sort)
 gatherPrimTerm ctx env = go where
-    go (V x) = pure $ env M.! x
-    go (C True) = pure $ env M.! "true"
-    go (C False) = pure $ env M.! "false"
-    go (Fail x) = pure $ env M.! x
-    go (Omega x) = pure $ env M.! x
-    go TF = pure $ env M.! "*"
-    go _t@(Lam x t) = do
+    go (V _ x) = pure $ env M.! x
+    go (C _ True) = pure $ env M.! "true"
+    go (C _ False) = pure $ env M.! "false"
+    go (Fail _ x) = pure $ env M.! x
+    go (Omega _ x) = pure $ env M.! x
+    go (TF _) = pure $ env M.! "*"
+    go _t@(Lam _ x t) = do
         let (vx,sx) = env M.! x
         (vb,sb) <- go t
         vt   <- lift $ genNode ctx (Just _t) (abst (varId vx) vb)
@@ -180,7 +179,7 @@ gatherPrimTerm ctx env = go where
         pushEdge vx vdom sx
         pushEdge vcod vb sb
         return (vt,sx :-> sb)
-    go _t@(Syntax.App t1 t2) = do
+    go _t@(Syntax.App _ t1 t2) = do
         (vf, _ :-> sort1) <- go t1
         (vt,sort2) <- go t2
         v    <- lift $ genNode ctx (Just _t) (app vf vt)
@@ -189,7 +188,7 @@ gatherPrimTerm ctx env = go where
         pushEdge vdom vt sort2
         pushEdge v vcod sort1
         return (v,sort1)
-    go _t@(If t1 t2 t3) = do
+    go _t@(If _ t1 t2 t3) = do
         (v1,_) <- go t1
         (v2,sort) <- go t2
         (v3,_) <- go t3
@@ -197,15 +196,15 @@ gatherPrimTerm ctx env = go where
         pushEdge vt v2 sort
         pushEdge vt v3 sort
         return (vt,sort)
-    go _t@(T ts) = do
+    go _t@(T _ ts) = do
         (fts,ss) <- unzip <$> mapM go ts
         vt <- lift $ genNode ctx (Just _t) (tuple fts)
         let n = ProjD $ length ts
         forM_ (zip (zip fts ss) [0..]) $ \((ft,s),i) -> do
-            ti <- lift $ genNode ctx (Just $ Syntax.Proj (ProjN i) n _t) (proj (ProjN i) n vt)
+            ti <- lift $ genNode ctx (Just $ Syntax.Proj () (ProjN i) n _t) (proj (ProjN i) n vt)
             pushEdge ti ft s
         return (vt,Sort.Tuple ss)
-    go _t@(Syntax.Let x tx t) = do
+    go _t@(Syntax.Let _ x tx t) = do
         (ftx,sx) <- go tx
         (ft,s)   <- go t
         let (fx,_) = env M.! x
@@ -213,12 +212,12 @@ gatherPrimTerm ctx env = go where
         pushEdge fx ftx sx
         pushEdge vt ft s
         return (vt,s)
-    go _t@(Syntax.Proj n d t) = do
+    go _t@(Syntax.Proj _ n d t) = do
         (t',Sort.Tuple ss) <- go t
         vt <- lift $ genNode ctx (Just _t) (proj n d t')
         return (vt,ss !! projN n)
     
-genNode :: Context s -> Maybe Term -> Constructor -> ST s FlowTerm
+genNode :: Context s -> Maybe (Term ()) -> Constructor -> ST s FlowTerm
 genNode ctx mt constructor = fmap constructor $ mfix $ \i -> do
         let v = constructor i
             k = key v
@@ -272,9 +271,9 @@ calcClosure ctx = go [] [] where
                     return (pi1,pi2,s)
                 go acc' es (l++qs)
 
-type FlowGraph = (Array Id [Id], M.Map Symbol Id, Array Id (Maybe Term))
+type FlowGraph = (Array Id [Id], M.Map Symbol Id, Array Id (Maybe (Term ())))
 
-reduce1 :: Array Id (Maybe Term) -> Array Id [Id] -> M.Map Symbol Id -> FlowGraph
+reduce1 :: Array Id (Maybe (Term ())) -> Array Id [Id] -> M.Map Symbol Id -> FlowGraph
 reduce1 tlbl g label = (g2,label',lbl') where
     bb = bounds g
     rename = runSTUArray $ do
@@ -307,7 +306,7 @@ reduce1 tlbl g label = (g2,label',lbl') where
     g1 :: Array Id [Id]
     g1 = array bb $ do (i,l) <- assocs g 
                        case tlbl ! i of
-                         Just (V _) -> return (i,l)
+                         Just (V () _) -> return (i,l)
                          Just _ -> return (i,[])
                          Nothing -> return (i,l)
     g2 = accumArray (flip (:)) [] (0,n) $ do 
@@ -321,6 +320,7 @@ reduce1 tlbl g label = (g2,label',lbl') where
     label' = M.fromList [ (x,rename ! i) | (x,i) <- M.toList label]
     lbl' = accumArray add empty (0,n) [ (j,tlbl ! i) | (i,j) <- assocs rename, j /= -1 ]
 
+add :: Maybe t -> Maybe t -> Maybe t
 add Nothing a = a
 add a Nothing = a
 add _ _ = undefined

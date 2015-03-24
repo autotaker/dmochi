@@ -1,10 +1,10 @@
 module Boolean.Test(test) where
-import System.Environment
-import Boolean.Parser.MoCHi
+--import Boolean.Parser.MoCHi
 import Boolean.Alpha
 import Boolean.Flow hiding(Context)
 import Boolean.SortCheck
 import Boolean.Type2
+--import Boolean.Type
 import Boolean.Syntax
 import Control.Monad.Except
 import qualified Data.Map as M
@@ -36,7 +36,7 @@ test path input = do
 test :: MonadIO m => FilePath -> Program -> ExceptT String m Bool
 test path input = do
     (p,syms) <- ExceptT $ return $ alphaConversion input
-    liftIO $ mapM print (definitions p)
+    liftIO $ mapM_ print (definitions p)
     --liftIO $ print p
     senv <- ExceptT $ return $ sortCheck p (map fst syms)
     liftIO $ forM_ (M.assocs senv) print
@@ -46,10 +46,11 @@ test path input = do
     let graph_path = path ++ ".dot"
     liftIO $ writeFile graph_path $ ppGraph (fmap (\t -> case t of
         Just x -> x
-        Nothing -> V "") y) x
+        Nothing -> V () "") y) x
     (b,_ctx) <- liftIO $ saturate p g
     return b
 
+{-
 main :: IO ()
 main = do
     args <- getArgs
@@ -62,3 +63,4 @@ main = do
                 Left err -> putStrLn err
                 Right r -> print r
         _ -> putStrLn "Please specify input file."
+        -}
