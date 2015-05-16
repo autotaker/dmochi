@@ -22,6 +22,7 @@ import Data.Function(on)
 import qualified Heap
 import Text.PrettyPrint
 import Text.Printf
+import Data.Time
 
 incrId :: State Id Id
 incrId = do
@@ -426,11 +427,12 @@ elem _ _ = False
 
 type M a = ReaderT Factory IO a
 data Context = Context { flowEnv :: M.Map Symbol TTypeList
-                       , symEnv  :: M.Map Symbol  VType } deriving(Eq)
+                       , symEnv  :: M.Map Symbol  VType 
+                       , flowTbl :: IOArray Id TTypeList} deriving(Eq)
 
 
-saturateFlow ::  (Array Id [Id], M.Map Symbol Id, Array Id (Maybe (Term (Id,S.Set String)))) -> M.Map Symbol VType -> M (M.Map Symbol TTypeList)
-saturateFlow (edgeTbl,symMap,leafTbl) env = do
+saturateFlow ::  (Array Id [Id], M.Map Symbol Id, Array Id (Maybe (Term (Id,S.Set String)))) -> M.Map Symbol VType -> IOArray Id TTypeList -> M (M.Map Symbol TTypeList)
+saturateFlow (edgeTbl,symMap,leafTbl) env arr = do
     let terms = [ (i,t) | (i,Just t) <- assocs leafTbl]
         fvarMap = M.fromList $ map (\(i,t) -> (i,freeVariables t \\ M.keys env)) terms
         bvarMap = M.fromList $ map (\(i,t) -> (i,boundVariables t)) terms
@@ -440,12 +442,17 @@ saturateFlow (edgeTbl,symMap,leafTbl) env = do
                  [ (t,s) | (s,ts) <- assocs edgeTbl, t <- ts ] ++
                  [ (symMap M.! x, s) | (s, Just _) <- assocs leafTbl, 
                                        x <- nub $ fvarMap M.! s ++ bvarMap M.! s ]
-    nil <- {-# SCC buildTypeList365 #-} buildTypeList lnil
+    stat <- liftIO $ (newArray bb (0,0) :: IO (IOArray Id (Int,NominalDiffTime)))
+    {-
+    nil <- buildTypeList lnil
     arr <- liftIO $ (newArray (bounds leafTbl) nil :: IO (IOArray Id TTypeList))
+    -}
     let go s | S.null s = return ()
              | otherwise = do
             let (v,vs) = S.deleteFindMin s
             ty <- liftIO $ readArray arr v
+            --liftIO $ printf "updating %s %s..\n" (show (v,fmap getValue (leafTbl ! v))) (take 50 $ show (leafTbl ! v))
+            time_st <- liftIO $ getCurrentTime
             ty' <- case leafTbl ! v of
                 Nothing -> do
                     tys <- forM (edgeTbl ! v) $ liftIO . readArray arr
@@ -466,15 +473,32 @@ saturateFlow (edgeTbl,symMap,leafTbl) env = do
                         let env' = updateEnv env (zip fvars l)
                         res <- saturateTerm ref c m env' t 
                         case res of
-                            LFail _ -> {-# SCC buildTypeList387 #-} buildTypeList lnil
+                            LFail _ -> buildTypeList lnil
                             tyl -> return tyl
                     concatTypeList ls
+            liftIO $ do
+                time_ed <- getCurrentTime
+                (c,t) <- readArray stat v
+                let c1 = c + 1
+                    t1 = t+diffUTCTime time_ed time_st
+                c1 `seq` t1 `seq` (writeArray stat v $! (c1,t1))
             if ty' === ty 
                 then go vs
                 else do
                     liftIO (writeArray arr v ty')
                     go (foldr S.insert vs (depTbl ! v))
     go $ S.fromList $ [ i | (i,Just _) <- assocs leafTbl]
+    l <- forM (assocs leafTbl) $ \(v,_) -> liftIO $ do
+        (c,t) <- readArray stat v
+        return (t,c,v)
+    let time = sum [ t | (t,_,_) <- l ]
+    let top10 = take 10 $ reverse $ sort l
+    liftIO $ do
+        printf "time %s\n" $ show time
+        printf "top 10:\n"
+        forM_ top10 $ \(t,c,v) -> 
+            printf "    %4d: %s %d\n" v (show t) c
+
     fmap M.fromList $ forM (M.assocs symMap) $ \(f,i) -> do
         v <- liftIO $ readArray arr i
         return (f,v)
@@ -592,10 +616,11 @@ saturateTerm ref _c _flowEnv _env _t = incr termCounter >> go _c _env _t where
                         foldM (\acc _t -> {-# SCC buildTypeList464 #-} buildTypeList $ lcons _t acc) t0 sorted
 
 initContext :: Program -> FlowGraph -> M Context
-initContext (Program defs _) (_,mapSym,_) = do
-    nil <- {-# SCC buildTypeList468 #-} buildTypeList lnil
+initContext (Program defs _) (_,mapSym,leafTbl) = do
+    nil <- buildTypeList lnil
     ty  <- buildFunType fnil >>= buildType . func
-    return $ Context (fmap (const nil) mapSym) (M.fromList (map (second (const ty)) defs))
+    arr <- liftIO $ (newArray (bounds leafTbl) nil :: IO (IOArray Id TTypeList))
+    return $ Context (fmap (const nil) mapSym) (M.fromList (map (second (const ty)) defs)) arr
 
 saturate :: Program -> FlowGraph -> IO (Bool,Context)
 saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flow) where
@@ -603,7 +628,9 @@ saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flo
     ds' = map (second assignId') (definitions p)
     flow' = let (a,b,c) = flow in (a,b,fmap (fmap assignId') c)
     loop i ctx = do
-        env1 <- saturateFlow flow' (symEnv ctx)
+        liftIO $ putStrLn "saturating flow...."
+        env1 <- saturateFlow flow' (symEnv ctx) (flowTbl ctx)
+        liftIO $ putStrLn "updating env..."
         env2 <- saturateSym env1 (symEnv ctx) ds'
         factory <- ask
         liftIO $ do
@@ -625,7 +652,7 @@ saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flo
             putStrLn ""
         ref <- liftIO $ newIORef M.empty
         t0 <- saturateTerm ref 1 env1 env2 t0'
-        let ctx' = Context env1 env2
+        let ctx' = Context env1 env2 (flowTbl ctx)
         case t0 of
             LFail _ -> return (False,ctx')
             _ | env2 == symEnv ctx -> return (True,ctx')

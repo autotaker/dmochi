@@ -15,7 +15,7 @@ import ML.PrettyPrint.UnTyped
 import ML.Alpha
 import qualified ML.PrettyPrint.Typed as Typed
 import qualified ML.TypeCheck as Typed
-import ML.RandomPredicate3(addRandomPredicatesDef)
+import ML.RandomPredicate4(addRandomPredicates,Param(..),defaultParam)
 import Boolean.Test 
 import Control.Monad.Except
 import Text.Parsec(ParseError)
@@ -53,6 +53,13 @@ doit = do
     args <- liftIO $ getArgs
     when (length args == 0) $ throwError NoInputSpecified
     t_input_end <- liftIO $ getCurrentTime
+
+    let param = 
+            if length args == 6 then
+                let [_,psize,pconst,padd,pcount,premove] = args in
+                Param (read psize) (read pconst) (read padd) (read pcount) (read premove)
+            else defaultParam
+    liftIO $ hPrint stderr param
     
     -- parsing
     t_parsing_begin <- liftIO $ getCurrentTime
@@ -70,7 +77,7 @@ doit = do
     liftIO $ printProgram alphaProgram
 
     -- add random predicates
-    randomProgram <- addRandomPredicatesDef alphaProgram
+    randomProgram <- addRandomPredicates param alphaProgram
     liftIO $ printProgram randomProgram
     let file_rand = path ++ ".rnd"
     liftIO $ writeFile file_rand $ render $ pprintProgram randomProgram
