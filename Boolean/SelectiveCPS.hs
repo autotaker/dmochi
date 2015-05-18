@@ -10,7 +10,9 @@ import Control.Applicative
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Id
-import Data.DList hiding(map)
+import Data.DList hiding(map,head,foldr)
+import Data.List(sort,groupBy)
+import Data.Function(on)
 
 type SLabel = String
 data SSort = SX | SBool | STuple [SSort] | SFun SSort SSort SLabel 
@@ -66,8 +68,8 @@ convert :: (MonadId m, Applicative m) => B.Program -> m Program
 convert (B.Program ds t0) = do
     env <- M.fromList <$> buildEnv ds
     ds' <- forM ds $ \(f,t) -> 
-        let sort = env M.! (B.name f) in
-        (,) (Symbol sort (B.name f)) <$> convertT env t
+        let s = env M.! (B.name f) in
+        (,) (Symbol s (B.name f)) <$> convertT env t
     t0' <- convertT env t0
     return $ Program ds' t0'
 
@@ -95,12 +97,8 @@ convertT env = \case
         label <- freshId "l"
         let s = SFun sx (getSSort t') label
         return $ Lam s (Symbol sx (B.name x)) t'
-    B.Let _ x tx t -> do
-        tx' <- convertT env tx
-        let x' = Symbol (getSSort tx') (B.name x)
-        let env' = M.insert (B.name x) (getSSort tx') env
-        t' <- convertT env' t
-        return $ Let (getSSort t') x' tx' t'
+    B.Let _ x tx t -> 
+        convertT env (B.App (B.getSort t) (B.Lam x t) tx)
     B.App _ t1 t2 -> do
         t1' <- convertT env t1
         t2' <- convertT env t2
@@ -125,8 +123,6 @@ convertT env = \case
     B.Or t1 t2 -> Or <$> convertT env t1 <*> convertT env t2
     B.Not t -> Not <$> convertT env t
 
--- (x,Left l) <=> x >= maximum l
--- (x,Right b) <=> x >= b
 type Constraint = (SLabel, LValue)
 data LValue = Cont | Maximum (S.Set SLabel)
 
@@ -165,7 +161,7 @@ gatherT = \case
         let l = (\(SFun _ _ x) -> x) s
         tell (pure (l,v))
         pure mempty
-    Let _ _ tx t -> mappend <$> gatherT tx <*> gatherT t
+    Let _ _ _ _ -> error "unexpected pattern for gatherT"
     App _ t1 t2 -> do
         let SFun s1 _ l = getSSort t1
         let s1' = getSSort t2
@@ -191,5 +187,176 @@ gatherP (Program ds t0) = toList $ execWriter doit where
 
 solve :: [Constraint] -> S.Set SLabel
 solve cs = execState doit S.empty where
-    
+    conts :: [SLabel]
+    conts = [ x | (x,Cont) <- cs ]
+    edges :: [(SLabel,SLabel)]
+    edges = do
+        (x,v) <- cs
+        case v of
+            Cont -> mzero
+            Maximum s -> do
+                y <- S.toList s
+                return (y,x)
+    graph :: M.Map SLabel [SLabel]
+    graph = M.fromList $ map (\l -> (fst $ head l, map snd l)) 
+                       $ groupBy ((==) `on` fst) 
+                       $ sort edges
+    doit = mapM_ dfs conts
+    dfs v = do
+        s <- get
+        when (S.notMember v s) $ do
+            modify (S.insert v)
+            mapM_ dfs (graph M.! v)
 
+transformV :: S.Set SLabel -> Symbol -> B.Symbol
+transformV env x = B.Symbol (transformS env $ getSSort x) (name x)
+
+transformS :: S.Set SLabel -> SSort -> B.Sort
+transformS env = \case
+    SX -> B.X 
+    SBool -> B.X B.:-> B.X B.:-> B.X
+    STuple l -> B.Tuple (map (transformS env) l)
+    SFun s1 s2 label ->
+        let s1' = transformS env s1
+            s2' = transformS env s2 in
+        if S.member label env then
+            s1' B.:-> (s2' B.:-> B.X) B.:-> B.X
+        else
+            s1' B.:-> s2'
+
+freshSym :: MonadId m => String -> B.Sort -> m B.Symbol
+freshSym _name s = freshId _name >>= \x -> return (B.Symbol s x)
+
+app :: Bool -> B.Term -> B.Term -> B.Term
+app True t k = B.f_app t k
+app False t k = B.f_app k t
+
+transformT :: (MonadId m,Applicative m) => S.Set SLabel -> Term -> m (B.Term,Bool)
+transformT env = \case
+    C b -> return (B.C b,False)
+    V x -> return (B.V (transformV env x),False)
+    T ts -> do
+        (ts',l) <- unzip <$> mapM (transformT env) ts
+        if or l then do
+            -- insert cont
+            let n = length l
+            k <- freshSym "k" (transformS env (getSSort (T ts)) B.:-> B.X)
+            xs <- forM (zip [1..n] ts) $ \(i,ti) -> 
+                let s = transformS env (getSSort ti) in
+                freshSym ("x_"++show i) s
+            let t0' = [ if b then B.V xi else ti' | (xi,ti',b) <- (zip3 xs ts' l)]
+            let t0 = B.f_app (B.V k) (B.T t0')
+            let t' = foldr (\(ti',xi,b) acc -> 
+                    if b then 
+                        B.f_app ti' (B.Lam xi acc)
+                    else
+                        acc) t0 (zip3 ts' xs l)
+            return (B.Lam k t',True)
+        else return (B.T ts',False)
+    Lam s x t -> do
+        let l = (\(SFun _ _ _l) -> _l) s
+        (t',b) <- transformT env t
+        let x' = transformV env x
+        if S.member l env then do
+            -- insert cont
+            k <- freshSym "k" (transformS env (getSSort t) B.:-> B.X)
+            return (B.Lam x' $ B.Lam k $ app b t' (B.V k),False)
+        else
+            return (B.Lam x' t',False)
+    Let _ _ _ _ -> error "unexpected pattern for transformT"
+    App s t0 t1 -> do
+        (t0',b0) <- transformT env t0
+        (t1',b1) <- transformT env t1
+        let b2 = S.member ((\(SFun _ _ _l) -> _l) $ getSSort t0) env
+        if b0 || b1 || b2 then do
+            k <- freshSym "k" (transformS env s B.:-> B.X)
+            f <- freshSym "f" (transformS env (getSSort t0))
+            x <- freshSym "f" (transformS env (getSSort t1))
+            return (B.Lam k $ 
+                    if b0 then 
+                        B.f_app t0' (B.Lam f $ 
+                            if b1 then
+                                B.f_app t1' (B.Lam x $ 
+                                    app b2 (B.V f `B.f_app` B.V x) (B.V k))
+                            else
+                                app b2 (B.f_app (B.V f) t1') (B.V k))
+                    else
+                        if b1 then
+                            B.f_app t1' (B.Lam x $ 
+                                app b2 (t0' `B.f_app` B.V x) (B.V k))
+                        else
+                            app b2 (B.f_app t0' t1') (B.V k)
+                   ,True)
+        else return (B.f_app t0' t1',False)
+    Proj s idx size t -> do
+        (t',b) <- transformT env t
+        t'' <- if b then do
+                k <- freshSym "k" (transformS env s B.:-> B.X)
+                x <- freshSym "x" (transformS env (getSSort t))
+                return $ B.Lam k $ B.f_app t' (B.Lam x $ 
+                    B.f_app (B.V k) (B.f_proj idx size (B.V x)))
+            else return $ B.f_proj idx size t'
+        return (t'',b)
+    Assume s t0 t1 -> do
+        (t0',b0) <- transformT env t0
+        (t1',b1) <- transformT env t1
+        k <- freshSym "k" (transformS env s B.:-> B.X)
+        t <- B.Lam k <$> 
+            if b0 then do
+                x <- freshSym "x" (transformS env SBool)
+                return $ B.f_app t0' (B.Lam x $ 
+                    B.f_assume (B.V x) (app b1 t1' (B.V k)))
+            else
+                return $ B.f_assume t0' (app b1 t1' (B.V k))
+        return (t,True)
+    Branch s t0 t1 -> do
+        (t0',b0) <- transformT env t0
+        (t1',b1) <- transformT env t1
+        k <- freshSym "k" (transformS env s B.:-> B.X)
+        let t = B.Lam k $ B.f_branch (app b0 t0' (B.V k)) (app b1 t1' (B.V k))
+        return (t,True)
+    Fail x -> do
+        let x' = transformV env x
+        k <- freshSym "k" (transformS env (getSSort x) B.:-> B.X)
+        return (B.Lam k (B.Fail x'),True)
+    And t0 t1 -> do
+        (t0',b0) <- transformT env t0
+        (t1',b1) <- transformT env t1
+        k <- freshSym "k" (transformS env SBool B.:-> B.X)
+        if b0 then do
+            x0 <- freshSym "x0" (transformS env SBool)
+            return (B.Lam k $ 
+                B.f_app t0' $ B.Lam x0 $
+                    B.V x0 `B.f_app` (app b1 t1' (B.V k))
+                           `B.f_app` (B.V k `B.f_app` B.C False),True)
+        else if b1 then do
+            return (B.Lam k $
+                t0' `B.f_app` (app b1 t1' (B.V k))
+                    `B.f_app` (B.V k `B.f_app` B.C False),True)
+        else
+            return (B.And t0' t1',False)
+    Or t0 t1 -> do
+        (t0',b0) <- transformT env t0
+        (t1',b1) <- transformT env t1
+        k <- freshSym "k" (transformS env SBool B.:-> B.X)
+        if b0 then do
+            x0 <- freshSym "x0" (transformS env SBool)
+            return (B.Lam k $ 
+                B.f_app t0' $ B.Lam x0 $
+                    B.V x0 `B.f_app` (B.V k `B.f_app` B.C True)
+                           `B.f_app` (app b1 t1' (B.V k)),True)
+        else if b1 then do
+            return (B.Lam k $
+                t0' `B.f_app` (B.V k `B.f_app` B.C True)
+                           `B.f_app` (app b1 t1' (B.V k)),True)
+        else
+            return (B.Or t0' t1',False)
+    Not t -> do
+        (t',b) <- transformT env t
+        if b then do
+            k <- freshSym "k" (transformS env SBool B.:-> B.X)
+            x <- freshSym "x" (transformS env SBool)
+            return (B.Lam k $
+                B.f_app t' (B.Lam x $ (B.V k) `B.f_app` (B.Not (B.V x))),True)
+        else
+            return (B.Not t',False)
