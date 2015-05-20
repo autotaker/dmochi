@@ -1,0 +1,6 @@
+let f : [Bool,Bool] -> [Bool,Bool] =
+  fun (x : [Bool,Bool]) -> (2 x.(0/2) (assume x.(1/2);not x.(0/2)));;
+let y : [Bool,Bool] = (2 (true <> false) false) in
+let z : [Bool,Bool] = f y in
+assume (y.(0/2) && z.(1/2));
+fail([])

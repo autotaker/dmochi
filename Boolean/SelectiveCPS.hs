@@ -68,13 +68,18 @@ convert :: (MonadId m, Applicative m) => B.Program -> m Program
 convert (B.Program ds t0) = do
     env <- M.fromList <$> buildEnv ds
     ds' <- forM ds $ \(f,t) -> 
-        let s = env M.! (B.name f) in
+        let s = env ! (B.name f) in
         (,) (Symbol s (B.name f)) <$> convertT env t
     t0' <- convertT env t0
     return $ Program ds' t0'
 
 buildEnv :: (MonadId m, Applicative m) => [B.Def] -> m [(String,SSort)]
 buildEnv = mapM $ \(f,_) -> (,) (B.name f) <$> convertS (B.getSort f)
+
+(!) :: M.Map String a -> String -> a
+env ! x = case M.lookup x env of
+    Just v -> v
+    Nothing -> error $ "no key :"++x
     
 convertS :: (MonadId m, Applicative m) => B.Sort -> m SSort
 convertS = \case
@@ -89,7 +94,7 @@ convertS = \case
 convertT :: (MonadId m, Applicative m) => M.Map String SSort -> B.Term -> m Term
 convertT env = \case
     B.C b -> pure $ C b
-    B.V x -> pure $ V $ Symbol (env M.! (B.name x)) (B.name x)
+    B.V x -> pure $ V $ Symbol (env ! (B.name x)) (B.name x)
     B.T ts -> T <$> mapM (convertT env) ts
     B.Lam x t -> do
         sx <- convertS $ B.getSort x 
@@ -160,6 +165,9 @@ gatherT = \case
         v <- gatherT t
         let l = (\(SFun _ _ x) -> x) s
         tell (pure (l,v))
+        case getSSort t of
+            STuple _ -> tell $ pure (l,Cont)
+            _ -> return ()
         pure mempty
     Let _ _ _ _ -> error "unexpected pattern for gatherT"
     App _ t1 t2 -> do
@@ -171,7 +179,9 @@ gatherT = \case
         return $ v1 <> v2 <> (Maximum (S.singleton l))
     Proj _ _ _ t -> gatherT t
     Assume _ t1 t2 -> Cont <$ gatherT t1 <* gatherT t2 
-    Branch _ t1 t2 -> Cont <$ gatherT t1 <* gatherT t2
+    Branch _ t1 t2 -> Cont <$ gatherT t1 
+                           <* gatherT t2 
+                           <* tell (eqSort (getSSort t1) (getSSort t2))
     And t1 t2 -> mappend <$> gatherT t1 <*> gatherT t2
     Or t1 t2 -> mappend <$> gatherT t1 <*> gatherT t2
     Not t -> gatherT t
@@ -206,7 +216,10 @@ solve cs = execState doit S.empty where
         s <- get
         when (S.notMember v s) $ do
             modify (S.insert v)
-            mapM_ dfs (graph M.! v)
+            let vs = case M.lookup v graph of
+                        Just l -> l
+                        Nothing -> []
+            mapM_ dfs vs
 
 transformV :: S.Set SLabel -> Symbol -> B.Symbol
 transformV env x = B.Symbol (transformS env $ getSSort x) (name x)
@@ -214,7 +227,7 @@ transformV env x = B.Symbol (transformS env $ getSSort x) (name x)
 transformS :: S.Set SLabel -> SSort -> B.Sort
 transformS env = \case
     SX -> B.X 
-    SBool -> B.X B.:-> B.X B.:-> B.X
+    SBool -> B.Bool
     STuple l -> B.Tuple (map (transformS env) l)
     SFun s1 s2 label ->
         let s1' = transformS env s1
@@ -231,6 +244,22 @@ app :: Bool -> B.Term -> B.Term -> B.Term
 app True t k = B.f_app t k
 app False t k = B.f_app k t
 
+f_if :: B.Term -> B.Term -> B.Term -> B.Term
+f_if tb tthen telse = 
+    B.f_branch (B.f_assume tb tthen) (B.f_assume (B.Not tb) telse)
+
+selectiveCPS :: (MonadId m,Applicative m) => B.Program -> m B.Program
+selectiveCPS p = do
+    sp@(Program ds t0) <- convert p
+    let cs = gatherP sp
+    let env = solve cs
+    ds' <- forM ds $ \(f,t) -> (,) (transformV env f).fst <$> transformT env t
+    (t0',b) <- transformT env t0
+    k <- freshSym "k" (transformS env (getSSort t0))
+    omega <- B.f_assume (B.C False) . B.Fail <$> freshSym "fail" B.X
+    let t0'' = app b t0' (B.Lam k omega)
+    return $ B.Program ds' t0''
+
 transformT :: (MonadId m,Applicative m) => S.Set SLabel -> Term -> m (B.Term,Bool)
 transformT env = \case
     C b -> return (B.C b,False)
@@ -244,13 +273,9 @@ transformT env = \case
             xs <- forM (zip [1..n] ts) $ \(i,ti) -> 
                 let s = transformS env (getSSort ti) in
                 freshSym ("x_"++show i) s
-            let t0' = [ if b then B.V xi else ti' | (xi,ti',b) <- (zip3 xs ts' l)]
-            let t0 = B.f_app (B.V k) (B.T t0')
+            let t0 = B.f_app (B.V k) $ B.T $ map B.V xs
             let t' = foldr (\(ti',xi,b) acc -> 
-                    if b then 
-                        B.f_app ti' (B.Lam xi acc)
-                    else
-                        acc) t0 (zip3 ts' xs l)
+                        app b ti' (B.Lam xi acc)) t0 (zip3 ts' xs l)
             return (B.Lam k t',True)
         else return (B.T ts',False)
     Lam s x t -> do
@@ -316,7 +341,7 @@ transformT env = \case
         let t = B.Lam k $ B.f_branch (app b0 t0' (B.V k)) (app b1 t1' (B.V k))
         return (t,True)
     Fail x -> do
-        let x' = transformV env x
+        x' <- freshSym "fail" B.X
         k <- freshSym "k" (transformS env (getSSort x) B.:-> B.X)
         return (B.Lam k (B.Fail x'),True)
     And t0 t1 -> do
@@ -327,14 +352,14 @@ transformT env = \case
             x0 <- freshSym "x0" (transformS env SBool)
             return (B.Lam k $ 
                 B.f_app t0' $ B.Lam x0 $
-                    B.V x0 `B.f_app` (app b1 t1' (B.V k))
-                           `B.f_app` (B.V k `B.f_app` B.C False),True)
+                    f_if (B.V x0) (app b1 t1' (B.V k))
+                                  (B.f_app (B.V k) (B.C False)),True)
         else if b1 then do
             return (B.Lam k $
-                t0' `B.f_app` (app b1 t1' (B.V k))
-                    `B.f_app` (B.V k `B.f_app` B.C False),True)
+                f_if t0' (app b1 t1' (B.V k))
+                         (B.f_app (B.V k) (B.C False)),True)
         else
-            return (B.And t0' t1',False)
+            return (f_if t0' t1' (B.C False),False)
     Or t0 t1 -> do
         (t0',b0) <- transformT env t0
         (t1',b1) <- transformT env t1
@@ -343,14 +368,15 @@ transformT env = \case
             x0 <- freshSym "x0" (transformS env SBool)
             return (B.Lam k $ 
                 B.f_app t0' $ B.Lam x0 $
-                    B.V x0 `B.f_app` (B.V k `B.f_app` B.C True)
-                           `B.f_app` (app b1 t1' (B.V k)),True)
+                    f_if (B.V x0) 
+                         (B.f_app (B.V k) (B.C True))
+                         (app b1 t1' (B.V k)),True)
         else if b1 then do
             return (B.Lam k $
-                t0' `B.f_app` (B.V k `B.f_app` B.C True)
-                           `B.f_app` (app b1 t1' (B.V k)),True)
+                f_if t0' (B.f_app (B.V k) (B.C True))
+                         (app b1 t1' (B.V k)),True)
         else
-            return (B.Or t0' t1',False)
+            return (f_if t0' t1' (B.C False),False)
     Not t -> do
         (t',b) <- transformT env t
         if b then do
