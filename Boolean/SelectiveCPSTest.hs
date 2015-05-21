@@ -6,7 +6,7 @@ import Text.PrettyPrint(render)
 import Boolean.Syntax.Typed(tCheck)
 --import Boolean.PrettyPrint.HORS(pprintHORS)
 import Control.Monad.Except
-import Boolean.SelectiveCPS(selectiveCPS)
+import qualified Boolean.SelectiveCPS as CPS
 import Id
 
 main :: IO ()
@@ -19,9 +19,9 @@ main = do
                 withExceptT show $ ExceptT $ return $ runExcept (tCheck p)
                 liftIO $ putStrLn $ render $ pprintProgram p
                 liftIO $ printf "--Selective CPS--\n"
-                cps <- selectiveCPS p
-                liftIO $ putStrLn $ render $ pprintProgram $ cps
-                withExceptT show $ ExceptT $ return $ runExcept (tCheck cps)
+                cps <- CPS.selectiveCPS p
+                liftIO $ print cps
+                withExceptT show $ CPS.tCheck cps
             case res of
                 Left err -> putStrLn err
                 Right r -> print r

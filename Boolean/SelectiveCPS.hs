@@ -7,12 +7,14 @@ import Control.Monad
 import Control.Monad.Writer
 import Control.Monad.State
 import Control.Applicative
+import Control.Monad.Except
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Id
 import Data.DList hiding(map,head,foldr)
 import Data.List(sort,groupBy)
 import Data.Function(on)
+import Data.Either
 
 type SLabel = String
 data SSort = SX | SBool | STuple [SSort] | SFun SSort SSort SLabel 
@@ -30,7 +32,6 @@ data Term = C Bool
           | V Symbol
           | T [Term]
           | Lam SSort Symbol Term
-          | Let SSort Symbol Term Term
           | App SSort Term Term
           | Proj SSort Index Size  Term
           | Assume SSort Term Term
@@ -39,6 +40,27 @@ data Term = C Bool
           | Or  Term Term
           | Not Term
           | Fail Symbol deriving(Ord,Eq,Show)
+
+-- CPSTerm should has sort s ::= X | t -> s 
+--                         t ::= s | [t_1..t_k]
+data CPSTerm = CPSTrue                       -- X -> X -> X
+             | CPSFalse                      -- X -> X -> X
+             | CPSOmega                      -- X
+             | CPSFail                       -- X
+             | CPSBranch CPSTerm CPSTerm     -- X -> X -> X
+             | CPSVar B.Symbol               
+             | CPSLam B.Symbol CPSTerm      
+             | CPSProj Index Size CPSValue  
+             | CPSApp CPSTerm CPSValue      
+             | CPSIf CPSTerm CPSTerm CPSTerm deriving(Show)-- (X -> X -> X) -> X -> X -> X
+                                              -- -> (X-> X -> X) -> X -> X -> X
+                                              
+
+data CPSValue = CPSTuple [CPSValue]
+              | CPSPrim  CPSTerm
+              | CPSAnd CPSValue CPSValue
+              | CPSOr  CPSValue CPSValue
+              | CPSNot CPSValue deriving(Show)
 
 data Program = Program { definitions :: [Def]
                        , mainTerm :: Term }
@@ -54,7 +76,6 @@ instance HasSSort Term where
     getSSort (V x) = getSSort x
     getSSort (T ts) = STuple $ map getSSort ts
     getSSort (Lam s _ _) = s
-    getSSort (Let s _ _ _) = s
     getSSort (App s _ _)   = s
     getSSort (Proj s _ _ _) = s
     getSSort (Assume s _ _) = s
@@ -169,7 +190,6 @@ gatherT = \case
             STuple _ -> tell $ pure (l,Cont)
             _ -> return ()
         pure mempty
-    Let _ _ _ _ -> error "unexpected pattern for gatherT"
     App _ t1 t2 -> do
         let SFun s1 _ l = getSSort t1
         let s1' = getSSort t2
@@ -240,149 +260,211 @@ transformS env = \case
 freshSym :: MonadId m => String -> B.Sort -> m B.Symbol
 freshSym _name s = freshId _name >>= \x -> return (B.Symbol s x)
 
-app :: Bool -> B.Term -> B.Term -> B.Term
-app True t k = B.f_app t k
-app False t k = B.f_app k t
+app :: Either CPSTerm CPSValue -> CPSTerm -> CPSTerm
+app (Left t) k = CPSApp t (CPSPrim k)
+app (Right v) k = CPSApp k v
 
 f_if :: B.Term -> B.Term -> B.Term -> B.Term
 f_if tb tthen telse = 
     B.f_branch (B.f_assume tb tthen) (B.f_assume (B.Not tb) telse)
 
-selectiveCPS :: (MonadId m,Applicative m) => B.Program -> m B.Program
+selectiveCPS :: (MonadId m,Applicative m) => B.Program -> m ([(B.Symbol,CPSTerm)],CPSTerm)
 selectiveCPS p = do
     sp@(Program ds t0) <- convert p
     let cs = gatherP sp
     let env = solve cs
-    ds' <- forM ds $ \(f,t) -> (,) (transformV env f).fst <$> transformT env t
-    (t0',b) <- transformT env t0
+    ds' <- forM ds $ \(f,t) -> 
+        (,) (transformV env f).fromPrim . fromRight <$> transformT env t
+    t0' <- transformT env t0
     k <- freshSym "k" (transformS env (getSSort t0))
-    omega <- B.f_assume (B.C False) . B.Fail <$> freshSym "fail" B.X
-    let t0'' = app b t0' (B.Lam k omega)
-    return $ B.Program ds' t0''
+    let t0'' = app t0' (CPSLam k CPSOmega)
+    return $ (ds',t0'')
 
-transformT :: (MonadId m,Applicative m) => S.Set SLabel -> Term -> m (B.Term,Bool)
+fromRight :: Either a b -> b
+fromRight (Right x) = x
+fromRight _ = error "fromRight: pattern match failure"
+
+fromLeft :: Either a b -> a
+fromLeft (Left x) = x
+fromLeft _ = error "fromLeft: pattern match failure"
+
+fromPrim :: CPSValue -> CPSTerm
+fromPrim (CPSPrim x) = x
+fromPrim _ = error "fromPrim: pattern match failure"
+
+transformT :: (MonadId m,Applicative m) => 
+              S.Set SLabel -> Term -> m (Either CPSTerm CPSValue)
 transformT env = \case
-    C b -> return (B.C b,False)
-    V x -> return (B.V (transformV env x),False)
+    C b -> return $ Right $ CPSPrim (if b then CPSTrue else CPSFalse)
+    V x -> return $ Right $ CPSPrim (CPSVar (transformV env x))
     T ts -> do
-        (ts',l) <- unzip <$> mapM (transformT env) ts
-        if or l then do
+        ts' <- mapM (transformT env) ts
+        if any isLeft ts' then do
             -- insert cont
-            let n = length l
+            let n = length ts'
             k <- freshSym "k" (transformS env (getSSort (T ts)) B.:-> B.X)
             xs <- forM (zip [1..n] ts) $ \(i,ti) -> 
                 let s = transformS env (getSSort ti) in
                 freshSym ("x_"++show i) s
-            let t0 = B.f_app (B.V k) $ B.T $ map B.V xs
-            let t' = foldr (\(ti',xi,b) acc -> 
-                        app b ti' (B.Lam xi acc)) t0 (zip3 ts' xs l)
-            return (B.Lam k t',True)
-        else return (B.T ts',False)
+            let t0 = CPSApp (CPSVar k) $ CPSTuple $ map (CPSPrim . CPSVar) xs
+            let t' = foldr (\(ti',xi) acc -> 
+                        app ti' (CPSLam xi acc)) t0 (zip ts' xs)
+            return $ Left $ CPSLam k t'
+        else return $ Right $ CPSTuple $ rights ts'
     Lam s x t -> do
         let l = (\(SFun _ _ _l) -> _l) s
-        (t',b) <- transformT env t
+        t' <- transformT env t
         let x' = transformV env x
         if S.member l env then do
             -- insert cont
             k <- freshSym "k" (transformS env (getSSort t) B.:-> B.X)
-            return (B.Lam x' $ B.Lam k $ app b t' (B.V k),False)
+            return $ Right $ CPSPrim $ CPSLam x' $ CPSLam k $ app t' (CPSVar k)
         else
-            return (B.Lam x' t',False)
-    Let _ _ _ _ -> error "unexpected pattern for transformT"
+            return $ Right $ CPSPrim $ CPSLam x' (fromPrim $ fromRight t')
     App s t0 t1 -> do
-        (t0',b0) <- transformT env t0
-        (t1',b1) <- transformT env t1
-        let b2 = S.member ((\(SFun _ _ _l) -> _l) $ getSSort t0) env
+        t0' <- transformT env t0
+        t1' <- transformT env t1
+        let b0 = isLeft t0'
+            b1 = isLeft t1'
+            b2 = S.member ((\(SFun _ _ _l) -> _l) $ getSSort t0) env
         if b0 || b1 || b2 then do
             k <- freshSym "k" (transformS env s B.:-> B.X)
             f <- freshSym "f" (transformS env (getSSort t0))
-            x <- freshSym "f" (transformS env (getSSort t1))
-            return (B.Lam k $ 
-                    if b0 then 
-                        B.f_app t0' (B.Lam f $ 
-                            if b1 then
-                                B.f_app t1' (B.Lam x $ 
-                                    app b2 (B.V f `B.f_app` B.V x) (B.V k))
+            x <- freshSym "x" (transformS env (getSSort t1))
+            return $ Left (CPSLam k $ 
+                    app t0' (CPSLam f $
+                        app t1' (CPSLam x $
+                            if b2 then
+                                CPSVar f `CPSApp` CPSPrim (CPSVar x)
+                                         `CPSApp` CPSPrim (CPSVar k)
                             else
-                                app b2 (B.f_app (B.V f) t1') (B.V k))
-                    else
-                        if b1 then
-                            B.f_app t1' (B.Lam x $ 
-                                app b2 (t0' `B.f_app` B.V x) (B.V k))
-                        else
-                            app b2 (B.f_app t0' t1') (B.V k)
-                   ,True)
-        else return (B.f_app t0' t1',False)
+                                CPSVar k `CPSApp` 
+                                CPSPrim (CPSVar f `CPSApp` (CPSPrim (CPSVar x)))
+                            )))
+        else do
+            let v0 = fromPrim $ fromRight t0'
+                v1 = fromRight t1'
+            return $ Right $ CPSPrim (CPSApp v0 v1)
     Proj s idx size t -> do
-        (t',b) <- transformT env t
-        t'' <- if b then do
-                k <- freshSym "k" (transformS env s B.:-> B.X)
-                x <- freshSym "x" (transformS env (getSSort t))
-                return $ B.Lam k $ B.f_app t' (B.Lam x $ 
-                    B.f_app (B.V k) (B.f_proj idx size (B.V x)))
-            else return $ B.f_proj idx size t'
-        return (t'',b)
+        t' <- transformT env t
+        if isLeft t' then do
+            k <- freshSym "k" (transformS env s B.:-> B.X)
+            x <- freshSym "x" (transformS env (getSSort t))
+            return $ Left $ CPSLam k $ 
+                app t' (CPSLam x $ 
+                    CPSApp (CPSVar k) (CPSPrim $ CPSProj idx size (CPSPrim $ CPSVar x)))
+        else 
+            return $ Right $ CPSPrim $ CPSProj idx size $ fromRight t'
     Assume s t0 t1 -> do
-        (t0',b0) <- transformT env t0
-        (t1',b1) <- transformT env t1
+        t0' <- transformT env t0
+        t1' <- transformT env t1
         k <- freshSym "k" (transformS env s B.:-> B.X)
-        t <- B.Lam k <$> 
-            if b0 then do
-                x <- freshSym "x" (transformS env SBool)
-                return $ B.f_app t0' (B.Lam x $ 
-                    B.f_assume (B.V x) (app b1 t1' (B.V k)))
-            else
-                return $ B.f_assume t0' (app b1 t1' (B.V k))
-        return (t,True)
+        x <- freshSym "x" (transformS env SBool)
+        return $ Left $ CPSLam k $
+            app t0' (CPSLam x $
+                CPSIf (CPSVar x) (app t1' (CPSVar k)) CPSOmega)
     Branch s t0 t1 -> do
-        (t0',b0) <- transformT env t0
-        (t1',b1) <- transformT env t1
+        t0' <- transformT env t0
+        t1' <- transformT env t1
         k <- freshSym "k" (transformS env s B.:-> B.X)
-        let t = B.Lam k $ B.f_branch (app b0 t0' (B.V k)) (app b1 t1' (B.V k))
-        return (t,True)
+        return $ Left $ CPSLam k $
+            CPSBranch (app t0' (CPSVar k)) (app t1' (CPSVar k))
     Fail x -> do
-        x' <- freshSym "fail" B.X
         k <- freshSym "k" (transformS env (getSSort x) B.:-> B.X)
-        return (B.Lam k (B.Fail x'),True)
+        return $ Left $ CPSLam k CPSFail
     And t0 t1 -> do
-        (t0',b0) <- transformT env t0
-        (t1',b1) <- transformT env t1
+        t0' <- transformT env t0
+        t1' <- transformT env t1
         k <- freshSym "k" (transformS env SBool B.:-> B.X)
-        if b0 then do
+        if isLeft t0' || isLeft t1' then do
             x0 <- freshSym "x0" (transformS env SBool)
-            return (B.Lam k $ 
-                B.f_app t0' $ B.Lam x0 $
-                    f_if (B.V x0) (app b1 t1' (B.V k))
-                                  (B.f_app (B.V k) (B.C False)),True)
-        else if b1 then do
-            return (B.Lam k $
-                f_if t0' (app b1 t1' (B.V k))
-                         (B.f_app (B.V k) (B.C False)),True)
-        else
-            return (f_if t0' t1' (B.C False),False)
+            x1 <- freshSym "x1" (transformS env SBool)
+            return $ Left $ CPSLam k $ 
+                app t0' $ CPSLam x0 $
+                    app t1' $ CPSLam x1 $
+                        CPSApp (CPSVar k) (CPSAnd (CPSPrim $ CPSVar x0) 
+                                                  (CPSPrim $ CPSVar x1))
+        else 
+            return $ Right $ CPSAnd (fromRight t0') (fromRight t1')
     Or t0 t1 -> do
-        (t0',b0) <- transformT env t0
-        (t1',b1) <- transformT env t1
+        t0' <- transformT env t0
+        t1' <- transformT env t1
         k <- freshSym "k" (transformS env SBool B.:-> B.X)
-        if b0 then do
+        if isLeft t0' || isLeft t1' then do
             x0 <- freshSym "x0" (transformS env SBool)
-            return (B.Lam k $ 
-                B.f_app t0' $ B.Lam x0 $
-                    f_if (B.V x0) 
-                         (B.f_app (B.V k) (B.C True))
-                         (app b1 t1' (B.V k)),True)
-        else if b1 then do
-            return (B.Lam k $
-                f_if t0' (B.f_app (B.V k) (B.C True))
-                         (app b1 t1' (B.V k)),True)
-        else
-            return (f_if t0' t1' (B.C False),False)
+            x1 <- freshSym "x1" (transformS env SBool)
+            return $ Left $ CPSLam k $ 
+                app t0' $ CPSLam x0 $
+                    app t1' $ CPSLam x1 $
+                        CPSApp (CPSVar k) (CPSOr  (CPSPrim $ CPSVar x0) 
+                                                  (CPSPrim $ CPSVar x1))
+        else 
+            return $ Right $ CPSOr (fromRight t0') (fromRight t1')
     Not t -> do
-        (t',b) <- transformT env t
-        if b then do
+        t' <- transformT env t
+        if isLeft t' then do
             k <- freshSym "k" (transformS env SBool B.:-> B.X)
             x <- freshSym "x" (transformS env SBool)
-            return (B.Lam k $
-                B.f_app t' (B.Lam x $ (B.V k) `B.f_app` (B.Not (B.V x))),True)
+            return $ Left $ (CPSLam k $ 
+                app t' (CPSLam x $
+                    CPSApp (CPSVar k) (CPSNot (CPSPrim $ CPSVar x))))
         else
-            return (B.Not t',False)
+            return $ Right $ CPSNot $ fromRight t'
+
+tCheck :: (Monad m,Applicative m) => 
+          ([(B.Symbol,CPSTerm)],CPSTerm) -> ExceptT (B.Sort,B.Sort,String) m ()
+tCheck (ds,t0) = doit where
+    check str s1 s2 = when (s1 /= s2) $ throwError (s1,s2,str)
+    doit = do
+        forM_ ds $ \(x,t) -> do
+            check "let rec" (B.getSort x) =<< go t
+        check "main" B.X =<< go t0
+    go = \case
+        CPSTrue -> return B.Bool
+        CPSFalse -> return B.Bool
+        CPSVar x -> return $ B.getSort x
+        CPSFail -> return B.X
+        CPSOmega -> return B.X
+        CPSBranch t1 t2 -> do
+            check "branch fst" B.X =<< go t1
+            check "branch snd" B.X =<< go t2
+            return B.X
+        CPSLam x v -> (B.:->) (B.getSort x) <$> go v
+        CPSProj idx size t -> do
+            s <- goV t
+            ss <- case s of B.Tuple xs -> return xs
+                            _ -> throwError (s,s,"tuple expected")
+            when (length ss /= size) $ throwError (s,s,"tuple length mismatch")
+            return (ss !! idx)
+        CPSApp t1 t2 -> do
+            s1 <- go t1
+            s2 <- goV t2
+            case s1 of
+                s2' B.:-> s3 -> check "app arg" s2 s2' >> return s3
+                _ -> throwError (s1,s1,"app fun")
+        CPSIf t1 t2 t3 -> do
+            check "if pred" B.Bool =<< go t1
+            check "if then" B.X =<< go t2
+            check "if else" B.X =<< go t3
+            return B.X
+    goV = \case
+       CPSPrim t -> go t 
+       CPSTuple ts -> B.Tuple <$> mapM goV ts
+       CPSAnd t1 t2 -> do
+           check "opAnd fst" B.Bool =<< goV t1
+           check "opAnd snd" B.Bool =<< goV t2
+           return B.Bool
+       CPSOr t1 t2 -> do
+           check "opOr fst" B.Bool =<< goV t1
+           check "opOr snd" B.Bool =<< goV t2
+           return B.Bool
+       CPSNot t1 -> do
+            check "opNot arg" B.Bool =<< goV t1
+            return B.Bool
+
+
+
+
+        
+
+
