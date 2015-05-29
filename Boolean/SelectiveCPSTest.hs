@@ -5,7 +5,7 @@ import Boolean.PrettyPrint.Typed
 import Text.PrettyPrint(render)
 import Boolean.Syntax.Typed(tCheck)
 import Boolean.HORS2
-import Boolean.PrettyPrint.HORS(pprintHORS)
+import Boolean.PrettyPrint.HORS(pprintHORS,SyntaxParam(..))
 import qualified Boolean.PrettyPrint.SelectiveCPS as CPS
 import Control.Monad.Except
 import qualified Boolean.SelectiveCPS as CPS
@@ -21,15 +21,14 @@ main = do
                 withExceptT show $ ExceptT $ return $ runExcept (tCheck p)
                 liftIO $ putStrLn $ render $ pprintProgram p
                 liftIO $ printf "--Selective CPS--\n"
+--                cps1 <- CPS.selectiveCPS p 
+--                liftIO $ putStrLn $ render $ CPS.pprintProgram cps1
+--                cps2 <- CPS.elimTupleP cps1
+--                withExceptT show $ CPS.tCheck cps2
                 hors <- toHORS p
-                cps1 <- CPS.selectiveCPS p 
-                cps2 <- CPS.elimTupleP cps1
-                liftIO $ putStrLn $ render $ pprintHORS hors
-                liftIO $ writeFile (path++".hrs") $ (++"\n") $ render $ pprintHORS hors
-                liftIO $ putStrLn $ render $ CPS.pprintProgram cps1
-                liftIO $ putStrLn ""
-                liftIO $ putStrLn $ render $ CPS.pprintProgram cps2
-                withExceptT show $ CPS.tCheck cps2
+                liftIO $ putStrLn $ render $ pprintHORS Horsat hors
+                liftIO $ writeFile (path++".horsat.hrs") $ (++"\n") $ render $ pprintHORS Horsat hors
+                liftIO $ writeFile (path++".preface.hrs") $ (++"\n") $ render $ pprintHORS Preface hors
             case res of
                 Left err -> putStrLn err
                 Right r -> print r

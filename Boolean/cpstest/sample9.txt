@@ -1,0 +1,3 @@
+let f : [[Bool, Bool]] -> Bool =
+    fun (x : [[Bool, Bool]]) -> x.(0/1).(1/2);;
+fail([])

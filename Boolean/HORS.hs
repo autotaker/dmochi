@@ -9,8 +9,17 @@ import qualified Data.Map as M
 import Data.Char
 import Id
 
+type AState = String
+type Terminal = String
+
+type ATARule = AState -> Terminal -> [[(Int,AState)]]
+type TTARule = AState -> Terminal-> Maybe [AState]
+data Automaton = Automaton { terminals :: [(Terminal,Int)] 
+                           , states :: [AState] 
+                           , transitions :: Either TTARule ATARule }
+
 data HORS = HORS { rules     :: [Rule]
-                 , terminals :: [(String,[(String,[String])])]
+                 , automaton :: Automaton
                  , startSym  :: String }
 
 type Rule = (String,[String],ATerm)
@@ -22,15 +31,16 @@ type M m a = StateT [Rule] m a
 toHORS :: (MonadId m,Applicative m) => Program -> m HORS
 toHORS p = do
     (ds,t0) <- cps p >>= elimTupleP
-    let l = ["br","end","fail","true","false"]
-    let trs = [ [("q0",["q0","q0"]),("q1",["q1","q1"])] -- br
-              , [("q0",[]),("q1",[])]                   -- end
-              , [("q1",[])]                             -- fail
-              , [("q0",["q0","q1"]),("q1",["q1","q1"])] -- true
-              , [("q0",["q1","q0"]),("q1",["q1","q1"])] -- false
-              ]
-    ts <- mapM freshId l
-    let tenv = M.fromList $ zipWith (\x y -> (x,Var y)) l ts
+    let ranks = [("br",2),("end",0),("fail",0),("btrue",2),("bfalse",2)]
+    let l = map fst ranks
+    let qs = ["q0","q1"]
+    let trs q "br"  = Just [q,q]
+        trs _ "end" = Just []
+        trs "q1" "fail" = Just []
+        trs q "btrue" = Just [q,"q1"]
+        trs q "bfalse" = Just ["q1",q]
+        trs _ _ = Nothing
+    let tenv = M.fromList $ map (\x -> (x,Var x)) l
     (sym,rs) <- flip runStateT [] $ do
         forM_ ds $ \(f,t) -> do
             let (xs,tb) = decompose t
@@ -41,7 +51,7 @@ toHORS p = do
         sym <- freshId "Main"
         registerRule sym [] t0'
         return sym
-    return $ HORS rs (zip ts trs) sym
+    return $ HORS rs (Automaton ranks qs (Left trs)) sym
 
 capitalize :: String -> String
 capitalize (x:xs) = toUpper x : xs
@@ -63,8 +73,8 @@ lambdaLifting tenv xs _t = case _t of
         t'' <- lambdaLifting tenv (S.fromList $ ns ++ ys) t'
         registerRule f (ns ++ ys) t''
         return $ foldl (:@) (Var f) $ map Var ns
-    STrue -> return $ tenv M.! "true"
-    SFalse -> return $ tenv M.! "false"
+    STrue -> return $ tenv M.! "btrue"
+    SFalse -> return $ tenv M.! "bfalse"
     SBranch -> return $ tenv M.! "br"
     SFail -> return $ tenv M.! "fail"
     SOmega -> return $ tenv M.! "end"

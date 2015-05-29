@@ -3,7 +3,7 @@ import Text.Printf
 import Boolean.Parser.Typed
 import Boolean.PrettyPrint.Typed
 import Text.PrettyPrint(render)
-import Boolean.PrettyPrint.HORS(pprintHORS)
+import Boolean.PrettyPrint.HORS(pprintHORS,SyntaxParam(..))
 import Control.Monad.Except
 import qualified Boolean.HORS   as B
 import Id
@@ -19,7 +19,7 @@ main = do
                 liftIO $ printf "--CPS--\n"
                 hors <- B.toHORS p
                 let file_hors = path ++ ".hrs"
-                liftIO $ writeFile file_hors $ (++"\n") $ render $ pprintHORS hors
+                liftIO $ writeFile file_hors $ (++"\n") $ render $ pprintHORS Horsat hors
             case res of
                 Left err -> putStrLn err
                 Right r -> print r
