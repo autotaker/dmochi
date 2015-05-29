@@ -1,0 +1,3 @@
+let g : Bool -> Bool -> Bool = 
+  fun (x : Bool) -> fun (y : Bool) -> x || y && not y in
+assume (g true true);fail([])
