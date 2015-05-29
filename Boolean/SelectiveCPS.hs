@@ -111,6 +111,7 @@ instance HasSSort Term where
     getSSort (Not _ _)   = SBool
     getSSort (Fail s) = s
 
+-- insert labels
 convert :: (MonadId m, Applicative m) => B.Program -> m Program
 convert (B.Program ds t0) = do
     env <- M.fromList <$> buildEnv ds
@@ -176,6 +177,8 @@ convertT env = \case
     B.Or t1 t2 -> Or <$> freshId "l" <*> convertT env t1 <*> convertT env t2
     B.Not t -> Not <$> freshId "l" <*> convertT env t
 
+
+-- solve constraints
 type Constraint = (SLabel, LValue)
 data LValue = Cont | Maximum (S.Set SLabel)
 
@@ -294,6 +297,7 @@ solve cs = execState doit S.empty where
                         Nothing -> []
             mapM_ dfs vs
 
+-- cps transformation follows from the solution to the constraints.
 transformV :: S.Set SLabel -> Symbol -> B.Symbol
 transformV env x = B.Symbol (transformS env $ getSSort x) (name x)
 
@@ -419,6 +423,46 @@ selectiveCPS p = do
     t0' <- cps env t0 (lam k CPSOmega)
     return $ (ds',t0')
 
+
+-- 
+--
+-- tuple elimination
+-- resulting terms are consistent to the following syntax
+--  sort s := o | bool | s1 -> s2
+--  term
+--  t_o := t1_(s -> o) t2_s
+--      | omega | fail
+--      | if t_bool t1_o t2_o
+--      | branch t1_o t2_o
+--      | x_o
+--  t_bool := true | false
+--         |  x_bool 
+--         |  t1_(s -> bool) t2_s
+--         |  t_bool && t_bool
+--         |  t_bool || t_bool
+--         |  not t_bool
+--  t_(s1 -> s2) := fun (x:s1) -> t_s2
+--               | t1_(s -> s1 -> s2) t2_s
+--  program
+--   p := let rec { fi_s = t_(s1 -> ... -> sk -> o)  | i <- [1..l] } in t_o
+--
+--
+--
+data Tree a = Node [Tree a] | Leaf a deriving(Show)
+
+instance Functor Tree where
+    fmap f (Leaf a) = Leaf (f a)
+    fmap f (Node ts) = Node (map (fmap f) ts)
+
+iterTree :: (Monad m,Functor m) => Tree a -> (a -> m b) -> m (Tree b)
+iterTree _t f = go _t where
+    go (Node ts) = Node <$> mapM go ts
+    go (Leaf x) = Leaf <$> f x
+
+flatten :: Tree a -> [a]
+flatten (Node ts) = concatMap flatten ts
+flatten (Leaf x) = return x
+
 elimTupleSort :: B.Sort -> B.Sort
 elimTupleSort (t1 B.:-> t2) = foldr (B.:->) (elimTupleSort t2) $ flatten (currySort t1)
 elimTupleSort B.X = B.X
@@ -462,23 +506,6 @@ elimTuple env (CPSProj _ idx _ t) = do
     return v
 elimTuple _ (CPSTuple _) = error "unexpected tuple constructor for elimTuple"
 
-data Tree a = Node [Tree a] | Leaf a deriving(Show)
-
-instance Functor Tree where
-    fmap f (Leaf a) = Leaf (f a)
-    fmap f (Node ts) = Node (map (fmap f) ts)
-
-iterTree :: (Monad m,Functor m) => Tree a -> (a -> m b) -> m (Tree b)
-iterTree _t f = go _t where
-    go (Node ts) = Node <$> mapM go ts
-    go (Leaf x) = Leaf <$> f x
-
-
-
-flatten :: Tree a -> [a]
-flatten (Node ts) = concatMap flatten ts
-flatten (Leaf x) = return x
-
 elimTupleT :: (MonadId m, Applicative m) => M.Map B.Symbol (Tree CPSTerm) -> CPSTerm -> m (Tree CPSTerm)
 elimTupleT env (CPSProj _ idx _ t) = (\(Node ts) -> ts !! idx) <$> elimTupleT env t
 elimTupleT env (CPSTuple ts) = Node <$> mapM (elimTupleT env) ts
@@ -494,6 +521,7 @@ elimTupleP (ds,t0) = do
         return (y,t')
     t0' <- elimTuple env t0
     return (ds',t0')
+
 
 tCheck :: (Monad m,Applicative m) => 
           ([(B.Symbol,CPSTerm)],CPSTerm) -> ExceptT (B.Sort,B.Sort,String) m ()
@@ -536,255 +564,120 @@ tCheck (ds,t0) = doit where
         CPSNot t1 -> do
              check "opNot arg" B.Bool =<< go t1
              return B.Bool
-{-
-app :: Either CPSTerm CPSArg -> CPSCont -> CPSTerm
-app (Left t) k = CPSAppCont t k
-app (Right v) k = CPSReturn k v
 
-{-
-f_if :: B.Term -> B.Term -> B.Term -> B.Term
-f_if tb tthen telse = 
-    B.f_branch (B.f_assume tb tthen) (B.f_assume (B.Not tb) telse)
-    -}
-fromRight :: Either a b -> b
-fromRight (Right x) = x
-fromRight _ = error "fromRight: pattern match failure"
 
-fromLeft :: Either a b -> a
-fromLeft (Left x) = x
-fromLeft _ = error "fromLeft: pattern match failure"
+-- Boolean elimination
+-- resulting terms are consistent to the following syntax
+--  sort s := o | (bool == o -> o -> o) | s1 -> s2
+--  term
+--  t_o := t1_(s -> o) t2_s
+--      | omega | fail
+--      | if t_bool t1_o t2_o
+--      | branch t1_o t2_o
+--      | x_o
+--  t_bool := true | false
+--         |  x_bool 
+--         |  t1_(s -> bool) t2_s
+--  t_(s1 -> s2) := fun (x:s1) -> t_s2
+--               | t1_(s -> s1 -> s2) t2_s
+--  program
+--   p := let rec { fi_s = t_(s1 -> ... -> sk -> o)  | i <- [1..l] } in t_o
+--  
+elimBoolSort :: B.Sort -> B.Sort
+elimBoolSort (t1 B.:-> t2) = elimBoolSort t1 B.:-> elimBoolSort t2
+elimBoolSort B.Bool = B.X B.:-> B.X B.:-> B.X
+elimBoolSort B.X = B.X
+elimBoolSort x = error $ "elimBoolSort" ++ show x
 
-fromLeaf :: Tree a -> a
-fromLeaf (Leaf x) = x
-fromLeaf _ = error "fromLeaf: pattern match failure"
 
-var :: B.Symbol -> CPSAtom
-var = CPSVar []
+elimBoolEnv :: (MonadId m, Applicative m) => m [(String,(B.Symbol,CPSTerm))]
+elimBoolEnv = do
+    let tbool = elimBoolSort B.Bool
+        tbase = B.X
+    c_true <- freshSym "true" tbool
+    t_true <- do
+        x <- freshSym "x" B.X
+        y <- freshSym "y" B.X
+        return $ CPSLam x $ CPSLam y $ CPSVar x
 
-transformT :: (MonadId m,Applicative m) => 
-              S.Set SLabel -> Term -> m (Either (CPSCont -> CPSTerm) CPSArg)
-transformT env = \case
-    C b -> return $ Right $ Leaf $ if b then CPSTrue else CPSFalse
-    V x -> return $ Right $ Leaf $ var (transformV env x)
-    T ts -> do
-        ts' <- mapM (transformT env) ts
-        if any isLeft ts' then do
-            -- insert cont
-            let n = length ts'
-            k <- freshSym "k" (transformS env (getSSort (T ts)) B.:-> B.X)
-            xs <- forM (zip [1..n] ts) $ \(i,ti) -> 
-                let s = transformS env (getSSort ti) in
-                freshSym ("x_"++show i) s
-            let t' = foldr (\(ti',xi) acc -> 
-                        app ti' (CPSLam xi acc)) t0 (zip ts' xs)
-            return $ Left $ \k ->
-                let t0 = CPSReturn k $ Node $ map (Leaf . var) xs in
-                let t' = foldr (\(ti',xi) acc -> 
-                            app ti' (CPSLam xi acc)) t0 (zip ts' xs)
-                CPSAtom $ CPSLam k t'
-        else return $ Right $ Node $ rights ts'
-    Lam s x t -> do
-        let l = (\(SFun _ _ _l) -> _l) s
-        t' <- transformT env t
-        let x' = transformV env x
-        if S.member l env then do
-            -- insert cont
-            k <- freshSym "k" (transformS env (getSSort t) B.:-> B.X)
-            return $ Right $ Leaf $ CPSLam x' $ CPSAtom $ CPSLam k $ app t' (var k)
-        else
-            return $ Right $ Leaf $ CPSLam x' $ CPSAtom $ fromLeaf $ fromRight t'
-    App s t0 t1 -> do
-        t0' <- transformT env t0
-        t1' <- transformT env t1
-        let b0 = isLeft t0'
-            b1 = isLeft t1'
-            b2 = S.member ((\(SFun _ _ _l) -> _l) $ getSSort t0) env
-        if b0 || b1 || b2 then do
-            k <- freshSym "k" (transformS env s B.:-> B.X)
-            f <- freshSym "f" (transformS env (getSSort t0))
-            x <- freshSym "x" (transformS env (getSSort t1))
-            return $ Left (CPSLam k $ 
-                    app t0' (CPSLam f $
-                        app t1' (CPSLam x $
-                            if b2 then
-                                CPSAtom (var f) `CPSApp` Leaf (var x) `CPSApp` Leaf (var k)
-                            else
-                                CPSAtom (var k) `CPSApp` 
-                                Leaf (CPSAtom (var f) `CPSApp` (Leaf (var x)))
-                            )))
-        else do
-            let v0 = fromLeaf $ fromRight t0'
-                v1 = fromRight t1'
-            return $ Right $ Leaf $ CPSApp (CPSAtom v0) v1
-        {-
-    Proj s idx size t -> do
-        t' <- transformT env t
-        if isLeft t' then do
-            k <- freshSym "k" (transformS env s B.:-> B.X)
-            x <- freshSym "x" (transformS env (getSSort t))
-            return $ Left $ CPSLam k $ 
-                app t' (CPSLam x $ 
-                    CPSApp (CPSVar k) (CPSPrim $ CPSProj idx size (CPSPrim $ CPSVar x)))
-        else 
-            return $ Right $ CPSPrim $ CPSProj idx size $ fromRight t'
-    Assume s t0 t1 -> do
-        t0' <- transformT env t0
-        t1' <- transformT env t1
-        k <- freshSym "k" (transformS env s B.:-> B.X)
-        x <- freshSym "x" (transformS env SBool)
-        return $ Left $ CPSLam k $
-            app t0' (CPSLam x $
-                CPSIf (CPSVar x) (app t1' (CPSVar k)) CPSOmega)
-    Branch s t0 t1 -> do
-        t0' <- transformT env t0
-        t1' <- transformT env t1
-        k <- freshSym "k" (transformS env s B.:-> B.X)
-        return $ Left $ CPSLam k $
-            CPSBranch (app t0' (CPSVar k)) (app t1' (CPSVar k))
-    Fail x -> do
-        k <- freshSym "k" (transformS env (getSSort x) B.:-> B.X)
-        return $ Left $ CPSLam k CPSFail
-    And t0 t1 -> do
-        t0' <- transformT env t0
-        t1' <- transformT env t1
-        k <- freshSym "k" (transformS env SBool B.:-> B.X)
-        if isLeft t0' || isLeft t1' then do
-            x0 <- freshSym "x0" (transformS env SBool)
-            x1 <- freshSym "x1" (transformS env SBool)
-            return $ Left $ CPSLam k $ 
-                app t0' $ CPSLam x0 $
-                    app t1' $ CPSLam x1 $
-                        CPSApp (CPSVar k) (CPSAnd (CPSPrim $ CPSVar x0) 
-                                                  (CPSPrim $ CPSVar x1))
-        else 
-            return $ Right $ CPSAnd (fromRight t0') (fromRight t1')
-    Or t0 t1 -> do
-        t0' <- transformT env t0
-        t1' <- transformT env t1
-        k <- freshSym "k" (transformS env SBool B.:-> B.X)
-        if isLeft t0' || isLeft t1' then do
-            x0 <- freshSym "x0" (transformS env SBool)
-            x1 <- freshSym "x1" (transformS env SBool)
-            return $ Left $ CPSLam k $ 
-                app t0' $ CPSLam x0 $
-                    app t1' $ CPSLam x1 $
-                        CPSApp (CPSVar k) (CPSOr  (CPSPrim $ CPSVar x0) 
-                                                  (CPSPrim $ CPSVar x1))
-        else 
-            return $ Right $ CPSOr (fromRight t0') (fromRight t1')
-    Not t -> do
-        t' <- transformT env t
-        if isLeft t' then do
-            k <- freshSym "k" (transformS env SBool B.:-> B.X)
-            x <- freshSym "x" (transformS env SBool)
-            return $ Left $ (CPSLam k $ 
-                app t' (CPSLam x $
-                    CPSApp (CPSVar k) (CPSNot (CPSPrim $ CPSVar x))))
-        else
-            return $ Right $ CPSNot $ fromRight t'
-            
+    c_false <- freshSym "false" tbool
+    t_false <- do
+        x <- freshSym "x" B.X
+        y <- freshSym "y" B.X
+        return $ CPSLam x $ CPSLam y $ CPSVar y
 
-tCheck :: (Monad m,Applicative m) => 
-          ([(B.Symbol,CPSTerm)],CPSTerm) -> ExceptT (B.Sort,B.Sort,String) m ()
-tCheck (ds,t0) = doit where
-    check str s1 s2 = when (s1 /= s2) $ throwError (s1,s2,str)
-    doit = do
-        forM_ ds $ \(x,t) -> do
-            check "let rec" (B.getSort x) =<< go t
-        check "main" B.X =<< go t0
-    go = \case
-        CPSTrue -> return B.Bool
-        CPSFalse -> return B.Bool
-        CPSVar x -> return $ B.getSort x
-        CPSFail -> return B.X
-        CPSOmega -> return B.X
-        CPSBranch t1 t2 -> do
-            check "branch fst" B.X =<< go t1
-            check "branch snd" B.X =<< go t2
-            return B.X
-        CPSLam x v -> (B.:->) (B.getSort x) <$> go v
-        CPSProj idx size t -> do
-            s <- goV t
-            ss <- case s of B.Tuple xs -> return xs
-                            _ -> throwError (s,s,"tuple expected")
-            when (length ss /= size) $ throwError (s,s,"tuple length mismatch")
-            return (ss !! idx)
-        CPSApp t1 t2 -> do
-            s1 <- go t1
-            s2 <- goV t2
-            case s1 of
-                s2' B.:-> s3 -> check "app arg" s2 s2' >> return s3
-                _ -> throwError (s1,s1,"app fun")
-        CPSIf t1 t2 t3 -> do
-            check "if pred" B.Bool =<< go t1
-            check "if then" B.X =<< go t2
-            check "if else" B.X =<< go t3
-            return B.X
-    goV = \case
-       CPSPrim t -> go t 
-       CPSTuple ts -> B.Tuple <$> mapM goV ts
-       CPSAnd t1 t2 -> do
-           check "opAnd fst" B.Bool =<< goV t1
-           check "opAnd snd" B.Bool =<< goV t2
-           return B.Bool
-       CPSOr t1 t2 -> do
-           check "opOr fst" B.Bool =<< goV t1
-           check "opOr snd" B.Bool =<< goV t2
-           return B.Bool
-       CPSNot t1 -> do
-            check "opNot arg" B.Bool =<< goV t1
-            return B.Bool
-{-
+    c_and <- freshSym "and" (tbool B.:-> tbool B.:-> tbool)
+    t_and <- do
+        x <- freshSym "x" tbool
+        y <- freshSym "y" tbool
+        z <- freshSym "z" tbase
+        w <- freshSym "w" tbase
+        return $ CPSLam x $ CPSLam y $ CPSLam z $ CPSLam w $
+            CPSVar x `f_cpsapp` (CPSVar y `f_cpsapp` CPSVar z `f_cpsapp` CPSVar w)
+                     `f_cpsapp` CPSVar w
+    
+    c_or <- freshSym "or" (tbool B.:-> tbool B.:-> tbool)
+    t_or <- do
+        x <- freshSym "x" tbool
+        y <- freshSym "y" tbool
+        z <- freshSym "z" tbase
+        w <- freshSym "w" tbase
+        return $ CPSLam x $ CPSLam y $ CPSLam z $ CPSLam w $
+            CPSVar x `f_cpsapp` CPSVar z 
+                     `f_cpsapp` (CPSVar y `f_cpsapp` CPSVar z `f_cpsapp` CPSVar w)
 
-elimTupleSort :: B.Sort -> B.Sort
-elimTupleSort = undefined
-{-
-elimTupleSort (t1 B.:-> t2) = foldr (B.:->) (elimTupleSort t2) $ currySort t1 [] 
-elimTupleSort B.X = B.X
-elimTupleSort _ = error "elimTupleSort"
--}
+    c_not <- freshSym "not" (tbool B.:-> tbool)
+    t_not <- do
+        x <- freshSym "x" tbool
+        y <- freshSym "y" tbase
+        z <- freshSym "z" tbase
+        return $ CPSLam x $ CPSLam y $ CPSLam z $
+            CPSVar x `f_cpsapp` CPSVar z
+                     `f_cpsapp` CPSVar y
 
-currySort :: B.Sort -> Tree B.Sort
-currySort = undefined
-{-
-currySort (B.Tuple xs) acc = foldr currySort acc xs
-currySort t acc = elimTupleSort t : acc
--}
+    c_if <- freshSym "if" (tbool B.:-> tbool)
+    t_if <- do
+        x <- freshSym "x" tbool
+        y <- freshSym "y" tbase
+        z <- freshSym "z" tbase
+        return $ CPSLam x $ CPSLam y $ CPSLam z $
+            CPSVar x `f_cpsapp` CPSVar y
+                     `f_cpsapp` CPSVar z
+    
+    return [("true",(c_true,t_true))
+           ,("false",(c_false,t_false))
+           ,("and",(c_and,t_and))
+           ,("or",(c_or,t_or))
+           ,("not",(c_not,t_not))
+           ,("if",(c_if,t_if))]
 
-elimTuple :: (MonadId m,Applicative m) => M.Map B.Symbol [B.Symbol] -> CPSTerm -> m CPSTerm
-elimTuple env = \case
-    CPSTrue -> return CPSTrue
-    CPSFalse -> return CPSFalse
-    CPSOmega -> return CPSOmega
-    CPSFail -> return CPSFail
-    CPSBranch t1 t2 -> CPSBranch <$> elimTuple env t1 <*> elimTuple env t2
-    CPSVar x -> return $ CPSVar $ B.modifySort elimTupleSort x
-    CPSLam x t -> do
-        let ss = flattenTree $ currySort (B.getSort x)
-        xs <- mapM (freshSym (B.name x)) ss
-        let env' = M.insert x xs env
-        t' <- elimTuple env' t
-        return $ foldr CPSLam t' xs
-    CPSApp t0 t1 -> do
-        t0' <- elimTuple env t0
-        t1s <- flattenTree <$> elimTupleV env t1
-        return $ foldl CPSApp t0' t1s
-    CPSProj idx size t -> do
-        t' <- elimTupleV env t
-        let ti = (\(Node l) -> l !! idx) t'
-        return $ (\(Leaf ) -> x) ti
+elimBoolP :: (MonadId m,Applicative m) => ([(B.Symbol,CPSTerm)], CPSTerm) -> m ([(B.Symbol,CPSTerm)],CPSTerm)
+elimBoolP (ds,t0) = do
+    env <- elimBoolEnv
+    let env' = M.fromList [ (x,CPSVar x') | (x,(x',_)) <- env ]
+    let ds' = map (\(x,t) -> (B.modifySort elimBoolSort x, elimBool env' t)) ds
+    let t0' = elimBool env' t0
+    return (map snd env++ds',t0')
 
-data Tree a = Node [Tree a] 
-            | Leaf a
+elimBool :: M.Map String CPSTerm -> CPSTerm -> CPSTerm
+elimBool env CPSTrue = env M.! "true"
+elimBool env CPSFalse = env M.! "false"
+elimBool _ (CPSVar x) = CPSVar (B.modifySort elimBoolSort x)
+elimBool env (CPSIf b t1 t2) =
+    (env M.! "if") `f_cpsapp` elimBool env b
+                   `f_cpsapp` elimBool env t1
+                   `f_cpsapp` elimBool env t2
+elimBool env (CPSAnd t1 t2) = 
+    (env M.! "and") `f_cpsapp` elimBool env t1
+                    `f_cpsapp` elimBool env t2
+elimBool env (CPSOr t1 t2) =
+    (env M.! "or") `f_cpsapp` elimBool env t1
+                   `f_cpsapp` elimBool env t2
+elimBool env (CPSNot t) =
+    (env M.! "not") `f_cpsapp` elimBool env t
+elimBool env (CPSLam x t) = CPSLam (B.modifySort elimBoolSort x) (elimBool env t)
+elimBool env (CPSApp _ t1 t2) = f_cpsapp (elimBool env t1) (elimBool env t2)
+elimBool _ (CPSOmega) = CPSOmega
+elimBool _ (CPSFail) = CPSFail
+elimBool env (CPSBranch t1 t2) = CPSBranch (elimBool env t1) (elimBool env t2)
 
-flattenTree :: Tree a -> [a]
-flattenTree (Node xs) = concatMap flattenTree xs
-flattenTree (Leaf x) = pure x
-
-elimTupleV :: (MonadId m,Applicative m) => M.Map B.Symbol [B.Symbol] -> CPSValue -> m (Tree CPSValue)
-elimTupleV = undefined
-        
-
--}
--}
--}

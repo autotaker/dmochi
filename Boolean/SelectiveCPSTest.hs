@@ -25,7 +25,8 @@ main = do
 --                liftIO $ putStrLn $ render $ CPS.pprintProgram cps1
 --                cps2 <- CPS.elimTupleP cps1
 --                withExceptT show $ CPS.tCheck cps2
-                hors <- toHORS p
+                --hors <- toHORS p
+                hors <- toHORSChurch p
                 liftIO $ putStrLn $ render $ pprintHORS Horsat hors
                 liftIO $ writeFile (path++".horsat.hrs") $ (++"\n") $ render $ pprintHORS Horsat hors
                 liftIO $ writeFile (path++".preface.hrs") $ (++"\n") $ render $ pprintHORS Preface hors

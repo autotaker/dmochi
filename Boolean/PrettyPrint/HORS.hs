@@ -62,7 +62,7 @@ printPreface (Automaton ts qs trs) = case trs of
             let d = hsep (map (\(i,qi) -> parens (int i <> comma <+> text qi)) cl)
             return $ pprintTrans q t d)
             $+$ 
-        text "%ENDATA"
+        text "%ENDA"
                     
 printHorsatZDD = undefined
 

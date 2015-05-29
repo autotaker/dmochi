@@ -1,6 +1,6 @@
 module Boolean.HORS2 where
 import Boolean.Syntax.Typed 
-import Boolean.SelectiveCPS(selectiveCPS,elimTupleP,CPSTerm(..))
+import Boolean.SelectiveCPS(selectiveCPS,elimTupleP,CPSTerm(..),elimBoolP)
 import Boolean.HORS(HORS(..),ATerm(..),M,Automaton(..))
 import Control.Monad.State
 import Control.Arrow
@@ -43,6 +43,28 @@ toHORS p = do
         registerRule sym [] t0'
         return sym
     return $ HORS rs (Automaton ranks qs (Right trs)) sym
+
+toHORSChurch :: (MonadId m,Applicative m) => Program -> m HORS
+toHORSChurch p = do
+    (ds,t0) <- selectiveCPS p >>= elimTupleP >>= elimBoolP
+    let ranks = [("br",2),("end",0),("fail",0)]
+    let qs = ["q"]
+    let l = map fst ranks
+    let trs "q" "br" = Just ["q","q"]
+        trs "q" "end" = Just []
+        trs _ _ = Nothing
+    let tenv = M.fromList $ map (\x -> (x,Var x)) l
+    (sym,rs) <- flip runStateT [] $ do
+        forM_ ds $ \(f,t) -> do
+            let (xs,tb) = decompose t
+            let f' = capitalize $ name f
+            tb' <- lambdaLifting tenv (S.fromList xs) tb 
+            registerRule f' xs tb'
+        t0' <- lambdaLifting tenv S.empty t0
+        sym <- freshId "Main"
+        registerRule sym [] t0'
+        return sym
+    return $ HORS rs (Automaton ranks qs (Left trs)) sym
 
 capitalize :: String -> String
 capitalize (x:xs) = toUpper x : xs
