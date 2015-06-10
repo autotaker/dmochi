@@ -92,6 +92,7 @@ doit = do
     liftIO $ B.printProgram boolProgram
     t_predicate_abst_end <- liftIO $ getCurrentTime
 
+{-
     -- cps transformation
     liftIO $ printf "--CPS--\n"
     hors <- B.toHORS boolProgram'
@@ -99,6 +100,7 @@ doit = do
     liftIO $ writeFile file_hors $ (++"\n") $ render $ pprintHORS hors
 --    liftIO $ printHORS hors
 --    liftIO $ B.printProgram cpsProgram
+--    -}
 
     -- model checking
     t_model_checking_begin <- liftIO $ getCurrentTime

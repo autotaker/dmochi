@@ -54,7 +54,7 @@ getPType env (Op (OpSnd _ v)) =
     let (t,PPair _ p1 (x0,p2)) = getPType env v
         p2' = substPType x0 (Op (OpFst (getType p1) v)) p2 in
     (B.f_proj 1 2 t, p2')
-getPType _ _ = error "failed to infer type"
+getPType _ _ = error $ "failed to infer type"
 
 toSort :: PType -> B.Sort
 toSort (PInt ps) = B.Tuple (map (const B.Bool) ps)
@@ -73,7 +73,7 @@ convertE cts env sigma _e = case _e of
                 let (t,pty) = getPType env v 
                 let s = render $ pprintP 0 pty
                 let x' = B.Symbol (toSort pty) (name x)
-                liftIO $ print $ "PType = " ++ s
+                liftIO $ putStrLn $ name x ++ " PType = " ++ s
                 B.f_let x' t <$> convertE cts (addE env (name x) pty) sigma e
     Let _ x (LApp _ f vs) e -> do
         let Left ty_f = env ! name f
