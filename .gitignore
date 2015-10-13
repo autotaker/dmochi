@@ -10,4 +10,6 @@ ML/sample/*.rnd
 ML/sample/*.bool
 ML/sample/*.horsat
 ML/sample/*.preface
+Boolean/cpstest/
+ML/sample/
 

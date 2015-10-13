@@ -144,8 +144,6 @@ cpsSort (Tuple ts) = Tuple (map cpsSort ts)
 cpsSort (s1 :-> s2) = cpsSort s1 :-> ((cpsSort s2 :-> X) :-> X)
 cpsSort X = undefined
 
-freshSym :: MonadId m => String -> Sort -> m Symbol
-freshSym _name sort = freshId _name >>= \x -> return (Symbol sort x)
 
 cps :: (MonadId m,Applicative m) => Program -> m ([(Symbol,STerm Tuple)], STerm Tuple)
 cps p = do

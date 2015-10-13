@@ -5,6 +5,7 @@ module Boolean.Syntax.Typed ( Symbol(..)
                             , Term(..)
                             , HasSort(..)
                             , toUnTyped
+                            , freshSym
                             , tCheck
                             , modifySort
                             , order
@@ -21,7 +22,11 @@ module Boolean.Syntax.Typed ( Symbol(..)
 import qualified Boolean.Syntax as B
 import Control.Monad
 import Control.Monad.Except
+import Id
 data Symbol = Symbol { _sort :: Sort, name :: String } deriving(Show)
+
+freshSym :: MonadId m => String -> Sort -> m Symbol
+freshSym _name sort = freshId _name >>= \x -> return (Symbol sort x)
 
 instance Eq Symbol where
     (==) a b = name a == name b
