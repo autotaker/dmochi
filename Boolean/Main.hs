@@ -64,7 +64,9 @@ doit path = do
     liftIO $ putStrLn $ render $ Simple.pprintProgram simple_program
 
     let graph_path = path ++ ".dot"
-    let cfg@(lblTbl, graph, symMap) = Flow.buildGraph simple_program
+    let cfa_program = Flow.buildGraph simple_program
+    let lblTbl = Flow.termTable cfa_program
+        graph = Flow.cfg cfa_program
     liftIO $ writeFile graph_path $ Flow.ppGraph (fmap (\t -> t) lblTbl) graph
     liftIO $ do
         putStrLn "* cfa *"

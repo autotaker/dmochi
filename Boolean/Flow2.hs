@@ -184,16 +184,23 @@ data Context s = Context { nodeTable     :: HashTable s FlowKey FlowTerm
                          , edgeTable     :: HashTable s (Id,Id) ()
                          , counter       :: STRef s Id }
 
-buildGraph :: B.Program -> (Array Id FlowTerm,Array Id [Id],M.Map Symbol Id)
+data Program = Program { definitions :: [(VarId, FlowTerm)]
+                       , mainTerm    :: FlowTerm
+                       , termTable   :: Array Id FlowTerm
+                       , cfg         :: Array Id [Id] }
+
+
+buildGraph :: B.Program -> Program
 buildGraph (B.Program ds d0) = runST $ do
     ctx <- newContext
     env <- fmap M.fromList $ forM ds $ \(f, _) -> do
         var <- genVarNode ctx f
         return (f,var)
-    forM_ ds $ \(f,t) -> do
+    ds' <- forM ds $ \(f,t) -> do
         t' <- gatherVTermEdges ctx env t
         addEdge ctx (V (env M.! f)) t'
-    _ <- gatherTermEdges ctx env d0
+        return (env M.! f, t')
+    d0' <- gatherTermEdges ctx env d0
     calcClosure ctx
     lbls <- HT.toList (labelTable ctx)
     edges <- map fst <$> HT.toList (edgeTable ctx)
@@ -202,9 +209,9 @@ buildGraph (B.Program ds d0) = runST $ do
         termTbl = array (0,n-1) lbls
         edgeTbl :: Array Id [Id]
         edgeTbl = accumArray (flip (:)) [] (0,n-1) edges
-        symMap :: M.Map Symbol Id
-        symMap = M.fromList $ [ (name x,getId x)   | (_,V x) <- lbls ]
-    return (termTbl,edgeTbl,symMap)
+--        symMap :: M.Map Symbol Id
+--        symMap = M.fromList $ [ (name x,getId x)   | (_,V x) <- lbls ]
+    return $ Program ds' d0' termTbl edgeTbl 
 
 newContext :: ST s (Context s)
 newContext = Context <$> HT.new <*> HT.new <*> HT.new <*> newSTRef 0
