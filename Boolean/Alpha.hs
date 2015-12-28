@@ -44,7 +44,7 @@ convertTerm label _t = case _t of
         Lam () x' <$> (local (M.insert x x') $ convertTerm (label++"$f") t)
     App _ t1 t2 -> liftA2 (App ()) (convertTerm label t1) (convertTerm label t2)
 --    t1 :+: t2 -> liftA2 (:+:) (convertTerm label t1) (convertTerm label t2)
-    If _ t1 t2 t3 -> liftA3 (If ()) (convertTerm label t1)
+    If _ b t1 t2 t3 -> liftA3 (If () b) (convertTerm label t1)
                                     (convertTerm label t2)
                                     (convertTerm label t3)
     Fail _ _ -> Fail () <$> mfix (genName label "Fail".Fail ())

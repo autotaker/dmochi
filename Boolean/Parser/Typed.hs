@@ -23,7 +23,7 @@ language    = P.LanguageDef
                , P.identLetter    = alphaNum <|> oneOf "_'"
                , P.opStart        = P.opLetter language
                , P.opLetter       = oneOf ":!#$%&*+./<=>?@\\^|-~"
-               , P.reservedOpNames = ["=","->","||","&&","/","<>",";;"]
+               , P.reservedOpNames = ["=","->","||","&&","/","<>","<+>",";;"]
                , P.reservedNames  = reservedNames
                , P.caseSensitive  = True
                }
@@ -92,7 +92,11 @@ termP = expr where
         return $ f_let x tx t
     assumeP = f_assume <$> (reserved "assume" *> expr <* semi)
                        <*> expr
-    branchP = foldl1 f_branch <$> expr1 `sepBy1` reservedOp "<>"
+    branchP = do
+        x <- expr1
+        xs <- many ((,) <$> (f_branch <$ reservedOp "<>" <|> f_branch_label <$ reservedOp "<+>")
+                        <*> expr1)
+        return $ foldl (\acc (f,v) -> f acc v) x xs
     trueP = C True <$ reserved "true"
     falseP = C False <$ reserved "false"
     varP  = do

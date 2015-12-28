@@ -51,7 +51,7 @@ prec (App _ _ _)    = 4
 prec (Not _)        = 4
 prec (And _ _)      = 3
 prec (Or  _ _)      = 2
-prec (Branch _ _ _) = 1
+prec (Branch _ _ _ _) = 1
 prec (Let _ _ _ _)  = 0
 prec (Lam _ _)      = 0
 prec (Assume _ _ _) = 0
@@ -83,9 +83,9 @@ pprintTerm p _t = parenPrec (prec _t) p $ case _t of
     Assume _ b t -> 
         text "assume" <+> pprintTerm 0 b <> semi $+$ 
         pprintTerm 0 t
-    Branch _ t1 t2 ->
+    Branch _ b t1 t2 ->
         pprintTerm (prec _t) t1 <+> 
-        text "<>" $$
+        text (if b  then "<+>" else "<>") $$
         pprintTerm (prec _t+1) t2
     And t1 t2 ->
         pprintTerm (prec _t) t1 <+>

@@ -83,7 +83,7 @@ gatherT _t env = go _t where
             s1 `shouldBe` s2
             return s1
             -}
-        If _ tp tt te -> do
+        If _ _ tp tt te -> do
             sp <- go tp
             st <- go tt
             se <- go te

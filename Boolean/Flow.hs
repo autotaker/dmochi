@@ -188,7 +188,7 @@ gatherPrimTerm ctx env = go where
         pushEdge vdom vt sort2
         pushEdge v vcod sort1
         return (v,sort1)
-    go _t@(If _ t1 t2 t3) = do
+    go _t@(If _ _ t1 t2 t3) = do
         (v1,_) <- go t1
         (v2,sort) <- go t2
         (v3,_) <- go t3

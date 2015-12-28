@@ -28,7 +28,7 @@ data Term a = C a Bool | V a Symbol | T a [Term a] | TF a
           | Proj a ProjN ProjD (Term a)
           | App a (Term a) (Term a)
 --          | Term :+: Term 
-          | If a (Term a) (Term a) (Term a)
+          | If a Bool (Term a) (Term a) (Term a)
           | Fail a Symbol | Omega a Symbol deriving(Ord,Eq)
 
 getValue :: Term a -> a
@@ -40,7 +40,7 @@ getValue (Lam a _ _) = a
 getValue (Let a _ _ _) = a
 getValue (Proj a _ _ _) = a
 getValue (App a _ _) = a
-getValue (If a _ _ _) = a
+getValue (If a _ _ _ _) = a
 getValue (Fail a _) = a
 getValue (Omega a _) = a
 
@@ -64,7 +64,7 @@ instance Show (Term a) where
     show (Proj _ i n t) = printf "#(%d/%d)" (projN i) (projD n) ++ " " ++ (if isPrim t then show t else "(" ++ show t ++ ")")
     show (App _ t1 t2) | isPrim t1 = show t1 ++ " " ++ "(" ++ show t2 ++ ")"
                      | otherwise = "("++show t1++") "++ "(" ++ show t2  ++ ")"
-    show (If _ t1 t2 t3) = unwords ["if",show t1,"then",show t2,"else",show t3]
+    show (If _ b t1 t2 t3) = unwords [if b then "if_l" else "if",show t1,"then",show t2,"else",show t3]
     show (Fail _ s) = "Fail(" ++ s ++ ")"
     show (Omega _ s) = "Omega("++ s ++ ")"
 
@@ -80,7 +80,7 @@ sizeT (Lam _ _ t) = 1 + sizeT t
 sizeT (Let _ _ t1 t2) = 1 + sizeT t1 + sizeT t2
 sizeT (Proj _ _ _ t) = 1 + sizeT t
 sizeT (App _ t1 t2) = 1 + sizeT t1 + sizeT t2
-sizeT (If _ t1 t2 t3) = 1 + sizeT t1 + sizeT t2 + sizeT t3
+sizeT (If _ _ t1 t2 t3) = 1 + sizeT t1 + sizeT t2 + sizeT t3
 sizeT (Fail _ _) = 1
 sizeT (Omega _ _) = 1
 
@@ -99,7 +99,7 @@ symbols (Program defs t0) = nub $ toList $ execWriter doit where
     go (Proj _ _ _ t) = go t
     go (App _ t1 t2) = go t1 >> go t2
     --go (t1 :+: t2) = go t1 >> go t2
-    go (If _ t1 t2 t3) = go t1 >> go t2 >> go t3
+    go (If _ _ t1 t2 t3) = go t1 >> go t2 >> go t3
 
 freeVariables :: Term a -> [Symbol]
 freeVariables = nub . toList . execWriter . flip runReaderT S.empty . go where
@@ -111,7 +111,7 @@ freeVariables = nub . toList . execWriter . flip runReaderT S.empty . go where
     go (Let _ x t1 t2) = go t1 >> local (S.insert x) (go t2)
     go (App _ t1 t2) = go t1 >> go t2
     --go (t1 :+: t2) = go t1 >> go t2
-    go (If _ t1 t2 t3) = go t1 >> go t2 >> go t3
+    go (If _ _ t1 t2 t3) = go t1 >> go t2 >> go t3
     go _ = return ()
 
 boundVariables :: Term a -> [Symbol]
@@ -123,7 +123,7 @@ boundVariables = nub . toList . execWriter . go where
     go (App _ t1 t2) = go t1 >> go t2
     go (T _ ts) = mapM_ go ts
     --go (t1 :+: t2) = go t1 >> go t2
-    go (If _ t1 t2 t3) = go t1 >> go t2 >> go t3
+    go (If _ _ t1 t2 t3) = go t1 >> go t2 >> go t3
     go _ = return ()
     
 instance Hashable (Term a) where

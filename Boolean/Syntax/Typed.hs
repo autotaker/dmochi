@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 module Boolean.Syntax.Typed ( Symbol(..)
                             , Program(..)
                             , Sort(..)
@@ -11,6 +12,7 @@ module Boolean.Syntax.Typed ( Symbol(..)
                             , order
                             , f_assume
                             , f_branch
+                            , f_branch_label
                             , f_let
                             , f_app
                             , f_proj
@@ -51,7 +53,7 @@ data Term = C Bool
           | App Sort Term Term
           | Proj Sort Index Size  Term
           | Assume Sort Term Term
-          | Branch Sort Term Term
+          | Branch Sort Bool Term Term
           | And Term Term
           | Or  Term Term
           | Not Term
@@ -61,7 +63,9 @@ f_assume :: Term -> Term -> Term
 f_assume (C True) e = e
 f_assume p e = Assume (getSort e) p e
 f_branch :: Term -> Term -> Term
-f_branch e1 e2 = Branch (getSort e1) e1 e2
+f_branch e1 e2 = Branch (getSort e1) False e1 e2
+f_branch_label :: Term -> Term -> Term
+f_branch_label e1 e2 = Branch (getSort e1) True e1 e2
 f_let :: Symbol -> Term -> Term -> Term
 f_let x ex e = Let (getSort e) x ex e
 f_app :: Term -> Term -> Term
@@ -100,7 +104,7 @@ instance HasSort Term where
     getSort (App s _ _)   = s
     getSort (Proj s _ _ _) = s
     getSort (Assume s _ _) = s
-    getSort (Branch s _ _) = s
+    getSort (Branch s _ _ _) = s
     getSort (And _ _) = Bool
     getSort (Or _ _)  = Bool
     getSort (Not _)   = Bool
@@ -126,11 +130,11 @@ toUnTyped (Program ds t0) = B.Program ds' t0' where
     convert (Let _ x tx t) = B.Let () (name x) (convert tx) (convert t)
     convert (App _ t1 t2) = B.App () (convert t1) (convert t2)
     convert (Proj _ i s t) = B.Proj () (B.ProjN i) (B.ProjD s) (convert t)
-    convert (Assume _ p t) = B.If () (convert p) (convert t) (B.Omega () "")
-    convert (Branch _ t1 t2) = B.If () (B.TF ()) (convert t1) (convert t2)
-    convert (And t1 t2) = B.If () (convert t1) (convert t2) (B.C () False)
-    convert (Or t1 t2) = B.If () (convert t1) (B.C () True) (convert  t2)
-    convert (Not t) = B.If () (convert t) (B.C () False) (B.C () True)
+    convert (Assume _ p t) = B.If () False (convert p) (convert t) (B.Omega () "")
+    convert (Branch _ b t1 t2) = B.If () b (B.TF ()) (convert t1) (convert t2)
+    convert (And t1 t2) = B.If () False (convert t1) (convert t2) (B.C () False)
+    convert (Or t1 t2) = B.If () False (convert t1) (B.C () True) (convert  t2)
+    convert (Not t) = B.If () False (convert t) (B.C () False) (B.C () True)
     convert (Fail x) = B.Fail () (name x)
 
 tCheck :: Program -> Except (Sort,Sort,String,[Term]) ()
@@ -168,7 +172,7 @@ tCheck (Program ds t0) = doit where
             check (getSort p) Bool "assume pred" (p:ctx')
             go ctx' t
             check s (getSort t) "assume body" ctx'
-        Branch s t1 t2 -> do
+        Branch s _ t1 t2 -> do
             go ctx' t1
             check s (getSort t1) "branch fst" (t1:ctx')
             go ctx' t2

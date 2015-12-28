@@ -64,13 +64,13 @@ assignId (App _ t1 t2) = do
     let s = (snd $ getValue t1') `S.union` (snd $ getValue t2')
     i <- incrId
     return $ App (i,s) t1' t2'
-assignId (If _ t1 t2 t3) = do
+assignId (If _ b t1 t2 t3) = do
     t1' <- assignId t1
     t2' <- assignId t2
     t3' <- assignId t3
     let s = S.unions $ map (snd . getValue) [t1',t2',t3']
     i <- incrId
-    return $ If (i,s) t1' t2' t3'
+    return $ If (i,s) b t1' t2' t3'
                                     
 
 type M a = ReaderT Factory IO a
@@ -119,10 +119,9 @@ saturateFlow (edgeTbl,symMap,leafTbl) env arr = do
                     m <- M.fromList <$> forM bvars (\x -> (x,) <$> liftIO (readArray arr (symMap M.! x)))
                     let cands = sequence $ map unfoldV tys
                         c = length cands
-                    ref <- liftIO $ newIORef M.empty
                     ls <- forM cands $ \l -> do
                         let env' = updateEnv env (zip fvars l)
-                        res <- saturateTerm ref c m env' t 
+                        res <- saturateTerm c m env' t 
                         case res of
                             LFail _ -> buildTypeList lnil
                             tyl -> return tyl
@@ -157,8 +156,7 @@ saturateFlow (edgeTbl,symMap,leafTbl) env arr = do
 saturateSym :: M.Map Symbol TTypeList -> M.Map Symbol VType -> [(Symbol,Term (Id,S.Set String))] -> M (M.Map Symbol VType)
 saturateSym _flowEnv _symEnv defs = do
     fmap M.fromList $ forM defs $ \(x,t) -> do
-        ref <- liftIO $ newIORef $ M.empty
-        LCons _ ty _  <- saturateTerm ref 1 _flowEnv _symEnv t
+        LCons _ ty _  <- saturateTerm 1 _flowEnv _symEnv t
         let VFun _ ty1 = ty
             VFun _ ty2 = _symEnv M.! x
         let mergeFun (VNil _) t2 = return t2
@@ -181,20 +179,8 @@ saturateSym _flowEnv _symEnv defs = do
 updateEnv :: M.Map Symbol VType -> [(Symbol,VType)] -> M.Map Symbol VType
 updateEnv = foldl (\acc (x,ty) -> M.insert x ty acc)
 
-saturateTerm :: IORef (M.Map (Id,[Id]) TTypeList) -> Int -> M.Map Symbol TTypeList -> M.Map Symbol VType -> Term (Id,S.Set String) -> M TTypeList
-saturateTerm ref _c _flowEnv _env _t = incr termCounter >> go _c _env _t where
-    {- 
-    memo env t action = do
-        let (i,s) = getValue t
-        let l = [ getId (env M.! x) | x <- S.toList s ]
-        m <- liftIO $ readIORef ref
-        case M.lookup (i,l) m of
-            Just ty -> do
-                return ty
-            Nothing -> do
-                ty <- action
-                liftIO $ writeIORef ref $! M.insert (i,l) ty m
-                return ty -}
+saturateTerm :: Int -> M.Map Symbol TTypeList -> M.Map Symbol VType -> Term (Id,S.Set String) -> M TTypeList
+saturateTerm _c _flowEnv _env _t = incr termCounter >> go _c _env _t where
     go c env _t = {- memo env _t $ -} do
         incr costCounter
         comb <- fmap combCounter ask
@@ -225,7 +211,7 @@ saturateTerm ref _c _flowEnv _env _t = incr termCounter >> go _c _env _t where
                     _ -> do
                         ty2 <- go c env t2
                         applyType ty1 ty2
-            If _ t1 t2 t3 -> do
+            If _ _ t1 t2 t3 -> do
                 ty1 <- go c env t1
                 case ty1 of
                     LFail _ -> return ty1
@@ -301,10 +287,10 @@ saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flo
             readIORef (costCounter factory)  >>= printf "Cost    :%8d\n"
             readIORef (combCounter factory)  >>= printf "Comb    :%8d\n"
             putStrLn ""
-        ref <- liftIO $ newIORef M.empty
-        t0 <- saturateTerm ref 1 env1 env2 t0'
+        t0 <- saturateTerm 1 env1 env2 t0'
         let ctx' = Context env1 env2 (flowTbl ctx)
         case t0 of
             LFail _ -> return (False,ctx')
             _ | env2 == symEnv ctx -> return (True,ctx')
               | otherwise          -> loop (i+1) ctx'
+

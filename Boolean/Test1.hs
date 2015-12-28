@@ -3,7 +3,6 @@ import Boolean.Parser.Typed
 import Boolean.Alpha
 import Boolean.Flow hiding(Context)
 import Boolean.SortCheck
-import Boolean.Type
 import Boolean.Syntax
 import qualified Boolean.Syntax.Typed as Typed
 import Boolean.PrettyPrint.Typed
