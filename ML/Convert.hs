@@ -92,7 +92,7 @@ convertE cts env sigma _e = case _e of
         let x' = B.Symbol (toSort ty_x) (name x) in
         B.Lam x' <$> convertE cts (addE env (name x) ty_x) (substPType y (Var x) ty_r) e
     Fail _ -> return $ B.Fail (B.Symbol (toSort sigma) "")
-    Branch _ e1 e2 -> B.f_branch <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
+    Branch _ e1 e2 -> B.f_branch_label <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
 
 convertV :: (MonadIO m, MonadId m,Applicative m) => Constraints -> Env -> PType -> Value -> m B.Term
 convertV cts env (PInt ps) v = do
@@ -217,6 +217,7 @@ model cts env = handle ((\e -> model cts env) :: SomeException -> IO B.Term) $ d
         return (B.C False)
     else do
         let contain memo key = any (flip S.member memo) $ subset key
+            subset :: [a] -> [[a]]
             subset = foldr (\x acc -> acc <|> (x:) <$> acc) (pure [])
         let step (acc,memo) ((p1,t1,key1):mp2) = if contain memo key1 then return (acc,memo) else  do
                 ThmResult _res <- prove $ problem p1
@@ -243,7 +244,7 @@ model cts env = handle ((\e -> model cts env) :: SomeException -> IO B.Term) $ d
                       ((q,s),j) <- zip ps [0..], 
                       ((r,u),k) <- zip ps [0..],
                       i < (j :: Int) &&  j < k ]
-        fst <$>foldM step (B.C True,S.empty) ps'
+        fst <$> foldM step (B.C True,S.empty) ps'
         
 toSBV :: M.Map String SBool -> M.Map String SInteger -> Value -> SBool
 toSBV boolTbl intTbl = goBool where

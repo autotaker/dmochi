@@ -371,7 +371,7 @@ extractCE prog flowEnv genv hist =
                     return (vf,a)
             (Cls x e0 env' tenv') <- eval env tenv e1 ty1'
             v2 <- eval env tenv e2 ty2'
-            eval (M.insert x v2 env') (M.insert x ty1' tenv') e0 ety
+            eval (M.insert x v2 env') (M.insert x ty2' tenv') e0 ety
         If _ b e1 e2 e3 -> do
             ty1 <- lift $ saturateTerm flowEnv tenv e1
             ty2 <- lift $ saturateTerm flowEnv tenv e2

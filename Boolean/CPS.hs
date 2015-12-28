@@ -179,7 +179,7 @@ cpsT (Proj _ idx size t) k = cpsT t =<< do
     pure $ SLam (Many xs) (f_app k (One $ SV $ xs !! idx))
 cpsT (Fail _) _ = pure SFail
 cpsT (Let _ x e1 e2) k = cpsT (App (getSort e2) (Lam x e2) e1) k
-cpsT (Branch _ t1 t2) k = do
+cpsT (Branch _ _ t1 t2) k = do
     k' <- freshSym "k" (getSort k)
     let f t1' t2' = SLam (One k') (SBranch `f_app` One t1' `f_app` One t2') `f_app` One k
     f <$> cpsT t1 (SV k') <*> cpsT t2 (SV k')

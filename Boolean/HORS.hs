@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 module Boolean.HORS where
 import Boolean.Syntax.Typed 
 import Boolean.CPS(cps,elimTupleP,STerm(..),Simple(..))
