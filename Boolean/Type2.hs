@@ -13,6 +13,7 @@ import Data.Array.IO
 import Data.Maybe
 import Data.IORef
 import Control.Monad.Reader
+import Control.Monad.Writer
 import Control.Monad.State
 import Data.List hiding (elem)
 import Prelude hiding(elem)
@@ -21,6 +22,7 @@ import Text.PrettyPrint
 import Text.Printf
 import Data.Time
 import Boolean.IType
+import Debug.Trace
 
 incrId :: State Id Id
 incrId = do
@@ -79,7 +81,8 @@ type M a = ReaderT Factory IO a
 
 data Context = Context { flowEnv :: M.Map Symbol TTypeList
                        , symEnv  :: M.Map Symbol  VType 
-                       , flowTbl :: IOArray Id TTypeList} deriving(Eq)
+                       , flowTbl :: IOArray Id TTypeList
+                       , symHist :: [M.Map Symbol VType]} deriving(Eq)
 
 
 saturateFlow ::  (Array Id [Id], M.Map Symbol Id, Array Id (Maybe (Term (Id,S.Set String)))) -> M.Map Symbol VType -> IOArray Id TTypeList -> M (M.Map Symbol TTypeList)
@@ -118,10 +121,9 @@ saturateFlow (edgeTbl,symMap,leafTbl) env arr = do
                     tys <- forM fvars $ liftIO . readArray arr . (symMap M.!)
                     m <- M.fromList <$> forM bvars (\x -> (x,) <$> liftIO (readArray arr (symMap M.! x)))
                     let cands = sequence $ map unfoldV tys
-                        c = length cands
                     ls <- forM cands $ \l -> do
                         let env' = updateEnv env (zip fvars l)
-                        res <- saturateTerm c m env' t 
+                        res <- saturateTerm m env' t 
                         case res of
                             LFail _ -> buildTypeList lnil
                             tyl -> return tyl
@@ -156,7 +158,7 @@ saturateFlow (edgeTbl,symMap,leafTbl) env arr = do
 saturateSym :: M.Map Symbol TTypeList -> M.Map Symbol VType -> [(Symbol,Term (Id,S.Set String))] -> M (M.Map Symbol VType)
 saturateSym _flowEnv _symEnv defs = do
     fmap M.fromList $ forM defs $ \(x,t) -> do
-        LCons _ ty _  <- saturateTerm 1 _flowEnv _symEnv t
+        LCons _ ty _  <- saturateTerm _flowEnv _symEnv t
         let VFun _ ty1 = ty
             VFun _ ty2 = _symEnv M.! x
         let mergeFun (VNil _) t2 = return t2
@@ -179,9 +181,9 @@ saturateSym _flowEnv _symEnv defs = do
 updateEnv :: M.Map Symbol VType -> [(Symbol,VType)] -> M.Map Symbol VType
 updateEnv = foldl (\acc (x,ty) -> M.insert x ty acc)
 
-saturateTerm :: Int -> M.Map Symbol TTypeList -> M.Map Symbol VType -> Term (Id,S.Set String) -> M TTypeList
-saturateTerm _c _flowEnv _env _t = incr termCounter >> go _c _env _t where
-    go c env _t = {- memo env _t $ -} do
+saturateTerm :: M.Map Symbol TTypeList -> M.Map Symbol VType -> Term a -> M TTypeList
+saturateTerm _flowEnv _env _t = incr termCounter >> go 1 _env _t where
+    go c env _t = do
         incr costCounter
         comb <- fmap combCounter ask
         liftIO $ do
@@ -257,7 +259,139 @@ initContext (Program defs _) (_,mapSym,leafTbl) = do
     nil <- buildTypeList lnil
     ty  <- buildFunType fnil >>= buildType . func
     arr <- liftIO $ (newArray (bounds leafTbl) nil :: IO (IOArray Id TTypeList))
-    return $ Context (fmap (const nil) mapSym) (M.fromList (map (second (const ty)) defs)) arr
+    return $ Context (fmap (const nil) mapSym) (M.fromList (map (second (const ty)) defs)) arr []
+
+type STerm = Term (Id,S.Set String)
+
+data Value = VB Bool | Cls Symbol (Term ()) Env TEnv | Tup [Value]
+type Env = M.Map Symbol Value
+type TEnv = M.Map Symbol VType
+
+extractCE :: Program -> M.Map Symbol TTypeList -> TEnv -> [TEnv] ->  M [Bool]
+extractCE prog flowEnv genv hist = 
+    let env0 = M.fromList [ (f,Cls x (Omega () "") env0 M.empty) | (f,Lam _ x _) <- definitions prog ] in
+    let f genv env = M.fromList [ (f,Cls x e0 env genv) | (f,Lam _ x e0) <- definitions prog ] in
+    let env = foldr f env0 hist in
+    execWriterT $ evalFail env genv (mainTerm prog)
+    where
+    evalFail :: Env -> M.Map Symbol VType -> Term () -> WriterT [Bool] (ReaderT Factory IO) ()
+    evalFail env tenv e = traceShow e $ case e of
+        T s es -> 
+            let sub [] = error "extractCE: Tuple: there must be an term that fails"
+                sub (ei:es') = do
+                    tyi <- lift $ saturateTerm flowEnv tenv ei
+                    case tyi of
+                        LNil _ -> error "extractCE: Tuple: this term may not diverge" 
+                        LFail _ -> evalFail env tenv ei
+                        LCons _ etyi _ -> eval env tenv ei etyi >> sub es'
+            in sub es 
+        Let _ x e1 e2 -> 
+            let sub (LFail _) = evalFail env tenv e1 
+                sub (LCons _ ty1 ts) = do
+                    let tenv' = M.insert x ty1 tenv
+                    ty2 <- lift $ saturateTerm flowEnv tenv' e2
+                    if TFail `telem` ty2 then do
+                        ex <- eval env tenv e1 ty1
+                        evalFail (M.insert x ex env) tenv' e2
+                    else
+                        sub ts 
+            in lift (saturateTerm flowEnv tenv e1) >>= sub
+        Proj s n d e1 -> evalFail env tenv e1
+        If _ b e1 e2 e3 -> do
+            ty1 <- lift $ saturateTerm flowEnv tenv e1
+            if TFail `telem` ty1 then
+                evalFail env tenv e1
+            else do
+                ty2 <- lift $ saturateTerm flowEnv tenv e2
+                vtrue <- buildType (bool True)
+                vfalse <- buildType (bool False)
+                if vtrue `elem` ty1 && TFail `telem` ty2 then
+                    eval env tenv e1 vtrue >>
+                    tell (if b then [True] else []) >> 
+                    evalFail env tenv e2
+                else 
+                    eval env tenv e1 vfalse >>
+                    tell (if b then [False] else []) >> 
+                    evalFail env tenv e3
+        App _ e1 e2 ->  do
+            ty1 <- lift (saturateTerm flowEnv tenv e1)
+            if TFail `telem` ty1 then
+                evalFail env tenv e1
+            else do
+                let (LCons _ ty1' _) = ty1 
+                ty2 <- lift (saturateTerm flowEnv tenv e2)
+                if TFail `telem` ty2 then do
+                    eval env tenv e1 ty1'
+                    evalFail env tenv e2
+                else do
+                    let (ty1',ty2') = head $ do
+                            vf@(VFun _ vs) <- unfoldV ty1
+                            (a,b) <- unfoldFun vs
+                            guard $ b === TFail
+                            guard $ a `elem` ty2
+                            return (vf,a)
+                    (Cls x e0 env' tenv') <- eval env tenv e1 ty1'
+                    v2 <- eval env tenv e2 ty2'
+                    evalFail (M.insert x v2 env') (M.insert x ty1' tenv') e0
+        Fail _ _ -> return ()
+    eval :: Env -> M.Map Symbol VType -> Term () -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
+    eval env tenv e ety = traceShow e $ trace ("type: "++ show ety) $ case e of
+        V _ x -> return $ env M.! x
+        C s b -> return $ VB b
+        T s es -> 
+            let VTup _ tys = ety in 
+            Tup <$> zipWithM (\ei tyi -> eval env tenv ei tyi) es tys
+        TF s -> case ety of
+            VT _ -> return $ VB True
+            VF _ -> return $ VB False
+        Lam s x e1 -> return $ Cls x e1 env tenv
+        Let _ x e1 e2 ->
+            let sub (LCons _ ty1 ts) = do
+                    let tenv' = M.insert x ty1 tenv
+                    ty2 <- lift $ saturateTerm flowEnv tenv' e2
+                    if ety `elem` ty2 then do
+                        ex <- eval env tenv e1 ty1
+                        eval (M.insert x ex env) tenv' e2 ety
+                    else
+                        sub ts
+            in lift (saturateTerm flowEnv tenv e1) >>= sub
+        Proj s n d e1 -> 
+            let sub (LCons _ ty1@(VTup _ tys) ty') 
+                    | ety == tys !! projN n = eval env tenv e1 ty1
+                    | otherwise = sub ty' in
+            lift (saturateTerm flowEnv tenv e1) >>= sub
+        App _ e1 e2 -> do
+            ty1 <- lift (saturateTerm flowEnv tenv e1)
+            ty2 <- lift (saturateTerm flowEnv tenv e2)
+            let (ty1',ty2') = head $ do
+                    vf@(VFun _ vs) <- unfoldV ty1
+                    (a,b) <- unfoldFun vs
+                    guard $ b === TPrim ety
+                    guard $ a `elem` ty2
+                    return (vf,a)
+            (Cls x e0 env' tenv') <- eval env tenv e1 ty1'
+            v2 <- eval env tenv e2 ty2'
+            eval (M.insert x v2 env') (M.insert x ty1' tenv') e0 ety
+        If _ b e1 e2 e3 -> do
+            ty1 <- lift $ saturateTerm flowEnv tenv e1
+            ty2 <- lift $ saturateTerm flowEnv tenv e2
+            vtrue <- buildType (bool True)
+            vfalse <- buildType (bool False)
+            if vtrue `elem` ty1 && ety `elem` ty2 then
+                eval env tenv e1 vtrue >>
+                tell (if b then [True] else []) >> 
+                eval env tenv e2 ety
+            else 
+                eval env tenv e1 vfalse >>
+                tell (if b then [False] else []) >> 
+                eval env tenv e3 ety
+
+    telem :: TType -> TTypeList -> Bool
+    telem TFail (LFail _) = True
+    telem TFail _ = False
+    telem (TPrim v) ts = elem v ts
+                
+
 
 saturate :: Program -> FlowGraph -> IO (Bool,Context)
 saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flow) where
@@ -287,10 +421,14 @@ saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flo
             readIORef (costCounter factory)  >>= printf "Cost    :%8d\n"
             readIORef (combCounter factory)  >>= printf "Comb    :%8d\n"
             putStrLn ""
-        t0 <- saturateTerm 1 env1 env2 t0'
-        let ctx' = Context env1 env2 (flowTbl ctx)
+        t0 <- saturateTerm env1 env2 t0'
+        let ctx' = Context env1 env2 (flowTbl ctx) (symEnv ctx:symHist ctx)
         case t0 of
-            LFail _ -> return (False,ctx')
+            LFail _ -> do
+                liftIO $ putStrLn "extracting a counterexample"
+                ws <- extractCE p env1 env2 (symHist ctx')
+                liftIO $ print ws
+                return (False,ctx')
             _ | env2 == symEnv ctx -> return (True,ctx')
               | otherwise          -> loop (i+1) ctx'
 

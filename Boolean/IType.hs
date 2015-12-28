@@ -286,6 +286,10 @@ unfoldV (LNil _) = []
 unfoldV (LCons _ vx vs) = vx : unfoldV vs
 unfoldV (LFail _) = undefined
 
+unfoldFun :: VFunType -> [(VType,TType)]
+unfoldFun (VNil _) = []
+unfoldFun (VAnd _ vx vt vs) = (vx,vt) : unfoldFun vs
+
 applyType :: (MonadReader Factory m, MonadIO m, Functor m) => TTypeList -> TTypeList -> m TTypeList
 applyType t1@(LNil _) _ = return t1
 applyType t1@(LFail _) _ = return t1
