@@ -87,7 +87,7 @@ convertE cts env sigma _e = case _e of
         B.f_let x' <$> convertE cts env ty_v ev <*> convertE cts (addE env (name x) ty_v) sigma e
     Assume _ v e ->
         B.f_assume <$> convertP cts env v <*> convertE (addC cts v) env sigma e
-    Lambda _ x e -> 
+    Lambda _ _ x e -> 
         let PFun _ ty_x (y,ty_r) = sigma in
         let x' = B.Symbol (toSort ty_x) (name x) in
         B.Lam x' <$> convertE cts (addE env (name x) ty_x) (substPType y (Var x) ty_r) e

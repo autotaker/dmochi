@@ -29,8 +29,8 @@ pprintE (Let _ x' lv e) =
 pprintE (Assume _ v e) = 
     text "assume" <+> pprintV 0 v <> semi $+$
     pprintE e
-pprintE (Lambda _ x e) =
-    text "fun" <+> text (name x) <+> text "->" $+$ 
+pprintE (Lambda _ i x e) =
+    text "fun" <+> text ("(*" ++ show i ++ "*)") <+> text (name x) <+> text "->" $+$ 
     nest 4 (pprintE e)
 pprintE (Fail _) = text "Fail"
 pprintE (Branch _ e1 e2) =

@@ -22,6 +22,7 @@ import Text.Parsec(ParseError)
 import Data.Time
 import Text.PrettyPrint
 import Id
+import ML.Refine
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
@@ -108,6 +109,13 @@ doit = do
     liftIO $ print r
     t_model_checking_end <- liftIO $ getCurrentTime
 
+    -- refinement
+    case r of
+        Just trace -> do
+            (constraints,callinfo) <- symbolicExec typedProgram trace
+            liftIO $ print constraints
+            liftIO $ print callinfo
+        _ -> return ()
     let t_input          = f $ diffUTCTime t_input_end t_input_begin
         t_parsing        = f $ diffUTCTime t_parsing_end t_parsing_begin
         t_type_checking  = f $ diffUTCTime t_type_checking_end t_type_checking_begin

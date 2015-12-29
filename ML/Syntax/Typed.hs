@@ -4,8 +4,17 @@ import Text.PrettyPrint
 import Control.Monad
 --import Control.Applicative
 import Control.Monad.State
+import Data.Function(on)
 
-data Id = Id { _type :: Type, name :: String } deriving(Eq)
+data Id = Id { _type :: Type, name :: String } deriving(Show)
+
+instance Eq Id where
+    (==) = (==) `on` name
+
+instance Ord Id where
+    compare = compare `on` name
+
+
 type Predicate = (Id,Value)
 
 data Program = Program { functions :: [(Id,PType,Exp)] 
@@ -15,7 +24,7 @@ data Type = TInt | TBool | TPair Type Type | TFun Type Type deriving(Eq)
 data Exp = Value Value
          | Let Type Id LetValue Exp
          | Assume Type Value Exp
-         | Lambda Type Id Exp
+         | Lambda Type !Int {- Id -} Id Exp
          | Fail Type
          | Branch Type Exp Exp
 
@@ -24,7 +33,6 @@ data Value = Var Id
            | CBool Bool
            | Pair Value Value
            | Op Op deriving(Eq)
-
 
 data Op = OpAdd Value Value
         | OpSub Value Value
@@ -56,7 +64,7 @@ instance HasType Exp where
     getType (Value v) = getType v
     getType (Let a _ _ _) = a
     getType (Assume a _ _) = a
-    getType (Lambda a _ _) = a
+    getType (Lambda a _ _ _) = a
     getType (Fail a) = a
     getType (Branch a _ _) = a
 
@@ -120,7 +128,7 @@ size (Program fs t) = sum [ sizeE e + 1 | (_,_,e) <- fs ] + sizeE t
 sizeE :: Exp -> Int
 sizeE (Value v)      = sizeV v
 sizeE (Let _ _ lv e)  = 1 + sizeLV lv + sizeE e
-sizeE (Lambda _ _ e) = 1 + sizeE e
+sizeE (Lambda _ _ _ e) = 1 + sizeE e
 sizeE (Assume _ v e) = 1 + sizeV v + sizeE e
 sizeE (Fail _)       = 1
 sizeE (Branch _ e1 e2) = 1 + sizeE e1 + sizeE e2
@@ -166,7 +174,7 @@ gatherTypesE (Let _ _ lv e) = do
         _ -> return ()
     gatherTypesE e
 gatherTypesE (Assume _ _ e) = gatherTypesE e
-gatherTypesE (Lambda _ _ e) = gatherTypesE e
+gatherTypesE (Lambda _ _ _ e) = gatherTypesE e
 gatherTypesE (Fail _) = return ()
 gatherTypesE (Branch _ e1 e2) = gatherTypesE e1 >> gatherTypesE e2
 

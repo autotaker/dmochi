@@ -33,7 +33,7 @@ test path input = do
     return $ saturateTerm (flowEnv c) (symEnv c) (mainTerm p)
 -}
 
-test :: MonadIO m => FilePath -> Program -> ExceptT String m Bool
+test :: MonadIO m => FilePath -> Program -> ExceptT String m (Maybe [Bool])
 test path input = do
     (p,syms) <- ExceptT $ return $ alphaConversion input
     liftIO $ mapM_ print (definitions p)

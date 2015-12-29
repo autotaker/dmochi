@@ -8,6 +8,7 @@ import qualified ML.Syntax.UnTyped as U
 import Text.PrettyPrint
 import ML.PrettyPrint.Typed 
 import Debug.Trace
+import Id
 instance Show TypeError where
     show (UndefinedVariable s) = "UndefinedVariables: "++ s
     show (TypeMisMatch s t1 t2)   = "TypeMisMatch: " ++ show t1 ++ " should be " ++ show t2 ++ ". context :" ++ s
@@ -20,7 +21,7 @@ data TypeError = UndefinedVariable String
                | TypeMisUse   Type [Type]
                | OtherError String
 
-fromUnTyped :: (Applicative m,MonadError TypeError m) => U.Program -> m Program
+fromUnTyped :: (Applicative m,MonadError TypeError m, MonadId m) => U.Program -> m Program
 fromUnTyped (U.Program fs t) = do
     fs' <- mapM (\(x,p,e) -> (,,) x <$> convertP p <*> pure e) fs
     let tenv = M.fromList [ (x,getType p) | (x,p,_) <- fs' ]
@@ -70,7 +71,7 @@ convertP = go M.empty where
         f' <- go (M.insert x ty env) f
         return $ PFun (TFun ty (getType f')) p' (Id ty x,f')
 
-convertE :: (Applicative m,MonadError TypeError m) => Env -> Type -> U.Exp -> m Exp
+convertE :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> Type -> U.Exp -> m Exp
 convertE env ty _e = case _e of
     U.Value v -> do
         v' <- convertV env v
@@ -87,12 +88,13 @@ convertE env ty _e = case _e of
     U.Lambda x e -> do
         case ty of
             TFun t1 t2 -> do
-                Lambda ty (Id t1 x) <$> convertE (M.insert x t1 env) t2 e
+                i <- freshInt
+                Lambda ty i (Id t1 x) <$> convertE (M.insert x t1 env) t2 e
             _ -> throwError $ OtherError "Expecting function"
     U.Fail -> pure $ Fail ty
     U.Branch e1 e2 -> Branch ty <$> convertE env ty e1 <*> convertE env ty e2
 
-convertLV :: (Applicative m,MonadError TypeError m) => Env -> U.LetValue -> m LetValue
+convertLV :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> U.LetValue -> m LetValue
 convertLV env lv = case lv of
     U.LValue v -> LValue <$> convertV env v
     U.LApp x vs -> do

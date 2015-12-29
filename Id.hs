@@ -7,6 +7,10 @@ import Control.Monad.Except
 
 class Monad m => MonadId m where
     freshId :: String -> m String
+    freshId s = do
+        i <- freshInt
+        return $ s ++ "_" ++ show i
+    freshInt :: m Int
 
 newtype FreshT m a = FreshT { unFreshT :: StateT Int m a }
 
@@ -39,16 +43,16 @@ instance MonadIO m => MonadIO (FreshT m) where
     liftIO = lift . liftIO
 
 instance Monad m => MonadId (FreshT m) where
-    freshId x = FreshT $ do
+    freshInt = FreshT $ do
         i <- get
         put (i+1)
-        return $ x ++ "_" ++ show i
+        return i
 
 instance MonadId m => MonadId (ReaderT r m) where
-    freshId = lift . freshId
+    freshInt = lift freshInt
 
 instance MonadId m => MonadId (ExceptT e m) where
-    freshId = lift . freshId
+    freshInt = lift freshInt
 
 instance MonadId m => MonadId (StateT s m) where
-    freshId = lift . freshId
+    freshInt = lift freshInt

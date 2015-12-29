@@ -275,7 +275,7 @@ extractCE prog flowEnv genv hist =
     execWriterT $ evalFail env genv (mainTerm prog)
     where
     evalFail :: Env -> M.Map Symbol VType -> Term () -> WriterT [Bool] (ReaderT Factory IO) ()
-    evalFail env tenv e = traceShow e $ case e of
+    evalFail env tenv e = {- traceShow e $ -} case e of
         T s es -> 
             let sub [] = error "extractCE: Tuple: there must be an term that fails"
                 sub (ei:es') = do
@@ -335,7 +335,7 @@ extractCE prog flowEnv genv hist =
                     evalFail (M.insert x v2 env') (M.insert x ty1' tenv') e0
         Fail _ _ -> return ()
     eval :: Env -> M.Map Symbol VType -> Term () -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
-    eval env tenv e ety = traceShow e $ trace ("type: "++ show ety) $ case e of
+    eval env tenv e ety = {- traceShow e $ trace ("type: "++ show ety) $ -} case e of
         V _ x -> return $ env M.! x
         C s b -> return $ VB b
         T s es -> 
@@ -393,7 +393,7 @@ extractCE prog flowEnv genv hist =
                 
 
 
-saturate :: Program -> FlowGraph -> IO (Bool,Context)
+saturate :: Program -> FlowGraph -> IO (Maybe [Bool],Context)
 saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flow) where
     t0' = assignId' (mainTerm p)
     ds' = map (second assignId') (definitions p)
@@ -428,7 +428,7 @@ saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flo
                 liftIO $ putStrLn "extracting a counterexample"
                 ws <- extractCE p env1 env2 (symHist ctx')
                 liftIO $ print ws
-                return (False,ctx')
-            _ | env2 == symEnv ctx -> return (True,ctx')
+                return (Just ws,ctx')
+            _ | env2 == symEnv ctx -> return (Nothing,ctx')
               | otherwise          -> loop (i+1) ctx'
 
