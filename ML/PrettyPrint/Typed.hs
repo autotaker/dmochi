@@ -33,8 +33,8 @@ pprintE (Lambda _ i x e) =
     text "fun" <+> text ("(*" ++ show i ++ "*)") <+> text (name x) <+> text "->" $+$ 
     nest 4 (pprintE e)
 pprintE (Fail _) = text "Fail"
-pprintE (Branch _ e1 e2) =
-    parens (pprintE e1) $+$ text "<>" $+$ parens (pprintE e2)
+pprintE (Branch _ i e1 e2) =
+    parens (pprintE e1) $+$ text "<>" <+> text ("(*" ++ show i ++ "*)") $+$ parens (pprintE e2)
 
 pprintV :: Int -> Value -> Doc
 pprintV _ (Var x) = text (name x)

@@ -92,7 +92,9 @@ convertE env ty _e = case _e of
                 Lambda ty i (Id t1 x) <$> convertE (M.insert x t1 env) t2 e
             _ -> throwError $ OtherError "Expecting function"
     U.Fail -> pure $ Fail ty
-    U.Branch e1 e2 -> Branch ty <$> convertE env ty e1 <*> convertE env ty e2
+    U.Branch e1 e2 -> do
+        i <- freshInt
+        Branch ty i <$> convertE env ty e1 <*> convertE env ty e2
 
 convertLV :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> U.LetValue -> m LetValue
 convertLV env lv = case lv of

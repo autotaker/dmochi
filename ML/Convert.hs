@@ -92,7 +92,7 @@ convertE cts env sigma _e = case _e of
         let x' = B.Symbol (toSort ty_x) (name x) in
         B.Lam x' <$> convertE cts (addE env (name x) ty_x) (substPType y (Var x) ty_r) e
     Fail _ -> return $ B.Fail (B.Symbol (toSort sigma) "")
-    Branch _ e1 e2 -> B.f_branch_label <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
+    Branch _ _ e1 e2 -> B.f_branch_label <$> convertE cts env sigma e1 <*> convertE cts env sigma e2
 
 convertV :: (MonadIO m, MonadId m,Applicative m) => Constraints -> Env -> PType -> Value -> m B.Term
 convertV cts env (PInt ps) v = do

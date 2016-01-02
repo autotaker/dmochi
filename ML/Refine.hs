@@ -8,17 +8,36 @@ import Control.Monad
 import Control.Monad.Writer
 import Control.Monad.State.Strict
 import qualified Data.IntMap as IM
+import Id
 
 type Trace = [Bool]
+newtype CallId = CallId { unCallId :: Int } deriving Show
+newtype ClosureId = ClosureId { unClosureId :: Int } deriving Show
+
 
 type Constraint = SValue -- must have the sort Bool
-data CallInfo = CallInfo { closureId :: Int   -- the ident of called closure
-                         , callId    :: Int   -- the closure is called at this Id
-                         , callHist  :: [Int] -- how the closure is generated }
+data CallInfo = CallInfo { calleeId :: ClosureId   -- 呼び出されたクロージャの識別子
+                         , callId   :: CallId   -- 関数呼び出しの識別子
                      } deriving Show
 
+-- クロージャ生成の情報
+data ClosureInfo = ClosureInfo { label :: Int -- 対応する関数定義のラベル
+                               , closureId :: ClosureId -- 生成されたクロージャの識別子
+                               } deriving Show
+-- 関数返り値の情報
+data ReturnInfo = ReturnInfo { rcallId :: CallId -- 関数呼び出しの識別子
+                             , retValue :: SValue -- 返り値
+                             } deriving Show
+
+-- 分岐情報
+data BranchInfo = BranchInfo { bcallId   :: CallId, 
+                               branchId  :: Int,
+                               direction :: Bool} deriving Show
+
+
 -- Symbolic Values
-data SValue = Int Integer
+data SValue = SVar Id
+            | Int Integer
             | Bool Bool
             | P SValue SValue
             | Add SValue SValue
@@ -32,17 +51,25 @@ data SValue = Int Integer
             | C Closure
             deriving Show
 
-data Closure = Cls Int [Int] {- history -} Env deriving Show
+data Closure = Cls Int {- Label -} ClosureId {- Ident -}  Env
+
+instance Show Closure where
+    show (Cls i x _) = "Closure " ++ show i ++ " " ++ show x
 type Env = M.Map Id SValue
 
-type M m a = StateT S (WriterT ([Constraint], [CallInfo]) m) a
-data S = S { counter :: !Int, cTrace :: !Trace }
+type Log = ([Constraint],[CallInfo],[ClosureInfo],[ReturnInfo],[BranchInfo])
 
-incr :: S -> S
-incr (S x y) = S (x+1) y
+type M m a = StateT S (WriterT Log m) a
+data S = S { callCounter :: !Int, clsCounter :: !Int, cTrace :: !Trace }
+
+incrCall :: S -> S
+incrCall (S x y z) = S (x+1) y z
+
+incrCls :: S -> S
+incrCls (S x y z) = S x (y+1) z
 
 pop :: S -> S
-pop (S x y) = S x (tail y)
+pop (S x y z) = S x y (tail z)
 
 closures :: Program -> [Exp]
 closures (Program ds t0) = (ds >>= (\(_,_,e) -> go e)) <|> go t0
@@ -52,28 +79,34 @@ closures (Program ds t0) = (ds >>= (\(_,_,e) -> go e)) <|> go t0
     go (Assume _ _ e) = go e
     go e@(Lambda _ _ _ e1) = pure e <|> go e1
     go (Fail _) = empty
-    go (Branch _ e1 e2) = go e1 <|> go e2
+    go (Branch _ _ e1 e2) = go e1 <|> go e2
     sub (LValue _) = empty
     sub (LApp _ _ _) = empty
     sub (LExp _ e) = go e
 
-symbolicExec :: forall m. (Monad m) => Program -> Trace -> m ([Constraint], [CallInfo])
-symbolicExec prog trace = execWriterT (evalStateT (evalFail genv (mainTerm prog)) (S 0 trace)) 
+symbolicExec :: forall m. (MonadFix m) => Program -> Trace -> m Log
+symbolicExec prog trace = execWriterT (evalStateT (genEnv >>= (\genv -> evalFail genv (mainTerm prog))) (S 1 0 trace)) 
     where
     clsTbl :: IM.IntMap Exp
     clsTbl = IM.fromList $ map (\t@(Lambda _ i _ _) -> (i,t)) $ closures prog
-    genv = M.fromList [ (f, C (Cls i [] genv)) | (f, _, Lambda _ i _ _) <- functions prog ]
+    genEnv = mfix $ \genv -> do
+        es <- forM (functions prog) $ \(f, _, Lambda _ i _ _) -> do
+            c <- genClosure i genv
+            return (f,C c)
+        return $ M.fromList es
+    n = length (functions prog)
     evalFail :: Env -> Exp -> M m ()
     evalFail env = \case
         Let _ x lv e -> do
-            r <- evalLV [] env lv
+            r <- evalLV (CallId 0) env lv
             evalFail (M.insert x r env) e
         Assume _ v e -> do
             constrain (evalV env v)
             evalFail env e
         Fail _ -> return ()
-        Branch _ e1 e2 -> do
+        Branch _ i e1 e2 -> do
             b <- consume
+            branch (BranchInfo (CallId 0) i b)
             if b then
                 evalFail env e1
             else
@@ -96,45 +129,79 @@ symbolicExec prog trace = execWriterT (evalStateT (evalFail genv (mainTerm prog)
             OpSnd _ v -> 
                 let P _ sv = evalV env v in sv
             OpNot v1 -> Not (evalV env v1)
-    evalLV :: [Int] -> Env -> LetValue -> M m SValue
-    evalLV hist env = \case 
+    evalLV :: CallId -> Env -> LetValue -> M m SValue
+    evalLV callSite env = \case 
         LValue v -> pure $ evalV env v
         LApp _ f vs -> 
             let svs = map (evalV env) vs in
-            foldM (\(C (Cls i hist' env')) sv -> do
+            foldM (\(C (Cls i clsId env')) sv -> do
                 let Lambda _ _ x e0 = clsTbl IM.! i
-                j <- newCall i hist
-                eval (j:hist') (M.insert x sv env') e0) (env M.! f) svs
-        LExp _ e -> eval hist env e
-    eval :: [Int] -> Env -> Exp -> M m SValue
-    eval hist env _e = case _e of
-        Value v -> pure (evalV env v)
+                j <- newCall clsId
+                eval True j (M.insert x sv env') e0) (env M.! f) svs
+        LExp _ e -> eval False callSite env e
+    eval :: Bool -> CallId -> Env -> Exp -> M m SValue
+    eval isTail callSite env _e = case _e of
+        Value v -> do
+            let sv = evalV env v 
+            when isTail (retval (ReturnInfo callSite sv))
+            return sv
+        Lambda _ i _ _ -> do
+            sv <- C <$> genClosure i env
+            when isTail (retval (ReturnInfo callSite sv))
+            return sv
         Let _ x lv e -> do
-            r <- evalLV hist env lv
-            eval hist (M.insert x r env) e
+            r <- evalLV callSite env lv
+            eval isTail callSite (M.insert x r env) e
         Assume _ v e -> do
             constrain (evalV env v)
-            eval hist env e
-        Lambda _ i x e0 -> do
-            pure $ C (Cls i hist env)
-        Branch _ e1 e2 -> do
+            eval isTail callSite env e
+        Branch _ i e1 e2 -> do
             b <- consume
+            branch (BranchInfo callSite i b)
             if b then
-                eval hist env e1
+                eval isTail callSite env e1
             else
-                eval hist env e2
+                eval isTail callSite env e2
 
     constrain :: Constraint -> M m ()
-    constrain c = tell ([c],[])
-    newCall :: Int -> [Int] -> M m Int
-    newCall i hist = do
-        j <- counter <$> get
-        modify incr
-        tell ([],[CallInfo i j hist])
-        return j
+    constrain c = tell ([c],[],[],[],[])
+    branch :: BranchInfo -> M m ()
+    branch c = tell ([],[],[],[],[c])
+    retval :: ReturnInfo -> M m ()
+    retval c = tell ([],[],[],[c],[])
+    newCall :: ClosureId -> M m CallId
+    newCall clsId = do
+        j <- callCounter <$> get
+        modify incrCall
+        tell ([],[CallInfo clsId (CallId j)],[],[],[])
+        return (CallId j)
+    genClosure :: Int -> Env -> M m Closure
+    genClosure label env = do
+        j <- clsCounter <$> get
+        modify incrCls
+        tell ([],[],[ClosureInfo label (ClosureId j)],[],[])
+        return (Cls label (ClosureId j) env)
     consume :: M m Bool
     consume = do
         b <- head . cTrace <$> get
         modify pop
         return b
+-- Refinement types
+data RType = RBool | RFun !(IM.IntMap RFunAssoc) | RPair !RType !RType
+data RFunAssoc = RFunAssoc { argName :: !Id
+                           , argType :: !RType
+                           , preCond :: !LFormula
+                           , resType :: !RPostType }
+data RPostType = RPostType { posName :: !Id
+                           , posType :: !RType
+                           , posCond :: !LFormula }
+data LFormula = Formula [Id] | Subst ![(Id,SValue)] !LFormula
+
+{-
+genFunType :: (MonadId m) -> [CallInfo] -> [Int] -> Int -> Type -> m RType
+genFunType calls hist cId (TFun targ tres) = undefined
+    where
+        next = [  | info <- calls, closureId info == cId, callHist info == hist ]
+
+-}
 

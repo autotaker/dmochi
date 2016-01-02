@@ -112,9 +112,12 @@ doit = do
     -- refinement
     case r of
         Just trace -> do
-            (constraints,callinfo) <- symbolicExec typedProgram trace
+            (constraints,callinfo,closureInfo,returnInfo,branchInfo) <- symbolicExec typedProgram trace
             liftIO $ print constraints
             liftIO $ print callinfo
+            liftIO $ print closureInfo
+            liftIO $ print returnInfo
+            liftIO $ print branchInfo
         _ -> return ()
     let t_input          = f $ diffUTCTime t_input_end t_input_begin
         t_parsing        = f $ diffUTCTime t_parsing_end t_parsing_begin

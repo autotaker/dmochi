@@ -42,6 +42,9 @@ instance MonadTrans FreshT where
 instance MonadIO m => MonadIO (FreshT m) where
     liftIO = lift . liftIO
 
+instance MonadFix m => MonadFix (FreshT m) where
+    mfix f = FreshT (mfix (unFreshT .f))
+
 instance Monad m => MonadId (FreshT m) where
     freshInt = FreshT $ do
         i <- get
@@ -56,3 +59,4 @@ instance MonadId m => MonadId (ExceptT e m) where
 
 instance MonadId m => MonadId (StateT s m) where
     freshInt = lift freshInt
+
