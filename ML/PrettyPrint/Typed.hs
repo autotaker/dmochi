@@ -17,10 +17,10 @@ pprintE (Let _ x' lv e) =
                        <+> equals 
                        <+> pprintV 0 v <+> text "in" $+$ 
             pprintE e
-        LApp ty f vs ->
+        LApp ty i f v ->
             text "let" <+> text x <+> colon <+> pprintT 0 ty
-                       <+> equals <+> 
-                text (name f) <+> hsep (map (pprintV 9) vs) <+> text "in" $+$
+                       <+> equals <+> text ("(*" ++ show i ++ "*)") <+>
+                text (name f) <+> hsep (map (pprintV 9) [v]) <+> text "in" $+$
             pprintE e
         LExp ptyp ev ->
             text "let" <+> text x <+> colon <+> pprintP 0 ptyp <+> equals $+$

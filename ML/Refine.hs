@@ -11,26 +11,29 @@ import qualified Data.IntMap as IM
 import Id
 
 type Trace = [Bool]
-newtype CallId = CallId { unCallId :: Int } deriving Show
-newtype ClosureId = ClosureId { unClosureId :: Int } deriving Show
-
+newtype CallId = CallId { unCallId :: Int } deriving (Show,Eq,Ord)
+newtype ClosureId = ClosureId { unClosureId :: Int } deriving (Show,Eq,Ord)
 
 type Constraint = SValue -- must have the sort Bool
 data CallInfo = CallInfo { calleeId :: ClosureId   -- 呼び出されたクロージャの識別子
+                         , callLabel :: Int     -- 対応する関数呼び出しのラベル
+                         , pcallId  :: CallId   -- 親関数呼び出しの識別子
                          , callId   :: CallId   -- 関数呼び出しの識別子
                      } deriving Show
 
 -- クロージャ生成の情報
 data ClosureInfo = ClosureInfo { label :: Int -- 対応する関数定義のラベル
                                , closureId :: ClosureId -- 生成されたクロージャの識別子
+                               , cCallId :: CallId -- クロージャ生成時の関数呼び出し識別子
                                } deriving Show
 -- 関数返り値の情報
 data ReturnInfo = ReturnInfo { rcallId :: CallId -- 関数呼び出しの識別子
+                             , argValue :: SValue -- 引数
                              , retValue :: SValue -- 返り値
                              } deriving Show
 
 -- 分岐情報
-data BranchInfo = BranchInfo { bcallId   :: CallId, 
+data BranchInfo = BranchInfo { bCallId   :: CallId, 
                                branchId  :: Int,
                                direction :: Bool} deriving Show
 
@@ -81,17 +84,17 @@ closures (Program ds t0) = (ds >>= (\(_,_,e) -> go e)) <|> go t0
     go (Fail _) = empty
     go (Branch _ _ e1 e2) = go e1 <|> go e2
     sub (LValue _) = empty
-    sub (LApp _ _ _) = empty
+    sub (LApp _ _ _ _) = empty
     sub (LExp _ e) = go e
 
-symbolicExec :: forall m. (MonadFix m) => Program -> Trace -> m Log
-symbolicExec prog trace = execWriterT (evalStateT (genEnv >>= (\genv -> evalFail genv (mainTerm prog))) (S 1 0 trace)) 
+symbolicExec :: forall m. (MonadFix m) => Program -> Trace -> m (M.Map Id SValue, Log)
+symbolicExec prog trace = runWriterT (evalStateT (genEnv >>= (\genv -> evalFail genv (mainTerm prog) >> return genv)) (S 1 0 trace)) 
     where
     clsTbl :: IM.IntMap Exp
     clsTbl = IM.fromList $ map (\t@(Lambda _ i _ _) -> (i,t)) $ closures prog
     genEnv = mfix $ \genv -> do
         es <- forM (functions prog) $ \(f, _, Lambda _ i _ _) -> do
-            c <- genClosure i genv
+            c <- genClosure (CallId 0) i genv
             return (f,C c)
         return $ M.fromList es
     n = length (functions prog)
@@ -132,36 +135,36 @@ symbolicExec prog trace = execWriterT (evalStateT (genEnv >>= (\genv -> evalFail
     evalLV :: CallId -> Env -> LetValue -> M m SValue
     evalLV callSite env = \case 
         LValue v -> pure $ evalV env v
-        LApp _ f vs -> 
-            let svs = map (evalV env) vs in
-            foldM (\(C (Cls i clsId env')) sv -> do
-                let Lambda _ _ x e0 = clsTbl IM.! i
-                j <- newCall clsId
-                eval True j (M.insert x sv env') e0) (env M.! f) svs
-        LExp _ e -> eval False callSite env e
-    eval :: Bool -> CallId -> Env -> Exp -> M m SValue
-    eval isTail callSite env _e = case _e of
+        LApp _ label f v -> do
+            let sv = evalV env v
+            let C (Cls i clsId env') = env M.! f
+            let Lambda _ _ x e0 = clsTbl IM.! i
+            j <- newCall label callSite clsId
+            eval True sv j (M.insert x sv env') e0
+        LExp _ e -> eval False (Int 0) callSite env e
+    eval :: Bool -> SValue -> CallId -> Env -> Exp -> M m SValue
+    eval isTail arg callSite env _e = case _e of
         Value v -> do
             let sv = evalV env v 
-            when isTail (retval (ReturnInfo callSite sv))
+            when isTail (retval (ReturnInfo callSite arg sv))
             return sv
         Lambda _ i _ _ -> do
-            sv <- C <$> genClosure i env
-            when isTail (retval (ReturnInfo callSite sv))
+            sv <- C <$> genClosure callSite i env
+            when isTail (retval (ReturnInfo callSite arg sv))
             return sv
         Let _ x lv e -> do
             r <- evalLV callSite env lv
-            eval isTail callSite (M.insert x r env) e
+            eval isTail arg callSite (M.insert x r env) e
         Assume _ v e -> do
             constrain (evalV env v)
-            eval isTail callSite env e
+            eval isTail arg callSite env e
         Branch _ i e1 e2 -> do
             b <- consume
             branch (BranchInfo callSite i b)
             if b then
-                eval isTail callSite env e1
+                eval isTail arg callSite env e1
             else
-                eval isTail callSite env e2
+                eval isTail arg callSite env e2
 
     constrain :: Constraint -> M m ()
     constrain c = tell ([c],[],[],[],[])
@@ -169,17 +172,17 @@ symbolicExec prog trace = execWriterT (evalStateT (genEnv >>= (\genv -> evalFail
     branch c = tell ([],[],[],[],[c])
     retval :: ReturnInfo -> M m ()
     retval c = tell ([],[],[],[c],[])
-    newCall :: ClosureId -> M m CallId
-    newCall clsId = do
+    newCall :: Int -> CallId -> ClosureId -> M m CallId
+    newCall i pcall clsId = do
         j <- callCounter <$> get
         modify incrCall
-        tell ([],[CallInfo clsId (CallId j)],[],[],[])
+        tell ([],[CallInfo clsId i pcall (CallId j)],[],[],[])
         return (CallId j)
-    genClosure :: Int -> Env -> M m Closure
-    genClosure label env = do
+    genClosure :: CallId -> Int -> Env -> M m Closure
+    genClosure callSite label env = do
         j <- clsCounter <$> get
         modify incrCls
-        tell ([],[],[ClosureInfo label (ClosureId j)],[],[])
+        tell ([],[],[ClosureInfo label (ClosureId j) callSite],[],[])
         return (Cls label (ClosureId j) env)
     consume :: M m Bool
     consume = do
@@ -187,21 +190,190 @@ symbolicExec prog trace = execWriterT (evalStateT (genEnv >>= (\genv -> evalFail
         modify pop
         return b
 -- Refinement types
-data RType = RBool | RFun !(IM.IntMap RFunAssoc) | RPair !RType !RType
+data RType = RBool | RInt | RFun !(IM.IntMap RFunAssoc) | RPair !RType !RType deriving(Show)
 data RFunAssoc = RFunAssoc { argName :: !Id
                            , argType :: !RType
                            , preCond :: !LFormula
-                           , resType :: !RPostType }
+                           , resType :: !RPostType } deriving(Show)
 data RPostType = RPostType { posName :: !Id
                            , posType :: !RType
-                           , posCond :: !LFormula }
-data LFormula = Formula [Id] | Subst ![(Id,SValue)] !LFormula
+                           , posCond :: !LFormula } deriving(Show)
+data LFormula = Formula Int [Id] | Subst ![(Id,SValue)] !LFormula deriving(Show)
 
-{-
-genFunType :: (MonadId m) -> [CallInfo] -> [Int] -> Int -> Type -> m RType
-genFunType calls hist cId (TFun targ tres) = undefined
-    where
-        next = [  | info <- calls, closureId info == cId, callHist info == hist ]
+genRType :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> IM.IntMap Exp -> [Id] -> SValue -> m RType
+genRType calls closures returns clsTbl = gen where
+    rtnTbl = IM.fromList [ (unCallId (rcallId info),info) | info <- returns ]
+    gen _ (SVar x) = case getType x of
+        TInt -> pure RInt
+        TBool -> pure RBool
+    gen _ (Int _) = pure RInt
+    gen _ (Bool _) = pure RBool
+    gen env (P v1 v2) = RPair <$> gen env v1 <*> gen env v2
+    gen _ (Add _ _) = pure RInt
+    gen _ (Sub _ _) = pure RInt
+    gen _ (Eq _ _) = pure RBool
+    gen _ (Lt _ _) = pure RBool
+    gen _ (And _ _) = pure RBool
+    gen _ (Or _ _) = pure RBool
+    gen _ (Not _) = pure RBool
+    gen env (C (Cls l i _)) = do
+        let cs = [ callId info | info <- calls, calleeId info == i ] -- TODO Improve Impl
+            e@(Lambda ty _ x _) = clsTbl IM.! l
+            TFun ty_arg ty_ret = ty
+        as <- forM cs $ \j -> do
+            let ReturnInfo _ arg_v v = rtnTbl IM.! (unCallId j)
+            xj <- Id ty_arg <$> freshId (name x)
+            arg_ty <- gen env arg_v
+            pty <- gen (xj:env) v
+            rj <- Id ty_ret <$> freshId "r"
+            p0 <- freshInt
+            p1 <- freshInt
+            let posTy = RPostType rj pty (Formula p0 (rj:xj:env))
+            return $ (unCallId j,RFunAssoc xj arg_ty (Formula p1 (xj:env)) posTy)
+        return $ RFun $ IM.fromList as
 
--}
+evalRType :: M.Map Id (RType,SValue) -> Value -> (RType,SValue)
+evalRType env = go where
+    go (Var x) = env M.! x
+    go (CInt i) = (RInt, Int i)
+    go (CBool b) = (RBool, Bool b)
+    go (Pair v1 v2) = 
+        let (r1,sv1) = go v1 
+            (r2,sv2) = go v2 in
+        (RPair r1 r2, P sv1 sv2)
+    go (Op (OpAdd v1 v2)) = 
+        let (r1,sv1) = go v1 
+            (r2,sv2) = go v2 in
+        (RInt,Add sv1 sv2)
+    go (Op (OpSub v1 v2)) = 
+        let (r1,sv1) = go v1 
+            (r2,sv2) = go v2 in
+        (RInt,Sub sv1 sv2)
+    go (Op (OpEq  v1 v2)) = 
+        let (r1,sv1) = go v1 
+            (r2,sv2) = go v2 in
+        (RBool,Eq sv1 sv2)
+    go (Op (OpLt  v1 v2)) = 
+        let (r1,sv1) = go v1 
+            (r2,sv2) = go v2 in
+        (RBool,Lt sv1 sv2)
+    go (Op (OpLte  v1 v2)) = 
+        let (r1,sv1) = go v1 
+            (r2,sv2) = go v2 in
+        (RBool,Lte sv1 sv2)
+    go (Op (OpAnd  v1 v2)) = 
+        let (r1,sv1) = go v1 
+            (r2,sv2) = go v2 in
+        (RBool,And sv1 sv2)
+    go (Op (OpOr  v1 v2)) = 
+        let (r1,sv1) = go v1 
+            (r2,sv2) = go v2 in
+        (RBool,Or sv1 sv2)
+    go (Op (OpNot v)) = 
+        let (r,sv) = go v in (RBool,Not sv)
+    go (Op (OpFst _ v)) = let (RPair a _,P sv _) = go v in (a,sv)
+    go (Op (OpSnd _ v)) = let (RPair _ b,P _ sv) = go v in (b,sv)
+
+decompose :: Id -> SValue
+decompose x = case getType x of
+    TInt -> SVar x
+    TBool -> SVar x
+    TPair t1 t2 -> P (decompose (Id t1 (name x ++".fst")))
+                     (decompose (Id t2 (name x ++".snd")))
+    TFun _ _ -> SVar x
+
+refine :: forall m.(MonadFix m, MonadId m, MonadIO m) => Program -> Trace -> m ()
+refine prog trace = do
+    let clsTbl = IM.fromList $ map (\t@(Lambda _ i _ _) -> (i,t)) $ closures prog
+    (genv, (consts,calls,closures,returns,branches)) <- symbolicExec prog trace
+    liftIO $ print consts
+    liftIO $ print calls
+    liftIO $ print closures
+    liftIO $ print returns
+    liftIO $ print branches
+    let gen = genRType calls closures returns clsTbl
+    let callTbl :: M.Map (CallId,Int) CallId
+        callTbl = M.fromList [ ((pcallId info,callLabel info),callId info)| info <- calls ]
+        closureMap :: M.Map (CallId,Int) ClosureId
+        closureMap = M.fromList [ ((cCallId info,label info),closureId info)| info <- closures ]
+        branchMap :: M.Map (CallId,Int) Bool
+        branchMap = M.fromList [ ((bCallId info,branchId info),direction info) | info <- branches ]
+    genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,v) -> do
+        ty <- gen [] v
+        liftIO $ print f
+        liftIO $ print ty
+        return (f,(ty,decompose f))
+    let check :: M.Map Id (RType,SValue) -> [Either SValue LFormula] -> CallId -> Exp -> RPostType -> m ()
+        check env cs callSite _e tau = case _e of
+            Let _ x (LValue v) e -> do
+                let env' = M.insert x (evalRType env v) env
+                check env' cs callSite e tau
+            Let _ x (LApp _ i f v) e -> do
+                let (RFun fassoc,_) = env M.! f
+                    (ty_v,sv) = evalRType env v
+                    j = callTbl M.! (callSite,i)
+                    ty_f = fassoc IM.! unCallId j
+                    tau_j = resType ty_f
+                clause env cs (Subst [(argName ty_f,sv)] (preCond ty_f))
+                subType env cs ty_v (argType ty_f)
+                let x' = decompose x
+                    env' = M.insert x (posType tau_j,x') env
+                    cs' = Right (Subst [(posName tau_j,x')] (posCond tau_j)) : cs
+                check env' cs' callSite e tau
+            Let _ f (LExp _ (Lambda _ label x e0)) e -> do
+                let clsId = closureMap M.! (callSite,label)
+                theta@(RFun fassoc) <- gen (M.keys env) (C (Cls label clsId undefined))
+                forM_ (IM.assocs fassoc) $ \(j,ty_f) -> do
+                    let xj = argName ty_f
+                        ty_xj = argType ty_f
+                        env' = M.insert x (ty_xj,decompose xj) env
+                        cs' = Right (preCond ty_f) : cs
+                    check env' cs' (CallId j) e0 (resType ty_f)
+                let env' = M.insert f (theta,decompose f) env
+                check env' cs callSite e tau
+            Assume _ v e -> do
+                let (_,sv) = evalRType env v
+                let cs' = Left sv : cs
+                check env cs' callSite e tau
+            Branch _ label e1 e2 -> do
+                let b = branchMap M.! (callSite,label)
+                if b then
+                    check env cs callSite e1 tau
+                else
+                    check env cs callSite e2 tau
+            Value v -> do
+                let (rty,sv) = evalRType env v
+                clause env cs (Subst [(posName tau,sv)] (posCond tau))
+                subType env cs rty (posType tau)
+            Lambda _ label x e -> do
+                let clsId = closureMap M.! (callSite,label)
+                theta@(RFun fassoc) <- gen (M.keys env) (C (Cls label clsId undefined))
+                forM_ (IM.assocs fassoc) $ \(j,ty_f) -> do
+                    let xj = argName ty_f
+                        ty_xj = argType ty_f
+                        env' = M.insert x (ty_xj,decompose xj) env
+                        cs' = Right (preCond ty_f) : cs
+                    check env' cs' (CallId j) e (resType ty_f)
+                clause env cs (posCond tau) -- 返り値は関数型なので述語には出現しない。
+                subType env cs theta (posType tau)
+            Fail _ -> do
+                failClause env cs
+        clause env cs fml = liftIO $ do
+            putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
+        subType env cs ty1 ty2 = liftIO $ do
+            putStrLn $ "SubType: " ++ show env ++ ";" ++ show cs ++ "|-" ++ show ty1 ++ "<:" ++ show ty2
+        failClause env cs = liftIO $ do
+            putStrLn $ "Clause: " ++ show cs ++ "==> False" 
+    forM (functions prog) $ \(f,_,e) -> do
+        i <- freshInt
+        check genv' [] (CallId 0) e (RPostType f (fst $ genv' M.! f) (Formula i []))
+    x <- freshId "main"
+    let ty = getType (mainTerm prog)
+    let rty = case ty of
+            TInt -> RInt
+            TBool -> RBool
+    i <- freshInt
+    check genv' [] (CallId 0) (mainTerm prog) (RPostType (Id ty x) rty (Formula i []))
+    return ()
+
 

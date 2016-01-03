@@ -75,10 +75,10 @@ convertE cts env sigma _e = case _e of
                 let x' = B.Symbol (toSort pty) (name x)
                 liftIO $ putStrLn $ name x ++ " PType = " ++ s
                 B.f_let x' t <$> convertE cts (addE env (name x) pty) sigma e
-    Let _ x (LApp _ f vs) e -> do
+    Let _ x (LApp _ _ f v) e -> do
         let Left ty_f = env ! name f
-        let (ty_vs,ty_r) = substPTypes ty_f vs
-        es <- zipWithM (convertE cts env) ty_vs (map Value vs)
+        let (ty_vs,ty_r) = substPTypes ty_f [v]
+        es <- zipWithM (convertE cts env) ty_vs (map Value [v])
         let x' = B.Symbol (toSort ty_r) (name x)
         let f' = B.Symbol (toSort ty_f) (name f)
         B.f_let x' (foldl B.f_app (B.V f') es) <$> convertE cts (addE env (name x) ty_r) sigma e

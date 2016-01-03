@@ -78,9 +78,10 @@ convertE env ty _e = case _e of
         v' `shouldBeValue` ty
         return $ Value v'
     U.Let x lv e -> do
-        lv' <- convertLV env lv
+        (lv',as) <- convertLV env lv
         let ty' = getType lv'
-        Let ty (Id ty' x) lv' <$> convertE (M.insert x ty' env) ty e
+        e' <- Let ty (Id ty' x) lv' <$> convertE (M.insert x ty' env) ty e
+        return $ foldr (\(x,vi) acc -> Let ty x vi acc) e' as
     U.Assume v e -> do
         v' <- convertV env v
         shouldBeValue  v' TBool
@@ -96,22 +97,34 @@ convertE env ty _e = case _e of
         i <- freshInt
         Branch ty i <$> convertE env ty e1 <*> convertE env ty e2
 
-convertLV :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> U.LetValue -> m LetValue
+convertLV :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> U.LetValue -> m (LetValue,[(Id,LetValue)])
 convertLV env lv = case lv of
-    U.LValue v -> LValue <$> convertV env v
-    U.LApp x vs -> do
+    U.LValue v -> do
+        v' <- convertV env v
+        return (LValue v',[])
+    U.LApp f vs -> do
         vs' <- mapM (convertV env) vs
-        case M.lookup x env of
+        case M.lookup f env of
             Just ty -> do
-                ty' <- foldM (\tf v -> 
+                (ty',xs) <- foldM (\(tf,acc) v -> 
                     case tf of
-                        TFun t1 t2 -> t2 <$ shouldBeValue v  t1
-                        _ -> throwError $ OtherError $ "Excepting function") ty vs'
-                return $ LApp ty' (Id ty x) vs'
-            Nothing -> throwError $ UndefinedVariable x
+                        TFun t1 t2 -> do
+                            shouldBeValue v  t1
+                            x <- Id t2 <$> freshId "tmp"
+                            return (t2,x:acc)
+                        _ -> throwError $ OtherError $ "Excepting function") (ty,[]) vs'
+                is <- replicateM (length vs) freshInt
+                let ys = reverse (tail xs)
+                    f' = Id ty f
+                    l = zipWith3 (\x y (i,v) -> (x,LApp (getType x) i y v)) ys (f':ys) (zip is vs')
+                    yn = last (f':ys)
+                    vn = last vs'
+                return $ (LApp ty' (last is) yn vn,l)
+            Nothing -> throwError $ UndefinedVariable f
     U.LExp ptyp e -> do
         ptyp' <- convertP ptyp
-        LExp ptyp' <$> convertE env (getType ptyp') e
+        lv <- LExp ptyp' <$> convertE env (getType ptyp') e
+        return (lv,[])
                 
 
 convertV :: (Applicative m,MonadError TypeError m) => Env -> U.Value -> m Value

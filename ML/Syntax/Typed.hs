@@ -46,7 +46,7 @@ data Op = OpAdd Value Value
         | OpNot Value  deriving(Eq)
 
 data LetValue = LValue Value
-              | LApp Type Id [Value]
+              | LApp Type !Int Id Value
               | LExp PType Exp 
 
 data PType = PInt  [Predicate]
@@ -70,7 +70,7 @@ instance HasType Exp where
 
 instance HasType LetValue where
     getType (LValue v) = getType v
-    getType (LApp ty _ _) = ty
+    getType (LApp ty _ _ _) = ty
     getType (LExp p _) = getType p
 
 instance HasType Value where
@@ -154,7 +154,7 @@ sizeV (Op op) = (case op of
 
 sizeLV :: LetValue -> Int
 sizeLV (LValue v) = sizeV v
-sizeLV (LApp _ _ vs) = foldr (\v y -> 1 + sizeV v + y) 1 $ vs
+sizeLV (LApp _ _ _ v) = foldr (\v y -> 1 + sizeV v + y) 1 [v]
 sizeLV (LExp _ e) = sizeE e
 
 pushType :: PType -> State [PType] ()
