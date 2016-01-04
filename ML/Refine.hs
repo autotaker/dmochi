@@ -217,7 +217,6 @@ symbolicExec prog trace = runWriterT (evalStateT (genEnv >>= (\genv -> evalFail 
 -- Refinement types
 data RType = RBool | RInt | RFun !(IM.IntMap RFunAssoc) | RPair !RType !RType deriving(Show)
 
-
 data RFunAssoc = RFunAssoc { argName :: !Id
                            , argType :: !RType
                            , preCond :: !LFormula
@@ -236,6 +235,8 @@ instance Show RPostType where
         "{" ++ name r ++ " : " ++ show rty ++ " | " ++ show cond ++ "}"
 
 instance Show LFormula where
+    show = pprintFormula
+    {-
     show (Formula i xs) =
         "P_" ++ show i ++ "(" ++
         concat (intersperse "," [ name x ++ " : " ++ show (getType x) | x <- xs ])
@@ -244,9 +245,11 @@ instance Show LFormula where
         "[" ++ 
             concat (intersperse "," [ show sv ++ "/" ++ name x  | (x,sv) <- theta ])
         ++ "]" ++ show fml
+        -}
 
 pprintFormula :: LFormula -> String
 pprintFormula x = go M.empty x "" where
+    go env (Formula i []) = showString "P_" . shows i . showString "()"
     go env (Formula i xs) =
         showString "P_" . shows i . showChar '(' .
         foldr1 (\a b -> a . showChar ',' . b) (map (\x ->
@@ -257,10 +260,9 @@ pprintFormula x = go M.empty x "" where
     go env (Subst theta fml) =
         let env' = foldr (\(x,sv) -> M.insert x sv) env theta in
         go env' fml
-        
 
 genRType :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> IM.IntMap Exp -> [Id] -> SValue -> m RType
-genRType calls closures returns clsTbl = gen where
+genRType calls closures returns clsTbl = gen . filter (isBase) where
     rtnTbl = IM.fromList [ (unCallId (rcallId info),info) | info <- returns ]
     gen _ (SVar x) = case getType x of
         TInt -> pure RInt
@@ -287,9 +289,12 @@ genRType calls closures returns clsTbl = gen where
             rj <- Id ty_ret <$> freshId "r"
             p0 <- freshInt
             p1 <- freshInt
-            let posTy = RPostType rj pty (Formula p0 (rj:xj:env))
-            return $ (unCallId j,RFunAssoc xj arg_ty (Formula p1 (xj:env)) posTy)
+            let posTy = RPostType rj pty (Formula p0 ([rj | isBase rj] ++ [xj | isBase xj] ++ env))
+            return $ (unCallId j,RFunAssoc xj arg_ty (Formula p1 ([xj | isBase xj]++env)) posTy)
         return $ RFun $ IM.fromList as
+    isBase x = case getType x of 
+        (TFun _ _) -> False
+        _ -> True
 
 evalRType :: M.Map Id (RType,SValue) -> Value -> (RType,SValue)
 evalRType env = go where
@@ -419,8 +424,8 @@ refine prog trace = do
                 failClause env cs
         clause env cs fml = liftIO $ do
             putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
-        subType env cs ty1 ty2 = liftIO $ do
-            putStrLn $ "SubType: " ++ show env ++ ";" ++ show cs ++ "|-" ++ show ty1 ++ "<:" ++ show ty2
+        subType _ cs ty1 ty2 = liftIO $ do
+            putStrLn $ "SubType: " ++ show cs ++ "|-" ++ show ty1 ++ "<:" ++ show ty2
         failClause env cs = liftIO $ do
             putStrLn $ "Clause: " ++ show cs ++ "==> False" 
     forM (functions prog) $ \(f,_,e) -> do
