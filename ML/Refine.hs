@@ -9,6 +9,7 @@ import Control.Monad.Writer
 import Control.Monad.State.Strict
 import qualified Data.IntMap as IM
 import Id
+import Data.List(intersperse)
 
 type Trace = [Bool]
 newtype CallId = CallId { unCallId :: Int } deriving (Show,Eq,Ord)
@@ -52,8 +53,32 @@ data SValue = SVar Id
             | Or SValue SValue
             | Not SValue
             | C Closure
-            deriving Show
 
+instance Show SValue where
+    showsPrec d (SVar x) = 
+        showParen (d >= 3) $ showString (name x) . showString " : " . shows (getType x)
+    showsPrec _ (Int i) = shows i
+    showsPrec _ (Bool b) = shows b
+    showsPrec _ (P v1 v2) = 
+        showString "(" .  shows v1 . showString ", " . shows v2 . showString ")"
+    showsPrec d (Add v1 v2) =
+        showParen (d >= 6) $ (showsPrec 6 v1) . (showString " + ") . (showsPrec 6 v2)
+    showsPrec d (Sub v1 v2) = 
+        showParen (d >= 6) $ (showsPrec 6 v1) . (showString " - ") . (showsPrec 6 v2)
+    showsPrec d (Eq v1 v2) = 
+        showParen (d >= 5) $ (showsPrec 5 v1) . (showString " == ") . (showsPrec 5 v2)
+    showsPrec d (Lt v1 v2) = 
+        showParen (d >= 5) $ (showsPrec 5 v1) . (showString " < ") . (showsPrec 5 v2)
+    showsPrec d (Lte v1 v2) = 
+        showParen (d >= 5) $ (showsPrec 5 v1) . (showString " <= ") . (showsPrec 5 v2)
+    showsPrec d (And v1 v2) = 
+        showParen (d >= 4) $ (showsPrec 4 v1) . (showString " && ") . (showsPrec 4 v2)
+    showsPrec d (Or v1 v2) = 
+        showParen (d >= 3) $ (showsPrec 3 v1) . (showString " || ") . (showsPrec 3 v2)
+    showsPrec d (Not v1) = 
+        showParen (d >= 8) $ (showString "not ") . showsPrec 8 v1
+    showsPrec d (C cls) = showsPrec d cls
+                       
 data Closure = Cls Int {- Label -} ClosureId {- Ident -}  Env
 
 instance Show Closure where
@@ -191,14 +216,48 @@ symbolicExec prog trace = runWriterT (evalStateT (genEnv >>= (\genv -> evalFail 
         return b
 -- Refinement types
 data RType = RBool | RInt | RFun !(IM.IntMap RFunAssoc) | RPair !RType !RType deriving(Show)
+
+
 data RFunAssoc = RFunAssoc { argName :: !Id
                            , argType :: !RType
                            , preCond :: !LFormula
-                           , resType :: !RPostType } deriving(Show)
+                           , resType :: !RPostType }
 data RPostType = RPostType { posName :: !Id
                            , posType :: !RType
-                           , posCond :: !LFormula } deriving(Show)
-data LFormula = Formula Int [Id] | Subst ![(Id,SValue)] !LFormula deriving(Show)
+                           , posCond :: !LFormula }
+data LFormula = Formula Int [Id] | Subst ![(Id,SValue)] !LFormula
+
+instance Show RFunAssoc where
+    show (RFunAssoc x rty cond res) = 
+        "{" ++ name x ++ " : " ++ show rty ++ " | " ++ show cond ++ "}" ++ " -> " ++ show res
+
+instance Show RPostType where
+    show (RPostType r rty cond) = 
+        "{" ++ name r ++ " : " ++ show rty ++ " | " ++ show cond ++ "}"
+
+instance Show LFormula where
+    show (Formula i xs) =
+        "P_" ++ show i ++ "(" ++
+        concat (intersperse "," [ name x ++ " : " ++ show (getType x) | x <- xs ])
+        ++ ")"
+    show (Subst theta fml) =
+        "[" ++ 
+            concat (intersperse "," [ show sv ++ "/" ++ name x  | (x,sv) <- theta ])
+        ++ "]" ++ show fml
+
+pprintFormula :: LFormula -> String
+pprintFormula x = go M.empty x "" where
+    go env (Formula i xs) =
+        showString "P_" . shows i . showChar '(' .
+        foldr1 (\a b -> a . showChar ',' . b) (map (\x ->
+            case M.lookup x env of
+                Just sv -> shows sv
+                Nothing -> showString $ name x ++ " : " ++ show (getType x)) xs)
+        . showChar ')'
+    go env (Subst theta fml) =
+        let env' = foldr (\(x,sv) -> M.insert x sv) env theta in
+        go env' fml
+        
 
 genRType :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> IM.IntMap Exp -> [Id] -> SValue -> m RType
 genRType calls closures returns clsTbl = gen where
@@ -313,7 +372,7 @@ refine prog trace = do
                     (ty_v,sv) = evalRType env v
                     j = callTbl M.! (callSite,i)
                     ty_f = fassoc IM.! unCallId j
-                    tau_j = resType ty_f
+                    tau_j = substPostType (argName ty_f) sv $ resType ty_f
                 clause env cs (Subst [(argName ty_f,sv)] (preCond ty_f))
                 subType env cs ty_v (argType ty_f)
                 let x' = decompose x
@@ -375,5 +434,18 @@ refine prog trace = do
     i <- freshInt
     check genv' [] (CallId 0) (mainTerm prog) (RPostType (Id ty x) rty (Formula i []))
     return ()
+
+substPostType :: Id -> SValue -> RPostType -> RPostType
+substPostType x v (RPostType r rty cond) =
+    RPostType r (substRType x v rty) (Subst [(x,v)] cond)
+
+substRType :: Id -> SValue -> RType -> RType
+substRType x v = go where
+    go (RPair ty1 ty2) = RPair (go ty1) (go ty2)
+    go (RFun fassoc) = 
+        RFun (fmap (\(RFunAssoc y rty cond pos) ->
+            RFunAssoc y (go rty) (Subst [(x,v)] cond) (substPostType x v pos)) fassoc)
+    go RBool = RBool
+    go RInt = RInt
 
 
