@@ -1,5 +1,6 @@
 import System.Environment
 import System.IO
+import System.Process(callCommand)
 import Text.Printf
 import ML.Syntax.UnTyped
 import ML.Parser
@@ -23,6 +24,7 @@ import Data.Time
 import Text.PrettyPrint
 import Id
 import ML.Refine
+import qualified ML.HornClause as Horn
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
@@ -36,6 +38,9 @@ instance Show MainError where
     show (AlphaFailed err) = "AlphaFailed: " ++ show err
     show (IllTyped err)    = "IllTyped: " ++ show err
     show (BooleanError s) = "Boolean: " ++ s
+
+hccsSolver :: FilePath
+hccsSolver = "/Users/autotaker/Documents/cloud/Enshu3/Kobayashi/impl/cvb/hccs/main"
 
 main :: IO ()
 main = do
@@ -111,7 +116,11 @@ doit = do
 
     -- refinement
     case r of
-        Just trace -> refine typedProgram trace
+        Just trace -> do
+            (clauses, env) <- refine typedProgram trace
+            let file_hcs = path ++ ".hcs"
+            liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
+            liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
         _ -> return ()
     let t_input          = f $ diffUTCTime t_input_end t_input_begin
         t_parsing        = f $ diffUTCTime t_parsing_end t_parsing_begin

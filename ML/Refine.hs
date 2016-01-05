@@ -269,14 +269,14 @@ termOfFormula = go M.empty where
         where
         f x = case M.lookup x env of
             Just sv -> termOfValue sv
-            Nothing -> Horn.Var (name x)
+            Nothing -> Horn.Var (filter (/='_') $ name x)
     go env (Subst theta fml) =
         let env' = foldr (\(x,sv) -> M.insert x sv) env theta in
         go env' fml
 
 termOfValue :: SValue -> Horn.Term
 termOfValue = \case
-    SVar x -> Horn.Var (name x)
+    SVar x -> Horn.Var (filter (/='_') $ name x)
     Int i -> Horn.Int i
     Bool b -> Horn.Bool b
     P _ _ -> error "termOfValue: pairs are not supported"
@@ -317,10 +317,10 @@ genRType calls closures returns clsTbl = gen . filter (isBase) where
             TFun ty_arg ty_ret = ty
         as <- forM cs $ \j -> do
             let ReturnInfo _ arg_v v = rtnTbl IM.! (unCallId j)
-            xj <- Id ty_arg <$> freshId (name x)
+            let xj = Id ty_arg (name x)
             arg_ty <- gen env arg_v
-            pty <- gen (xj:env) v
-            rj <- Id ty_ret <$> freshId "r"
+            pty <- gen ([xj | isBase xj] ++ env) v
+            let rj = Id ty_ret "r"
             p0 <- freshInt
             p1 <- freshInt
             let posTy = RPostType rj pty (Formula p0 ([rj | isBase rj] ++ [xj | isBase xj] ++ env))
@@ -380,8 +380,8 @@ decompose x = case getType x of
                      (decompose (Id t2 (name x ++".snd")))
     TFun _ _ -> SVar x
 
-refine :: forall m.(MonadFix m, MonadId m, MonadIO m) => Program -> Trace -> m ()
-refine prog trace = do
+refine :: forall m.(MonadFix m, MonadId m, MonadIO m) => Program -> Trace -> m ([Horn.Clause],[(Id,RType)])
+refine prog trace = execWriterT $ do
     let clsTbl = IM.fromList $ map (\t@(Lambda _ i _ _) -> (i,t)) $ closures prog
     (genv, (consts,calls,closures,returns,branches)) <- symbolicExec prog trace
     liftIO $ print consts
@@ -390,6 +390,10 @@ refine prog trace = do
     liftIO $ print returns
     liftIO $ print branches
     let gen = genRType calls closures returns clsTbl
+    let addBinding :: Id -> RType -> WriterT ([Horn.Clause],[(Id,RType)]) m ()
+        addBinding f ty = tell ([],[(f,ty)])
+    let addClause :: Horn.Clause -> WriterT ([Horn.Clause],[(Id,RType)]) m () 
+        addClause c = tell ([c],[])
     let callTbl :: M.Map (CallId,Int) CallId
         callTbl = M.fromList [ ((pcallId info,callLabel info),callId info)| info <- calls ]
         closureMap :: M.Map (CallId,Int) ClosureId
@@ -398,10 +402,11 @@ refine prog trace = do
         branchMap = M.fromList [ ((bCallId info,branchId info),direction info) | info <- branches ]
     genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,v) -> do
         ty <- gen [] v
-        liftIO $ print f
-        liftIO $ print ty
+        addBinding f ty
         return (f,(ty,decompose f))
-    let check :: M.Map Id (RType,SValue) -> [Either SValue LFormula] -> CallId -> Exp -> RPostType -> m ()
+    let check :: M.Map Id (RType,SValue) -> 
+                 [Either SValue LFormula] -> 
+                 CallId -> Exp -> RPostType -> WriterT ([Horn.Clause],[(Id,RType)]) m ()
         check env cs callSite _e tau = case _e of
             Let _ x (LValue v) e -> do
                 let env' = M.insert x (evalRType env v) env
@@ -428,6 +433,7 @@ refine prog trace = do
                         cs' = Right (preCond ty_f) : cs
                     check env' cs' (CallId j) e0 (resType ty_f)
                 let env' = M.insert f (theta,decompose f) env
+                addBinding f theta
                 check env' cs callSite e tau
             Assume _ v e -> do
                 let (_,sv) = evalRType env v
@@ -456,14 +462,14 @@ refine prog trace = do
                 subType cs theta (posType tau)
             Fail _ -> do
                 failClause cs
-        clause cs fml = liftIO $ do
-            putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
+        clause cs fml = do
+            liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
             let hd = case termOfFormula fml of
                     Horn.Pred x ts  -> Horn.PVar x ts
                 body = map f cs
                 f (Left sv) = termOfValue sv
                 f (Right v) = termOfFormula v
-            print $ Horn.Clause hd body
+            addClause $ Horn.Clause hd body
         subType cs ty1 ty2 = do
             liftIO $ putStrLn $ "SubType: " ++ show cs ++ "|-" ++ show ty1 ++ "<:" ++ show ty2
             case (ty1,ty2) of
@@ -481,12 +487,12 @@ refine prog trace = do
             let cs' = Right (Subst [(r1,decompose r2)] cond1) : cs
             clause cs' cond2
             subType cs' ty1 ty2
-        failClause cs = liftIO $ do
-            putStrLn $ "Clause: " ++ show cs ++ "==> False" 
+        failClause cs = do
+            liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==> False" 
             let body = map f cs
                 f (Left sv) = termOfValue sv
                 f (Right v) = termOfFormula v
-            print $ Horn.Clause Horn.Bot body
+            addClause $ Horn.Clause Horn.Bot body
     forM (functions prog) $ \(f,_,e) -> do
         i <- freshInt
         check genv' [] (CallId 0) e (RPostType f (fst $ genv' M.! f) (Formula i []))
@@ -498,7 +504,6 @@ refine prog trace = do
     i <- freshInt
     check genv' [] (CallId 0) (mainTerm prog) (RPostType (Id ty x) rty (Formula i []))
     return ()
-
 
 substPostType :: Id -> SValue -> RPostType -> RPostType
 substPostType x v (RPostType r rty cond) =

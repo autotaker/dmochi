@@ -3,6 +3,7 @@ module Id where
 import Control.Monad.State
 import Control.Applicative
 import Control.Monad.Reader
+import Control.Monad.Writer
 import Control.Monad.Except
 
 class Monad m => MonadId m where
@@ -52,6 +53,9 @@ instance Monad m => MonadId (FreshT m) where
         return i
 
 instance MonadId m => MonadId (ReaderT r m) where
+    freshInt = lift freshInt
+
+instance (Monoid w,MonadId m) => MonadId (WriterT w m) where
     freshInt = lift freshInt
 
 instance MonadId m => MonadId (ExceptT e m) where
