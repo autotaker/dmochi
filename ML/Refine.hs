@@ -10,6 +10,7 @@ import Control.Monad.State.Strict
 import qualified Data.IntMap as IM
 import Id
 import Data.List(intersperse)
+import qualified ML.HornClause as Horn
 
 type Trace = [Bool]
 newtype CallId = CallId { unCallId :: Int } deriving (Show,Eq,Ord)
@@ -225,6 +226,7 @@ data RPostType = RPostType { posName :: !Id
                            , posType :: !RType
                            , posCond :: !LFormula }
 data LFormula = Formula Int [Id] | Subst ![(Id,SValue)] !LFormula
+-- この定義だと{(int,int -> {int | P1})|P2}でP1からタプルの第一要素が参照できない。
 
 instance Show RFunAssoc where
     show (RFunAssoc x rty cond res) = 
@@ -260,6 +262,38 @@ pprintFormula x = go M.empty x "" where
     go env (Subst theta fml) =
         let env' = foldr (\(x,sv) -> M.insert x sv) env theta in
         go env' fml
+
+termOfFormula :: LFormula -> Horn.Term
+termOfFormula = go M.empty where
+    go env (Formula i xs) = Horn.Pred ("P"++show i) (map f xs)
+        where
+        f x = case M.lookup x env of
+            Just sv -> termOfValue sv
+            Nothing -> Horn.Var (name x)
+    go env (Subst theta fml) =
+        let env' = foldr (\(x,sv) -> M.insert x sv) env theta in
+        go env' fml
+
+termOfValue :: SValue -> Horn.Term
+termOfValue = \case
+    SVar x -> Horn.Var (name x)
+    Int i -> Horn.Int i
+    Bool b -> Horn.Bool b
+    P _ _ -> error "termOfValue: pairs are not supported"
+    Add v1 v2 -> Horn.Add (termOfValue v1) (termOfValue v2)
+    Sub v1 v2 -> Horn.Sub (termOfValue v1) (termOfValue v2)
+    Eq v1 v2 -> Horn.Eq (termOfValue v1) (termOfValue v2)
+    Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
+    Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
+    Not v -> case v of
+        Bool b -> Horn.Bool (not b)
+        Eq v1 v2 -> Horn.NEq (termOfValue v1) (termOfValue v2)
+        Lt v1 v2 -> Horn.Gte (termOfValue v1) (termOfValue v2)
+        Lte v1 v2 -> Horn.Gt (termOfValue v1) (termOfValue v2)
+        Not v -> termOfValue v
+        C _ -> error "termOfValue: unexpected closure"
+        _ -> error "termOfValue: negation of Boolean combination is not supported"
+    C _ -> error "termOfValue: unexpected closure"
 
 genRType :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> IM.IntMap Exp -> [Id] -> SValue -> m RType
 genRType calls closures returns clsTbl = gen . filter (isBase) where
@@ -378,8 +412,8 @@ refine prog trace = do
                     j = callTbl M.! (callSite,i)
                     ty_f = fassoc IM.! unCallId j
                     tau_j = substPostType (argName ty_f) sv $ resType ty_f
-                clause env cs (Subst [(argName ty_f,sv)] (preCond ty_f))
-                subType env cs ty_v (argType ty_f)
+                clause cs (Subst [(argName ty_f,sv)] (preCond ty_f))
+                subType cs ty_v (argType ty_f)
                 let x' = decompose x
                     env' = M.insert x (posType tau_j,x') env
                     cs' = Right (Subst [(posName tau_j,x')] (posCond tau_j)) : cs
@@ -407,8 +441,8 @@ refine prog trace = do
                     check env cs callSite e2 tau
             Value v -> do
                 let (rty,sv) = evalRType env v
-                clause env cs (Subst [(posName tau,sv)] (posCond tau))
-                subType env cs rty (posType tau)
+                clause cs (Subst [(posName tau,sv)] (posCond tau))
+                subType cs rty (posType tau)
             Lambda _ label x e -> do
                 let clsId = closureMap M.! (callSite,label)
                 theta@(RFun fassoc) <- gen (M.keys env) (C (Cls label clsId undefined))
@@ -418,16 +452,41 @@ refine prog trace = do
                         env' = M.insert x (ty_xj,decompose xj) env
                         cs' = Right (preCond ty_f) : cs
                     check env' cs' (CallId j) e (resType ty_f)
-                clause env cs (posCond tau) -- 返り値は関数型なので述語には出現しない。
-                subType env cs theta (posType tau)
+                clause cs (posCond tau) -- 返り値は関数型なので述語には出現しない。
+                subType cs theta (posType tau)
             Fail _ -> do
-                failClause env cs
-        clause env cs fml = liftIO $ do
+                failClause cs
+        clause cs fml = liftIO $ do
             putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
-        subType _ cs ty1 ty2 = liftIO $ do
-            putStrLn $ "SubType: " ++ show cs ++ "|-" ++ show ty1 ++ "<:" ++ show ty2
-        failClause env cs = liftIO $ do
+            let hd = case termOfFormula fml of
+                    Horn.Pred x ts  -> Horn.PVar x ts
+                body = map f cs
+                f (Left sv) = termOfValue sv
+                f (Right v) = termOfFormula v
+            print $ Horn.Clause hd body
+        subType cs ty1 ty2 = do
+            liftIO $ putStrLn $ "SubType: " ++ show cs ++ "|-" ++ show ty1 ++ "<:" ++ show ty2
+            case (ty1,ty2) of
+                (RInt,RInt) -> return ()
+                (RBool,RBool) -> return ()
+                (RPair t1 t2,RPair t3 t4) -> subType cs t1 t3 >> subType cs t2 t4
+                (RFun fs1,RFun fs2) -> do
+                    forM_ (IM.assocs fs2) $ \(i,RFunAssoc x2 rty2 cond2 pty2) -> do
+                        let RFunAssoc x1 rty1 cond1 pty1  = fs1 IM.! i
+                        let cs' = Right cond2 : cs
+                        clause cs' (Subst [(x1,decompose x2)] cond1)
+                        subType cs rty2 rty1
+                        subTypePost cs' (substPostType x1 (decompose x2) pty1) pty2
+        subTypePost cs (RPostType r1 ty1 cond1) (RPostType r2 ty2 cond2) = do
+            let cs' = Right (Subst [(r1,decompose r2)] cond1) : cs
+            clause cs' cond2
+            subType cs' ty1 ty2
+        failClause cs = liftIO $ do
             putStrLn $ "Clause: " ++ show cs ++ "==> False" 
+            let body = map f cs
+                f (Left sv) = termOfValue sv
+                f (Right v) = termOfFormula v
+            print $ Horn.Clause Horn.Bot body
     forM (functions prog) $ \(f,_,e) -> do
         i <- freshInt
         check genv' [] (CallId 0) e (RPostType f (fst $ genv' M.! f) (Formula i []))
@@ -439,6 +498,7 @@ refine prog trace = do
     i <- freshInt
     check genv' [] (CallId 0) (mainTerm prog) (RPostType (Id ty x) rty (Formula i []))
     return ()
+
 
 substPostType :: Id -> SValue -> RPostType -> RPostType
 substPostType x v (RPostType r rty cond) =
