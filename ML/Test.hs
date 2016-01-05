@@ -25,6 +25,7 @@ import Text.PrettyPrint
 import Id
 import ML.Refine
 import qualified ML.HornClause as Horn
+import ML.HornClauseParser(parseSolution)
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
@@ -121,6 +122,11 @@ doit = do
             let file_hcs = path ++ ".hcs"
             liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
             liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
+            parseRes <- liftIO $ parseSolution (file_hcs ++ ".ans")
+            solution  <- case parseRes of
+                Left err -> throwError $ ParseFailed err
+                Right p  -> return p
+            return ()
         _ -> return ()
     let t_input          = f $ diffUTCTime t_input_end t_input_begin
         t_parsing        = f $ diffUTCTime t_parsing_end t_parsing_begin
