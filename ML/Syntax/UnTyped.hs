@@ -34,6 +34,7 @@ data Op = OpAdd Value Value
 data LetValue = LValue Value
               | LApp Id [Value]
               | LExp PType Exp
+              | LRand
               deriving(Show)
 
 data PType = PInt [Predicate]

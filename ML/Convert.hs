@@ -85,6 +85,10 @@ convertE cts env sigma _e = case _e of
     Let _ x (LExp ty_v ev) e -> 
         let x' = B.Symbol (toSort ty_v) (name x) in
         B.f_let x' <$> convertE cts env ty_v ev <*> convertE cts (addE env (name x) ty_v) sigma e
+    Let _ x LRand e ->
+        let ty_v = PInt [] in
+        let x' = B.Symbol (toSort ty_v) (name x) in
+        B.f_let x' (B.T []) <$> convertE cts (addE env (name x) ty_v) sigma e
     Assume _ v e ->
         B.f_assume <$> convertP cts env v <*> convertE (addC cts v) env sigma e
     Lambda _ _ x e -> 

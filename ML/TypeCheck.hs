@@ -97,11 +97,15 @@ convertE env ty _e = case _e of
         i <- freshInt
         Branch ty i <$> convertE env ty e1 <*> convertE env ty e2
 
+-- f v1 v2 .. vn ==> (yn-1 vn,[(y1,f v1),(y2,y1 v2),...,(yn-1,yn-2,vn-1)])
+-- に変換する
 convertLV :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> U.LetValue -> m (LetValue,[(Id,LetValue)])
 convertLV env lv = case lv of
     U.LValue v -> do
         v' <- convertV env v
         return (LValue v',[])
+    U.LRand -> 
+        return (LRand,[])
     U.LApp f vs -> do
         vs' <- mapM (convertV env) vs
         case M.lookup f env of

@@ -48,6 +48,7 @@ data Op = OpAdd Value Value
 data LetValue = LValue Value
               | LApp Type !Int Id Value
               | LExp PType Exp 
+              | LRand
 
 data PType = PInt  [Predicate]
            | PBool [Predicate]
@@ -75,6 +76,7 @@ instance HasType LetValue where
     getType (LValue v) = getType v
     getType (LApp ty _ _ _) = ty
     getType (LExp p _) = getType p
+    getType LRand = TInt
 
 instance HasType Value where
     getType (Var x) = getType x
@@ -194,6 +196,7 @@ sizeLV :: LetValue -> Int
 sizeLV (LValue v) = sizeV v
 sizeLV (LApp _ _ _ v) = foldr (\v y -> 1 + sizeV v + y) 1 [v]
 sizeLV (LExp _ e) = sizeE e
+sizeLV LRand = 1
 
 pushType :: PType -> State [PType] ()
 pushType = modify . (:)

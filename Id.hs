@@ -1,6 +1,7 @@
 module Id where
 
 import Control.Monad.State
+import qualified Control.Monad.State.Strict as Strict
 import Control.Applicative
 import Control.Monad.Reader
 import Control.Monad.Writer
@@ -62,5 +63,8 @@ instance MonadId m => MonadId (ExceptT e m) where
     freshInt = lift freshInt
 
 instance MonadId m => MonadId (StateT s m) where
+    freshInt = lift freshInt
+
+instance MonadId m => MonadId (Strict.StateT s m) where
     freshInt = lift freshInt
 

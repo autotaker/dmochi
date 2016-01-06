@@ -17,7 +17,7 @@ language = emptyDef { P.commentStart = "(*"
                     , P.commentEnd = "*)"
                     , P.nestedComments = True
                     , P.reservedNames = reservedNames
-                    , P.reservedOpNames = ["=","<",">","&&","||","->","<>","+","-",";;","<=",">="]
+                    , P.reservedOpNames = ["=","<",">","&&","||","->","<>","+","-",";;","<=",">=","*"]
                     , P.caseSensitive = True }
 
 lexer :: P.TokenParser st
@@ -81,7 +81,7 @@ letP = (Let <$> (reserved "let" *> identifier)
            <*> (reserved "in" *> exprP)) <?> "let"
     where sub = LExp <$> (reservedOp ":" *> ptypeP) <*> (reservedOp "=" *> exprP)
             <|> try (LApp <$> (reservedOp "=" *> identifier) <*> many1 termP)
-            <|> LValue <$> (reservedOp "=" *> valueP)
+            <|> (reservedOp "=" *> (LValue <$> valueP <|> LRand <$ reservedOp "*"))
 
 valueP :: Parser Value
 valueP = buildExpressionParser opTable termP <?> "value" where

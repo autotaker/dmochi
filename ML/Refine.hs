@@ -112,8 +112,9 @@ closures (Program ds t0) = (ds >>= (\(_,_,e) -> go e)) <|> go t0
     sub (LValue _) = empty
     sub (LApp _ _ _ _) = empty
     sub (LExp _ e) = go e
+    sub (LRand) = empty
 
-symbolicExec :: forall m. (MonadFix m) => Program -> Trace -> m (M.Map Id SValue, Log)
+symbolicExec :: forall m. (MonadId m, MonadFix m) => Program -> Trace -> m (M.Map Id SValue, Log)
 symbolicExec prog trace = runWriterT (evalStateT (genEnv >>= (\genv -> evalFail genv (mainTerm prog) >> return genv)) (S 1 0 trace)) 
     where
     clsTbl :: IM.IntMap Exp
@@ -168,6 +169,8 @@ symbolicExec prog trace = runWriterT (evalStateT (genEnv >>= (\genv -> evalFail 
             j <- newCall label callSite clsId
             eval True sv j (M.insert x sv env') e0
         LExp _ e -> eval False (Int 0) callSite env e
+        LRand -> SVar . Id TInt <$> freshId "rand"
+
     eval :: Bool -> SValue -> CallId -> Env -> Exp -> M m SValue
     eval isTail arg callSite env _e = case _e of
         Value v -> do
@@ -311,10 +314,12 @@ genRType calls closures returns clsTbl = gen 0 . filter (isBase) where
     gen _ _ (And _ _) = pure RBool
     gen _ _ (Or _ _) = pure RBool
     gen _ _ (Not _) = pure RBool
-    gen lim env (C (Cls l i _)) = do
+    gen lim env (C (Cls l i _)) = do  -- 
         let cs = [ callId info | info <- calls, 
                                  calleeId info == i, 
-                                 unCallId (callId info) > lim ] -- TODO Improve Impl
+                                 unCallId (callId info) > lim 
+                                 -- ループが発生しないようにlim 以降の関数呼び出し以降のみを考える。
+                                 ] -- TODO Improve Impl
             e@(Lambda ty _ x _) = clsTbl IM.! l
             TFun ty_arg ty_ret = ty
         as <- forM cs $ \j -> do
@@ -425,6 +430,10 @@ refineCGen prog trace = execWriterT $ do
                     env' = M.insert x (posType tau_j,x') env
                     cs' = Right (Subst [(posName tau_j,x')] (posCond tau_j)) : cs
                 check env' cs' callSite e tau
+            Let _ x LRand e -> do
+                let x' = decompose x 
+                    env' = M.insert x (RInt,x') env
+                check env' cs callSite e tau
             Let _ f (LExp _ (Lambda _ label x e0)) e -> do
                 let clsId = closureMap M.! (callSite,label)
                 theta@(RFun fassoc) <- gen (M.keys env) (C (Cls label clsId undefined))
@@ -558,6 +567,7 @@ refine prog tassoc subst = prog' where
             e' = refineTerm e'
     refineTerm (Let ty f (LValue v) e) = Let ty f (LValue v) (refineTerm e)
     refineTerm (Let ty f (LApp ty0 label x v) e) = Let ty f (LApp ty0 label x v) (refineTerm e)
+    refineTerm (Let ty f LRand e) = Let ty f LRand (refineTerm e)
     refineTerm (Assume ty v e) = Assume ty v (refineTerm e)
     refineTerm (Lambda ty l x e) = Lambda ty l x (refineTerm e)
     refineTerm (Fail ty) = Fail ty

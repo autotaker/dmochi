@@ -50,6 +50,7 @@ renameE (Let x lv e) = do
         LValue v -> LValue <$> renameV v
         LApp f vs -> LApp <$> rename f <*> mapM renameV vs
         LExp p ev -> LExp <$> renameP p <*> renameE ev
+        LRand -> pure LRand
     (x',e') <- register x (renameE e)
     return $ Let x' lv' e'
 renameE (Assume v e) = liftA2 Assume (renameV v) (renameE e)

@@ -120,6 +120,7 @@ doit = do
                 Just trace -> do
                     (clauses, env) <- refineCGen prog trace
                     let file_hcs = path ++ ".hcs"
+                    liftIO $ putStr $ show (Horn.HCCS clauses)
                     liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
                     liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
                     parseRes <- liftIO $ parseSolution (file_hcs ++ ".ans")

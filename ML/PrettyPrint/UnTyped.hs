@@ -21,6 +21,10 @@ pprintE (Let x lv e) =
             text "let" <+> text x <+> colon <+> pprintP 0 ptyp <+> equals $+$
             nest 4 (pprintE ev) <+> text "in" $+$
             pprintE e
+        LRand ->
+            text "let" <+> text x <+> equals <+> text "*" <+> text "in" $+$ 
+            pprintE e
+
 pprintE (Assume v e) = 
     text "assume" <+> pprintV 0 v <> semi $+$
     pprintE e
