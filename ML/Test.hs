@@ -83,51 +83,57 @@ doit = do
     liftIO $ Typed.printProgram typedProgram
     t_type_checking_end <- liftIO $ getCurrentTime
 
+    let cegar prog = do
+            -- predicate abst
+            t_predicate_abst_begin <- liftIO $ getCurrentTime
+            boolProgram' <- convert prog
+            let boolProgram = B.toUnTyped boolProgram'
+            case runExcept (B.tCheck boolProgram') of
+                Left (s1,s2,str,ctx) -> liftIO $ do
+                    printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+                    forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                        printf "Context %d: %s\n" i (show t)
+                Right _ -> return ()
+            let file_boolean = path ++ ".bool"
+            liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
+            liftIO $ B.printProgram boolProgram
+            t_predicate_abst_end <- liftIO $ getCurrentTime
 
-    -- predicate abst
-    t_predicate_abst_begin <- liftIO $ getCurrentTime
-    boolProgram' <- convert typedProgram
-    let boolProgram = B.toUnTyped boolProgram'
-    case runExcept (B.tCheck boolProgram') of
-        Left (s1,s2,str,ctx) -> liftIO $ do
-            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
-            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
-                printf "Context %d: %s\n" i (show t)
-        Right _ -> return ()
-    let file_boolean = path ++ ".bool"
-    liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
-    liftIO $ B.printProgram boolProgram
-    t_predicate_abst_end <- liftIO $ getCurrentTime
+        {-
+            -- cps transformation
+            liftIO $ printf "--CPS--\n"
+            hors <- B.toHORS boolProgram'
+            let file_hors = path ++ ".hrs"
+            liftIO $ writeFile file_hors $ (++"\n") $ render $ pprintHORS hors
+        --    liftIO $ printHORS hors
+        --    liftIO $ B.printProgram cpsProgram
+        --    -}
 
-{-
-    -- cps transformation
-    liftIO $ printf "--CPS--\n"
-    hors <- B.toHORS boolProgram'
-    let file_hors = path ++ ".hrs"
-    liftIO $ writeFile file_hors $ (++"\n") $ render $ pprintHORS hors
---    liftIO $ printHORS hors
---    liftIO $ B.printProgram cpsProgram
---    -}
+            -- model checking
+            t_model_checking_begin <- liftIO $ getCurrentTime
+            r <- withExceptT BooleanError $ test file_boolean boolProgram
+            liftIO $ print r
+            t_model_checking_end <- liftIO $ getCurrentTime
 
-    -- model checking
-    t_model_checking_begin <- liftIO $ getCurrentTime
-    r <- withExceptT BooleanError $ test file_boolean boolProgram
-    liftIO $ print r
-    t_model_checking_end <- liftIO $ getCurrentTime
-
-    -- refinement
-    case r of
-        Just trace -> do
-            (clauses, env) <- refine typedProgram trace
-            let file_hcs = path ++ ".hcs"
-            liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
-            liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
-            parseRes <- liftIO $ parseSolution (file_hcs ++ ".ans")
-            solution  <- case parseRes of
-                Left err -> throwError $ ParseFailed err
-                Right p  -> return p
-            return ()
-        _ -> return ()
+            -- refinement
+            case r of
+                Just trace -> do
+                    (clauses, env) <- refineCGen prog trace
+                    let file_hcs = path ++ ".hcs"
+                    liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
+                    liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
+                    parseRes <- liftIO $ parseSolution (file_hcs ++ ".ans")
+                    solution  <- case parseRes of
+                        Left err -> throwError $ ParseFailed err
+                        Right p  -> return p
+                    let refinedProgram = refine prog env solution
+                    liftIO $ Typed.printProgram refinedProgram
+                    cegar refinedProgram
+                    
+                    return ()
+                _ -> return ()
+    cegar typedProgram
+                {-
     let t_input          = f $ diffUTCTime t_input_end t_input_begin
         t_parsing        = f $ diffUTCTime t_parsing_end t_parsing_begin
         t_type_checking  = f $ diffUTCTime t_type_checking_end t_type_checking_begin
@@ -151,6 +157,7 @@ doit = do
         printf "\tType Checking     : %7.3f sec\n" t_type_checking
         printf "\tPredicate Abst    : %7.3f sec\n" t_predicate_abst
         printf "\tModel Checking    : %7.3f sec\n" t_model_checking
+        -}
 
 
 

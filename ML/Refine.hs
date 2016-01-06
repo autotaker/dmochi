@@ -296,30 +296,32 @@ termOfValue = \case
     C _ -> error "termOfValue: unexpected closure"
 
 genRType :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> IM.IntMap Exp -> [Id] -> SValue -> m RType
-genRType calls closures returns clsTbl = gen . filter (isBase) where
+genRType calls closures returns clsTbl = gen 0 . filter (isBase) where
     rtnTbl = IM.fromList [ (unCallId (rcallId info),info) | info <- returns ]
-    gen _ (SVar x) = case getType x of
+    gen _ _ (SVar x) = case getType x of
         TInt -> pure RInt
         TBool -> pure RBool
-    gen _ (Int _) = pure RInt
-    gen _ (Bool _) = pure RBool
-    gen env (P v1 v2) = RPair <$> gen env v1 <*> gen env v2
-    gen _ (Add _ _) = pure RInt
-    gen _ (Sub _ _) = pure RInt
-    gen _ (Eq _ _) = pure RBool
-    gen _ (Lt _ _) = pure RBool
-    gen _ (And _ _) = pure RBool
-    gen _ (Or _ _) = pure RBool
-    gen _ (Not _) = pure RBool
-    gen env (C (Cls l i _)) = do
-        let cs = [ callId info | info <- calls, calleeId info == i ] -- TODO Improve Impl
+    gen _ _ (Int _) = pure RInt
+    gen _ _ (Bool _) = pure RBool
+    gen lim env (P v1 v2) = RPair <$> gen lim env v1 <*> gen lim env v2
+    gen _ _ (Add _ _) = pure RInt
+    gen _ _ (Sub _ _) = pure RInt
+    gen _ _ (Eq _ _) = pure RBool
+    gen _ _ (Lt _ _) = pure RBool
+    gen _ _ (And _ _) = pure RBool
+    gen _ _ (Or _ _) = pure RBool
+    gen _ _ (Not _) = pure RBool
+    gen lim env (C (Cls l i _)) = do
+        let cs = [ callId info | info <- calls, 
+                                 calleeId info == i, 
+                                 unCallId (callId info) > lim ] -- TODO Improve Impl
             e@(Lambda ty _ x _) = clsTbl IM.! l
             TFun ty_arg ty_ret = ty
         as <- forM cs $ \j -> do
             let ReturnInfo _ arg_v v = rtnTbl IM.! (unCallId j)
             let xj = Id ty_arg (name x)
-            arg_ty <- gen env arg_v
-            pty <- gen ([xj | isBase xj] ++ env) v
+            arg_ty <- gen (unCallId j) env arg_v
+            pty <- gen (unCallId j) ([xj | isBase xj] ++ env) v
             let rj = Id ty_ret "r"
             p0 <- freshInt
             p1 <- freshInt
@@ -380,8 +382,8 @@ decompose x = case getType x of
                      (decompose (Id t2 (name x ++".snd")))
     TFun _ _ -> SVar x
 
-refine :: forall m.(MonadFix m, MonadId m, MonadIO m) => Program -> Trace -> m ([Horn.Clause],[(Id,RType)])
-refine prog trace = execWriterT $ do
+refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m) => Program -> Trace -> m ([Horn.Clause],[(Id,RType)])
+refineCGen prog trace = execWriterT $ do
     let clsTbl = IM.fromList $ map (\t@(Lambda _ i _ _) -> (i,t)) $ closures prog
     (genv, (consts,calls,closures,returns,branches)) <- symbolicExec prog trace
     liftIO $ print consts
@@ -471,7 +473,7 @@ refine prog trace = execWriterT $ do
                 f (Right v) = termOfFormula v
             addClause $ Horn.Clause hd body
         subType cs ty1 ty2 = do
-            liftIO $ putStrLn $ "SubType: " ++ show cs ++ "|-" ++ show ty1 ++ "<:" ++ show ty2
+            liftIO $ putStrLn $ "SubType: " ++ show cs ++ " |- " ++ show ty1 ++ "<:" ++ show ty2
             case (ty1,ty2) of
                 (RInt,RInt) -> return ()
                 (RBool,RBool) -> return ()
@@ -518,4 +520,84 @@ substRType x v = go where
     go RBool = RBool
     go RInt = RInt
 
+refine :: Program -> [(Id,RType)] -> [(String,[Id],Value)] -> Program
+refine prog tassoc subst = prog' where
+    genv :: M.Map Id [RType]
+    genv = M.fromListWith (++) $ map (\(x,y) -> (x,[y])) tassoc
+    penv = M.fromList [ (s,(xs,v)) | (s,xs,v) <- subst ]
 
+    prog' = Program ds' t0'
+    ds' = [ (f,toPType (refinePType (head $ genv M.! f) (fromPType pty)),refineTerm e) | (f,pty,e) <- functions prog ]
+    t0' = refineTerm (mainTerm prog)
+
+    refinePType :: RType -> PType' -> PType'
+    refinePType RInt _ = PInt'
+    refinePType RBool _ = PBool'
+    refinePType (RFun fassoc) (PFun' ty ty_x ty_r) = PFun' ty ty_x' ty_r'
+        where
+        ty_x' = foldl (\(x,pty_x,ps_x) (RFunAssoc y rty1 cond1 _) ->
+                    let p = substCond cond1 in
+                    (x,refinePType rty1 pty_x,(y,p):ps_x)) ty_x (IM.elems fassoc)
+        (x0,_,_) = ty_x
+        ty_r' = foldl (\(pty_r,ps_r) (RFunAssoc y _ _ tau) ->
+                    let RPostType r rty2 cond2 = tau in
+                    let p = substCond (Subst [(y,decompose x0)] cond2) in
+                    let pty_r' = refinePType (substRType y (decompose x0) rty2) pty_r in
+                    (pty_r',(r,p):ps_r)) ty_r (IM.elems fassoc)
+
+    refineTerm :: Exp -> Exp
+    refineTerm (Value v) = Value v
+    refineTerm (Let ty f (LExp pty (Lambda ty0 label x e0)) e) = 
+        Let ty f (LExp (toPType pty') (Lambda ty0 label x e0')) e' 
+            where
+            rtys = case M.lookup f genv of
+                Just l -> l
+                Nothing -> []
+            pty' = foldr refinePType (fromPType pty) rtys
+            e0' = refineTerm e0'
+            e' = refineTerm e'
+    refineTerm (Let ty f (LValue v) e) = Let ty f (LValue v) (refineTerm e)
+    refineTerm (Let ty f (LApp ty0 label x v) e) = Let ty f (LApp ty0 label x v) (refineTerm e)
+    refineTerm (Assume ty v e) = Assume ty v (refineTerm e)
+    refineTerm (Lambda ty l x e) = Lambda ty l x (refineTerm e)
+    refineTerm (Fail ty) = Fail ty
+    refineTerm (Branch ty l e1 e2) = Branch ty l (refineTerm e1) (refineTerm e2)
+        
+    substCond :: LFormula -> Value
+    substCond (Formula i xs) =
+        let (ys,v) = penv M.! ("P"++show i) in
+        let env = M.fromList $ zip ys (map Var xs) in
+        substValue env v
+    substCond (Subst theta fml) =
+        let env = M.fromList $ map (\(x,v) -> (x,toValue v)) theta in
+        substValue env (substCond fml)
+    toValue (SVar x) = Var x
+    toValue (Int i) = CInt i
+    toValue (Bool b) = CBool b
+    toValue (P v1 v2) = Pair (toValue v1) (toValue v2)
+    toValue (Add v1 v2) = Op (OpAdd (toValue v1) (toValue v2))
+    toValue (Sub v1 v2) = Op (OpSub (toValue v1) (toValue v2))
+    toValue (Eq v1 v2) = Op (OpEq (toValue v1) (toValue v2))
+    toValue (Lt v1 v2) = Op (OpLt (toValue v1) (toValue v2))
+    toValue (Lte v1 v2) = Op (OpLte (toValue v1) (toValue v2))
+    toValue (And v1 v2) = Op (OpAnd (toValue v1) (toValue v2))
+    toValue (Or v1 v2) = Op (OpOr (toValue v1) (toValue v2))
+    toValue (Not v1) = Op (OpNot (toValue v1))
+
+substValue :: M.Map Id Value -> Value -> Value
+substValue env = go where
+    go (Var y) = case M.lookup y env of
+        Just v -> v
+        Nothing -> Var y
+    go (Op op) = Op $ case op of
+        OpAdd a b -> OpAdd (go a) (go b)
+        OpSub a b -> OpSub (go a) (go b)
+        OpEq  a b -> OpEq  (go a) (go b)
+        OpLt  a b -> OpLt  (go a) (go b)
+        OpLte a b -> OpLte (go a) (go b)
+        OpAnd a b -> OpAnd (go a) (go b)
+        OpOr  a b -> OpOr  (go a) (go b)
+        OpNot a   -> OpNot (go a)
+        OpFst t a -> OpFst t (go a)
+        OpSnd t a -> OpSnd t (go a)
+    go w = w

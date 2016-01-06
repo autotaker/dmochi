@@ -54,6 +54,9 @@ data PType = PInt  [Predicate]
            | PPair Type PType (Id,PType) 
            | PFun  Type PType (Id,PType) deriving(Eq)
 
+data PType' = PInt' | PBool'
+            | PFun' Type (Id,PType',[Predicate]) (PType',[Predicate])
+
 class HasType m where
     getType :: m -> Type
 
@@ -98,6 +101,11 @@ instance HasType PType where
     getType (PPair t _ _) = t
     getType (PFun t _ _) = t
 
+instance HasType PType' where
+    getType (PInt') = TInt
+    getType (PBool') = TBool
+--    getType (PPair t _ _) = t
+    getType (PFun' t _ _) = t
 
 substV :: Id -> Value -> Value -> Value
 substV x v = go where
@@ -121,6 +129,36 @@ substPType x v = go where
     go (PBool ps) = PBool (map (\(y,w) -> (y,substV x v w)) ps)
     go (PPair ty p1 (y,p2)) = PPair ty (go p1) (y,go p2)
     go (PFun  ty p1 (y,p2)) = PFun ty (go p1) (y,go p2)
+
+fromPType :: PType -> PType'
+fromPType (PInt _) = PInt'
+fromPType (PBool _) = PBool'
+fromPType (PFun ty pty (x,rty)) = PFun' ty (x,pty',ps) (rty',qs)
+    where
+        pty' = fromPType pty
+        rty' = fromPType rty
+        ps = case pty of
+            PInt ps -> ps
+            PBool ps -> ps
+            _ -> []
+        qs = case rty of
+            PInt ps -> ps
+            PBool ps -> ps
+            _ -> []
+
+toPType :: PType' -> PType
+toPType PInt' = PInt []
+toPType PBool' = PBool []
+toPType (PFun' ty (x,pty,ps) (rty,qs)) = PFun ty pty' (x,rty') 
+    where
+    pty' = case pty of
+        PInt' -> PInt ps
+        PBool' -> PBool ps
+        _ -> toPType pty
+    rty' = case rty of
+        PInt' -> PInt qs
+        PBool' -> PBool qs
+        _ -> toPType rty
 
 size :: Program -> Int
 size (Program fs t) = sum [ sizeE e + 1 | (_,_,e) <- fs ] + sizeE t
