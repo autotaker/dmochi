@@ -68,6 +68,7 @@ exprP :: M.Map String Type -> Parser Value
 exprP env = it where
     it = buildExpressionParser opTable termP <?> "value"
     opTable = [ [prefix "-" (after Op neg), prefix "+" id, prefix' "not" (after Op OpNot)]
+              , [binary "*" scalar AssocNone]
               , [binary "+" (after2 Op OpAdd) AssocLeft, binary "-" (after2 Op OpSub) AssocLeft]
               , [binary "=" (after2 Op OpEq)  AssocNone, 
                  binary "<" (after2 Op OpLt) AssocNone,
@@ -83,6 +84,7 @@ exprP env = it where
     binary name fun assoc = Infix (reservedOp name >> pure fun) assoc
     prefix name fun       = Prefix (reservedOp name >> pure fun)
     prefix' name fun      = Prefix (reserved name >> pure fun)
+    scalar (CInt c) t = foldl1 (after2 Op OpAdd) [ t | _ <- [1..c]]
     termP = Var <$> (fmap (\x -> Id (env M.! x) x) identifier)
         <|> CInt <$> natural 
         <|> CBool True <$ reserved "true" 

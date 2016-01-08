@@ -11,6 +11,7 @@ import qualified Data.IntMap as IM
 import Id
 import Data.List(intersperse)
 import qualified ML.HornClause as Horn
+import Debug.Trace
 
 type Trace = [Bool]
 newtype CallId = CallId { unCallId :: Int } deriving (Show,Eq,Ord)
@@ -536,9 +537,27 @@ refine prog tassoc subst = prog' where
     penv = M.fromList [ (s,(xs,v)) | (s,xs,v) <- subst ]
 
     prog' = Program ds' t0'
-    ds' = [ (f,toPType (refinePType (head $ genv M.! f) (fromPType pty)),refineTerm e) | (f,pty,e) <- functions prog ]
+    ds' = [ (f,toPType $ decomp (refinePType (head $ genv M.! f) (fromPType pty)),refineTerm e) | (f,pty,e) <- functions prog ]
     t0' = refineTerm (mainTerm prog)
 
+    decomp :: PType' -> PType' -- 述語を原始論理式に分解
+    decomp = id
+    {-
+    decomp PInt' = PInt'
+    decomp PBool' = PBool'
+    decomp (PFun' ty (x,ty_x,ps) (ty_r,qs)) = PFun' ty (x,decomp ty_x,ps') (decomp ty_r,qs')
+        where
+        ps' = go ps
+        qs' = go qs
+        go l = do
+            (y,v) <- l
+            w <- sub v
+            return (y,w)
+        sub (CBool _) = empty
+        sub (Op (OpAnd v1 v2)) = sub v1 <|> sub v2
+        sub (Op (OpOr v1 v2)) = sub v1 <|> sub v2
+        sub v = pure v
+        -}
     refinePType :: RType -> PType' -> PType'
     refinePType RInt _ = PInt'
     refinePType RBool _ = PBool'
@@ -557,14 +576,14 @@ refine prog tassoc subst = prog' where
     refineTerm :: Exp -> Exp
     refineTerm (Value v) = Value v
     refineTerm (Let ty f (LExp pty (Lambda ty0 label x e0)) e) = 
-        Let ty f (LExp (toPType pty') (Lambda ty0 label x e0')) e' 
+        Let ty f (LExp (toPType $ decomp pty') (Lambda ty0 label x e0')) e' 
             where
             rtys = case M.lookup f genv of
                 Just l -> l
                 Nothing -> []
             pty' = foldr refinePType (fromPType pty) rtys
-            e0' = refineTerm e0'
-            e' = refineTerm e'
+            e0' = refineTerm e0
+            e' = refineTerm e
     refineTerm (Let ty f (LValue v) e) = Let ty f (LValue v) (refineTerm e)
     refineTerm (Let ty f (LApp ty0 label x v) e) = Let ty f (LApp ty0 label x v) (refineTerm e)
     refineTerm (Let ty f LRand e) = Let ty f LRand (refineTerm e)
