@@ -1,2 +1,0 @@
-let g : [] -> Bool = fun (xx_1 : []) -> (2 (0) true).(1/2) in
-assume (g (0));fail([])
