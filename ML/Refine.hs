@@ -9,7 +9,7 @@ import Control.Monad.Writer
 import Control.Monad.State.Strict
 import qualified Data.IntMap as IM
 import Id
-import Data.List(intersperse)
+import Data.List(intersperse,nub)
 import qualified ML.HornClause as Horn
 import Debug.Trace
 
@@ -151,7 +151,8 @@ symbolicExec prog trace = runWriterT (evalStateT (genEnv >>= (\genv -> evalFail 
         Op op -> case op of
             OpAdd v1 v2 -> Add (evalV env v1) (evalV env v2)
             OpSub v1 v2 -> Sub (evalV env v1) (evalV env v2)
-            OpLt v1 v2 -> Lt (evalV env v1) (evalV env v2)
+            OpEq v1 v2  -> Eq (evalV env v1) (evalV env v2)
+            OpLt v1 v2  -> Lt (evalV env v1) (evalV env v2)
             OpLte v1 v2 -> Lte (evalV env v1) (evalV env v2)
             OpAnd v1 v2 -> And (evalV env v1) (evalV env v2)
             OpOr  v1 v2 -> Or (evalV env v1) (evalV env v2)
@@ -541,23 +542,22 @@ refine prog tassoc subst = prog' where
     t0' = refineTerm (mainTerm prog)
 
     decomp :: PType' -> PType' -- 述語を原始論理式に分解
-    decomp = id
-    {-
     decomp PInt' = PInt'
     decomp PBool' = PBool'
     decomp (PFun' ty (x,ty_x,ps) (ty_r,qs)) = PFun' ty (x,decomp ty_x,ps') (decomp ty_r,qs')
         where
-        ps' = go ps
-        qs' = go qs
+        ps' = nub $ go ps
+        qs' = nub $ go qs
         go l = do
             (y,v) <- l
             w <- sub v
             return (y,w)
         sub (CBool _) = empty
+        {-
         sub (Op (OpAnd v1 v2)) = sub v1 <|> sub v2
         sub (Op (OpOr v1 v2)) = sub v1 <|> sub v2
-        sub v = pure v
         -}
+        sub v = pure v
     refinePType :: RType -> PType' -> PType'
     refinePType RInt _ = PInt'
     refinePType RBool _ = PBool'

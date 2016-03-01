@@ -40,7 +40,7 @@ let infer_constructor hcs =
 let () =
     begin
       FPATConfig.set_default ();
-      InterpProver.ext_interpolate := InterpProver.interpolate_z3_dyn;
+      InterpProver.ext_interpolate := InterpProver.interpolate_csisat_dyn;
       Format.printf "@[<v>";
       begin
         try
