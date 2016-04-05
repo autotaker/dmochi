@@ -76,6 +76,7 @@ mkEqIValue iv1 iv2 = ASTValue <$> go iv1 iv2
         mkAnd [b1,b2]
 
 sat :: [Value] -> IO Bool
+sat [] = return True
 sat vs = evalZ3 $ do
     ivs <- mapM toIValue vs
     assert =<< mkAnd [ v | ASTValue v <- ivs]

@@ -2,7 +2,6 @@
 *.o
 *.hi
 *.dot
-Test
 tmp/
 ML/sample/*.log
 ML/sample/*.hrs
