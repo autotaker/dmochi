@@ -16,17 +16,15 @@ instance Ord Id where
 
 
 type Predicate = (Id,Value)
-
-data Program = Program { functions :: [(Id,PType,Exp)] 
+data Program = Program { functions :: [(Id,FunDef)] 
                        , mainTerm  :: Exp }
 data Type = TInt | TBool | TPair Type Type | TFun Type Type deriving(Eq)
 
 data Exp = Value Value
          | Let Type Id LetValue Exp
          | Assume Type Value Exp
-         | Lambda Type !Int {- Id -} Id Exp
          | Fail Type
-         | Branch Type !Int {- Id -} Exp Exp
+         | Branch Type !Int Exp Exp
 
 data Value = Var Id
            | CInt  Integer
@@ -47,8 +45,13 @@ data Op = OpAdd Value Value
 
 data LetValue = LValue Value
               | LApp Type !Int Id Value
-              | LExp PType Exp 
+              | LFun FunDef
+              | LExp !Int Exp 
               | LRand
+
+data FunDef = FunDef { ident :: !Int,
+                       arg   :: Id,
+                       body  :: Exp }
 
 data PType = PInt  [Predicate]
            | PBool [Predicate]
@@ -57,6 +60,7 @@ data PType = PInt  [Predicate]
 
 data PType' = PInt' | PBool'
             | PFun' Type (Id,PType',[Predicate]) (PType',[Predicate])
+            | PPair' Type PType' PType'
 
 class HasType m where
     getType :: m -> Type
@@ -68,14 +72,15 @@ instance HasType Exp where
     getType (Value v) = getType v
     getType (Let a _ _ _) = a
     getType (Assume a _ _) = a
-    getType (Lambda a _ _ _) = a
+--    getType (Lambda a _ _ _) = a
     getType (Fail a) = a
     getType (Branch a _ _ _) = a
 
 instance HasType LetValue where
     getType (LValue v) = getType v
     getType (LApp ty _ _ _) = ty
-    getType (LExp p _) = getType p
+    getType (LExp _ e) = getType e
+    getType (LFun lam) = getType lam
     getType LRand = TInt
 
 instance HasType Value where
@@ -106,8 +111,11 @@ instance HasType PType where
 instance HasType PType' where
     getType (PInt') = TInt
     getType (PBool') = TBool
---    getType (PPair t _ _) = t
+    getType (PPair' t _ _) = t
     getType (PFun' t _ _) = t
+
+instance HasType FunDef where
+    getType e = TFun (getType (arg e)) (getType (body e))
 
 substV :: Id -> Value -> Value -> Value
 substV x v = go where
@@ -163,12 +171,12 @@ toPType (PFun' ty (x,pty,ps) (rty,qs)) = PFun ty pty' (x,rty')
         _ -> toPType rty
 
 size :: Program -> Int
-size (Program fs t) = sum [ sizeE e + 1 | (_,_,e) <- fs ] + sizeE t
+size (Program fs t) = sum [ sizeE (body e) + 1 | (_,e) <- fs ] + sizeE t
 
 sizeE :: Exp -> Int
 sizeE (Value v)      = sizeV v
 sizeE (Let _ _ lv e)  = 1 + sizeLV lv + sizeE e
-sizeE (Lambda _ _ _ e) = 1 + sizeE e
+--sizeE (Lambda _ _ _ e) = 1 + sizeE e
 sizeE (Assume _ v e) = 1 + sizeV v + sizeE e
 sizeE (Fail _)       = 1
 sizeE (Branch _ _ e1 e2) = 1 + sizeE e1 + sizeE e2
@@ -196,11 +204,13 @@ sizeLV :: LetValue -> Int
 sizeLV (LValue v) = sizeV v
 sizeLV (LApp _ _ _ v) = foldr (\v y -> 1 + sizeV v + y) 1 [v]
 sizeLV (LExp _ e) = sizeE e
+sizeLV (LFun e) = sizeE (body e) + 1
 sizeLV LRand = 1
 
 pushType :: PType -> State [PType] ()
 pushType = modify . (:)
 
+{-
 gatherPTypes :: Program -> [PType]
 gatherPTypes (Program fs t) = execState doit [] where
     doit = do
@@ -218,6 +228,7 @@ gatherTypesE (Assume _ _ e) = gatherTypesE e
 gatherTypesE (Lambda _ _ _ e) = gatherTypesE e
 gatherTypesE (Fail _) = return ()
 gatherTypesE (Branch _ _ e1 e2) = gatherTypesE e1 >> gatherTypesE e2
+-}
 
 sizeP :: PType -> Int
 sizeP (PInt xs)     = length xs
