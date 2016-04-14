@@ -7,7 +7,7 @@ import qualified Data.DList as DL
 
 import qualified Language.DMoCHi.ML.Syntax.Typed as ML
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
-import qualified Language.DMoCHi.ML.Syntax.SMT as SMT
+import qualified Language.DMoCHi.ML.SMT as SMT
 import Language.DMoCHi.Common.Id
 import Control.Monad.Writer
 
