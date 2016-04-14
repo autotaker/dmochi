@@ -13,7 +13,7 @@ import Language.DMoCHi.Boolean.Syntax.Typed as B(toUnTyped,tCheck)
 import Language.DMoCHi.Boolean.PrettyPrint.HORS(pprintHORS,printHORS)
 import Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
 import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
-import Language.DMoCHi.ML.Convert
+import Language.DMoCHi.ML.PredicateAbstraction(abstProg, initTypeMap)
 import Language.DMoCHi.ML.PrettyPrint.UnTyped
 import Language.DMoCHi.ML.Alpha
 import qualified Language.DMoCHi.ML.PrettyPrint.Typed as Typed
@@ -24,9 +24,9 @@ import Text.Parsec(ParseError)
 import Data.Time
 import Text.PrettyPrint
 import Language.DMoCHi.Common.Id
-import Language.DMoCHi.ML.Refine
-import qualified Language.DMoCHi.ML.HornClause as Horn
-import Language.DMoCHi.ML.HornClauseParser(parseSolution)
+-- import Language.DMoCHi.ML.Refine
+-- import qualified Language.DMoCHi.ML.HornClause as Horn
+-- import Language.DMoCHi.ML.HornClauseParser(parseSolution)
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
@@ -79,15 +79,38 @@ doit = do
     liftIO $ printProgram alphaProgram
 
     -- type checking
+    liftIO $ putStrLn "Typed Program"
     t_type_checking_begin <- liftIO $ getCurrentTime
     typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
     liftIO $ Typed.printProgram typedProgram
     t_type_checking_end <- liftIO $ getCurrentTime
 
+    liftIO $ putStrLn "Predicate Abstracion"
+    typeMap <- initTypeMap typedProgram
+    boolProgram' <- abstProg typeMap typedProgram
+    case runExcept (B.tCheck boolProgram') of
+        Left (s1,s2,str,ctx) -> liftIO $ do
+            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                printf "Context %d: %s\n" i (show t)
+        Right _ -> return ()
+    let file_boolean = path ++ ".bool"
+    let boolProgram = B.toUnTyped boolProgram'
+    liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
+    liftIO $ B.printProgram boolProgram
+    
+    t_model_checking_begin <- liftIO $ getCurrentTime
+    r <- withExceptT BooleanError $ test file_boolean boolProgram
+    liftIO $ print r
+    t_model_checking_end <- liftIO $ getCurrentTime
+    return ()
+
+
+    {-
     let cegar prog = do
             -- predicate abst
             t_predicate_abst_begin <- liftIO $ getCurrentTime
-            boolProgram' <- convert prog
+            boolProgram' <- abstProg prog
             let boolProgram = B.toUnTyped boolProgram'
             case runExcept (B.tCheck boolProgram') of
                 Left (s1,s2,str,ctx) -> liftIO $ do
@@ -135,6 +158,7 @@ doit = do
                     return ()
                 _ -> return ()
     cegar typedProgram
+    -}
                 {-
     let t_input          = f $ diffUTCTime t_input_end t_input_begin
         t_parsing        = f $ diffUTCTime t_parsing_end t_parsing_begin

@@ -20,19 +20,41 @@ library
   hs-source-dirs:      src
   build-depends:       base >=4.8 && <4.9, mtl >=2.2 && <2.3, containers >=0.5 && <0.6, hashable >=1.2 && <1.3, array >=0.5 && <0.6, pretty >=1.1 && <1.2, parsec >=3.1 && <3.2, QuickCheck >=2.8 && <2.9, time >=1.5 && <1.6, transformers >=0.4 && <0.5, random >=1.1 && <1.2, sbv >= 5.3, dlist >= 0.7, hashtables >= 1.2, language-dot >= 0.0.8, process >= 1.2, z3 >= 4.1
   exposed-modules:     Language.DMoCHi.ML.Syntax.Typed,
-                       Language.DMoCHi.ML.SMT
+                       Language.DMoCHi.ML.SMT,
+                       Language.DMoCHi.Boolean.Flow,
+                       Language.DMoCHi.Boolean.CPS,
+                       Language.DMoCHi.Boolean.IType,
+                       Language.DMoCHi.Boolean.SelectiveCPS,
+                       Language.DMoCHi.Boolean.Sort,
+                       Language.DMoCHi.Boolean.SortCheck,
+                       Language.DMoCHi.Boolean.Syntax,
+                       Language.DMoCHi.Boolean.Syntax.Typed,
+                       Language.DMoCHi.Boolean.Test,
+                       Language.DMoCHi.ML.Test
+  other-modules:       Language.DMoCHi.Common.Heap,
+                       Language.DMoCHi.Common.Id,
+                       Language.DMoCHi.Boolean.Alpha,
+                       Language.DMoCHi.Boolean.PrettyPrint.Typed,
+                       Language.DMoCHi.ML.PrettyPrint.UnTyped,
+                       Language.DMoCHi.ML.PrettyPrint.Typed,
+                       Language.DMoCHi.ML.Syntax.UnTyped,
+                       Language.DMoCHi.ML.Alpha,
+                       Language.DMoCHi.ML.Parser,
+                       Language.DMoCHi.ML.PredicateAbstraction,
+                       Language.DMoCHi.ML.TypeCheck
+                       Language.DMoCHi.Boolean.Type2
 
 executable dmochi
   main-is:             Main.hs
   -- other-modules:       
   other-extensions:    FlexibleInstances, FlexibleContexts, StandaloneDeriving, BangPatterns, TupleSections, OverloadedStrings, LambdaCase, ViewPatterns, ScopedTypeVariables, GADTs, DataKinds, TypeFamilies, TypeOperators, RankNTypes, DeriveFunctor
   build-depends:       base >=4.8 && <4.9, dmochi
-  hs-source-dirs:      src
+  hs-source-dirs:      src-exec
   default-language:    Haskell2010
 
 test-suite unit-test
     type:              exitcode-stdio-1.0
     main-is:           Main.hs
     hs-source-dirs:    test
-    build-depends:     base >=4.8 && <4.9, dmochi, hspec >= 2.2, hspec-core >= 2.2, hspec-expectations >= 0.7
+    build-depends:     base >=4.8 && <4.9, dmochi, hspec >= 2.2, hspec-core >= 2.2, hspec-expectations >= 0.7, hspec-discover
     default-language:  Haskell2010

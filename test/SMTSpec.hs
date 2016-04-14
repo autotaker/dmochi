@@ -14,5 +14,3 @@ spec = do
             sat [Var (Id TBool "x")] `shouldReturn` True
             sat [Var (Id TBool "x"), Op (OpNot (Var (Id TBool "x")))] `shouldReturn` False
 
-
-

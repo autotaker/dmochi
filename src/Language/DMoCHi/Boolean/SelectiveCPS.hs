@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase, FlexibleContexts #-}
 module Language.DMoCHi.Boolean.SelectiveCPS where
 
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
@@ -166,7 +166,7 @@ convertT env = \case
         t1' <- convertT env t1
         t2' <- convertT env t2
         return $ Assume (getSSort t2') t1' t2'
-    B.Branch _ t1 t2 -> do
+    B.Branch _ _ t1 t2 -> do
         t1' <- convertT env t1
         t2' <- convertT env t2
         return $ Branch (getSSort t1') t1' t2'

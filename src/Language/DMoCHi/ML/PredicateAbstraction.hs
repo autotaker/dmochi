@@ -1,11 +1,15 @@
+{-# LANGUAGE FlexibleContexts #-}
 module Language.DMoCHi.ML.PredicateAbstraction where
 import Control.Monad
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
+import qualified Data.DList as DL
 
 import qualified Language.DMoCHi.ML.Syntax.Typed as ML
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
+import qualified Language.DMoCHi.ML.Syntax.SMT as SMT
 import Language.DMoCHi.Common.Id
+import Control.Monad.Writer
 
 data PType = PInt | PBool
            | PFun ML.Type (ML.Id,PType,[Formula]) (ML.Id,PType,[Formula])
@@ -22,7 +26,8 @@ type TypeMap = IM.IntMap (Either PType TermType)
 
 -- getSort (abstFormulae cs pv fmls) == TBool^(length fmls)
 abstFormulae :: Monad m => Constraints -> PVar -> [Formula] -> m B.Term
-abstFormulae = undefined
+abstFormulae cs pvs fml = undefined
+    
 
 -- getSort (abstFormulae cs pv fmls) == TBool
 abstFormula :: Monad m => Constraints -> PVar -> Formula -> m B.Term
@@ -249,3 +254,47 @@ abstProg tbl (ML.Program fs t0) = do
         r <- ML.Id ML.TInt <$> freshId "main"
         abstTerm tbl env [] [] t0 (r,PInt,[])
     return $ B.Program ds e0
+
+initTypeMap :: MonadId m => ML.Program -> m TypeMap
+initTypeMap (ML.Program fs t0) = do
+    es <- execWriterT $ do
+        let gather (ML.Value _) = return ()
+            gather (ML.Let s _ lv e) = do
+                case lv of
+                    ML.LValue _ -> return ()
+                    ML.LApp _ _ _ _ -> return ()
+                    ML.LFun f -> gatherF f
+                    ML.LExp i e' -> do
+                        gather e'
+                        ty <- genTermType s
+                        tell (DL.singleton (i, Right ty))
+                    ML.LRand -> return ()
+                gather e
+            gather (ML.Assume _ _ e) = gather e
+            gather (ML.Fail _) = return ()
+            gather (ML.Branch _ _ e1 e2) = gather e1 >> gather e2
+            gatherF f = do
+                gather (ML.body f)
+                ty <- genPType (ML.getType f)
+                tell (DL.singleton (ML.ident f,Left ty))
+        forM_ fs $ \(_, f) -> gatherF f
+        gather t0
+    return $ IM.fromList $ DL.toList es
+
+genTermType :: MonadId m => ML.Type -> m TermType
+genTermType s = do
+    r <- ML.Id s <$> freshId "r"
+    pty <- genPType s
+    return (r,pty,[])
+genPType :: MonadId m => ML.Type -> m PType
+genPType ML.TInt = return PInt
+genPType ML.TBool = return PBool
+genPType ty@(ML.TPair t1 t2) = PPair ty <$> genPType t1 <*> genPType t2
+genPType ty@(ML.TFun t1 t2) = do
+    x <- ML.Id t1 <$> freshId "x"
+    r <- ML.Id t2 <$> freshId "r"
+    ty_x <- genPType t1
+    ty_r <- genPType t2
+    return $ PFun ty (x, ty_x, []) (r, ty_r, [])
+    
+

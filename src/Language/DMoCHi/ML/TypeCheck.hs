@@ -11,8 +11,8 @@ import Debug.Trace
 import Language.DMoCHi.Common.Id
 instance Show TypeError where
     show (UndefinedVariable s) = "UndefinedVariables: "++ s
-    show (TypeMisMatch s t1 t2)   = "TypeMisMatch: " ++ show t1 ++ " should be " ++ show t2 ++ ". context :" ++ s
-    show (TypeMisUse t1 t2)     = "TypeUse: " ++ show t1 ++ " should be in" ++ show t2
+    show (TypeMisMatch s t1 t2) = "TypeMisMatch: " ++ show t1 ++ " should be " ++ show t2 ++ ". context :" ++ s
+    show (TypeMisUse t1 t2)     = "TypeUse: " ++ show t1 ++ " should be in " ++ show t2
     show (OtherError s)         = "OtherError: " ++ s
 
 type Env = M.Map String Type
@@ -25,8 +25,11 @@ fromUnTyped :: (Applicative m,MonadError TypeError m, MonadId m) => U.Program ->
 fromUnTyped (U.Program fs t) = do
     fs' <- mapM (\(x,p,e) -> (,,) x <$> convertP p <*> pure e) fs
     let tenv = M.fromList [ (x,getType p) | (x,p,_) <- fs' ]
-    fs'' <- mapM (\(x,p,e) -> 
-        (,,) (Id (getType p) x) p <$> convertE tenv (getType p) e) fs'
+    fs'' <- forM fs' $ \(x,p,U.Lambda y e) -> do
+        let x' = Id (getType p) x
+            ty = getType p
+        fdef <- convertLambda tenv y e ty
+        return (x',fdef) 
     Program fs'' <$> convertE tenv TInt t
 
 {-
@@ -87,15 +90,20 @@ convertE env ty _e = case _e of
         shouldBeValue  v' TBool
         Assume ty v' <$> convertE env ty e
     U.Lambda x e -> do
-        case ty of
-            TFun t1 t2 -> do
-                i <- freshInt
-                Lambda ty i (Id t1 x) <$> convertE (M.insert x t1 env) t2 e
-            _ -> throwError $ OtherError "Expecting function"
+        fdef <- convertLambda env x e ty
+        f <- Id ty <$> freshId "f"
+        return $ Let ty f (LFun fdef) (Value (Var f))
     U.Fail -> pure $ Fail ty
     U.Branch e1 e2 -> do
         i <- freshInt
         Branch ty i <$> convertE env ty e1 <*> convertE env ty e2
+
+convertLambda :: (MonadError TypeError m, MonadId m) => Env -> U.Id -> U.Exp -> Type -> m FunDef
+convertLambda env arg body (TFun t1 t2) = do
+    i <- freshInt
+    FunDef i (Id t1 arg) <$> convertE (M.insert arg t1 env) t2 body
+convertLambda _ _ _ _ = throwError $ OtherError "Expecting function"
+
 
 -- f v1 v2 .. vn ==> (yn-1 vn,[(y1,f v1),(y2,y1 v2),...,(yn-1,yn-2,vn-1)])
 -- に変換する
@@ -125,9 +133,14 @@ convertLV env lv = case lv of
                     vn = last vs'
                 return $ (LApp ty' (last is) yn vn,l)
             Nothing -> throwError $ UndefinedVariable f
+    U.LExp ptyp (U.Lambda x e) -> do
+        ptyp' <- convertP ptyp
+        fdef <- convertLambda env x e (getType ptyp')
+        return (LFun fdef,[])
     U.LExp ptyp e -> do
         ptyp' <- convertP ptyp
-        lv <- LExp ptyp' <$> convertE env (getType ptyp') e
+        i <- freshInt
+        lv <- LExp i <$> convertE env (getType ptyp') e
         return (lv,[])
                 
 
@@ -154,7 +167,7 @@ convertV env v = case v of
                 v1' <- convertV env v1
                 v2' <- convertV env v2
                 v1' `shouldBeValue` getType v2'
-                getType v1' `shouldBeIn` [TInt,TBool]
+                -- getType v1' `shouldBeIn` [TInt,TBool]
                 return $ OpEq v1' v2'
             U.OpLt  v1 v2 -> bin OpLt TInt v1 v2
             U.OpGt  v1 v2 -> bin OpLt TInt v2 v1

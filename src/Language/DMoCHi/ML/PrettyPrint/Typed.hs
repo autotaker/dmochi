@@ -22,9 +22,13 @@ pprintE (Let _ x' lv e) =
                        <+> equals <+> text ("(*" ++ show i ++ "*)") <+>
                 text (name f) <+> hsep (map (pprintV 9) [v]) <+> text "in" $+$
             pprintE e
-        LExp ptyp ev ->
-            text "let" <+> text x <+> colon <+> pprintP 0 ptyp <+> equals $+$
+        LExp i ev ->
+            text "let" <+> text x <+> text ("(*" ++ show i ++ "*)") <+> equals $+$
             nest 4 (pprintE ev) <+> text "in" $+$
+            pprintE e
+        LFun f ->
+            text "let" <+> text x <+> equals $+$
+            nest 4 (pprintF f) <+> text "in" $+$
             pprintE e
         LRand -> 
             text "let" <+> text x <+> colon <+> pprintT 0 TInt
@@ -33,12 +37,15 @@ pprintE (Let _ x' lv e) =
 pprintE (Assume _ v e) = 
     text "assume" <+> pprintV 0 v <> semi $+$
     pprintE e
-pprintE (Lambda _ i x e) =
-    text "fun" <+> text ("(*" ++ show i ++ "*)") <+> text (name x) <+> text "->" $+$ 
-    nest 4 (pprintE e)
 pprintE (Fail _) = text "Fail"
 pprintE (Branch _ i e1 e2) =
     parens (pprintE e1) $+$ text "<>" <+> text ("(*" ++ show i ++ "*)") $+$ parens (pprintE e2)
+
+pprintF :: FunDef -> Doc
+pprintF (FunDef i x e) = 
+    text "fun" <+> text ("(*" ++ show i ++ "*)") <+> text (name x) <+> text "->" $+$ 
+    nest 4 (pprintE e)
+
 
 pprintV :: Int -> Value -> Doc
 pprintV _ (Var x) = text (name x)
@@ -84,11 +91,10 @@ pprintP assoc (PFun _ p (x,f)) =
 
 pprintProgram :: Program -> Doc
 pprintProgram (Program fs t) =
-    let d = vcat $ map (\(f,ty,e) -> 
-            text "let" <+> text (name f) <+> colon <+> pprintP 0 ty <+> equals $+$
-            nest 4 (pprintE e <> text ";;")) fs in
     text "(* functions *)" $+$ 
-    d $+$ 
+    (vcat $ map (\(f,fdef) -> 
+        text "let" <+> text (name f) <+> equals $+$
+        nest 4 (pprintF fdef <> text ";;")) fs) $+$ 
     text "(* main *)" $+$
     pprintE t
 
