@@ -6,10 +6,13 @@ import qualified Data.IntMap as IM
 import qualified Data.DList as DL
 
 import qualified Language.DMoCHi.ML.Syntax.Typed as ML
+import qualified Language.DMoCHi.ML.PrettyPrint.Typed as ML
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
+import qualified Language.DMoCHi.Boolean.PrettyPrint.Typed as B
 import qualified Language.DMoCHi.ML.SMT as SMT
 import Language.DMoCHi.Common.Id
 import Control.Monad.Writer
+import Text.PrettyPrint
 
 data PType = PInt | PBool
            | PFun ML.Type (ML.Id,PType,[Formula]) (ML.Id,PType,[Formula])
@@ -24,14 +27,73 @@ type TermType = (ML.Id, PType, [Formula])
 
 type TypeMap = IM.IntMap (Either PType TermType)
 
+pprintTermType :: TermType -> Doc
+pprintTermType (x,pty_x,fml) = braces $ 
+    text (ML.name x) <+> colon <+> (pprintPType 0 pty_x) <+>
+    text "|" <+> (hsep $ punctuate comma $ map (ML.pprintV 0) fml)
+
+pprintPType :: Int -> PType -> Doc
+pprintPType _ PInt = text "int"
+pprintPType _ PBool = text "bool"
+pprintPType assoc (PPair _ pty1 pty2) =
+    let d1 = pprintPType 1 pty1
+        d2 = pprintPType 1 pty2
+        d = d1 <+> text "*" <+> d2
+    in if assoc == 0 then d else parens d
+pprintPType assoc (PFun _ x_tup r_tup) =
+    let d = pprintTermType x_tup <+> text "->" <+> pprintTermType r_tup in
+    if assoc == 0 then d else parens d
+
 -- getSort (abstFormulae cs pv fmls) == TBool^(length fmls)
-abstFormulae :: Monad m => Constraints -> PVar -> [Formula] -> m B.Term
-abstFormulae cs pvs fml = undefined
-    
+abstFormulae :: (MonadIO m, MonadId m) => Constraints -> PVar -> [Formula] -> m B.Term
+abstFormulae cs pvs fml = do
+    let ps = map snd pvs ++ fml
+    bdd <- liftIO $ SMT.abst cs ps
+    let sort = B.Tuple [ B.Bool | _ <- fml ]
+    let gen qs (SMT.Leaf _ True) = return $ B.T $ reverse qs
+        gen qs (SMT.Leaf _ False) = do
+            omega <- B.Symbol sort <$> freshId "Omega"
+            return $ B.Omega omega
+        gen qs (SMT.Node _ v hi lo) 
+            | hi == lo = do
+                let q = (B.f_branch (B.C True) (B.C False))
+                gen (q:qs) hi
+            | otherwise = do
+                term_hi <- gen (B.C True : qs) hi
+                term_lo <- gen (B.C False : qs) lo
+                return $ B.f_branch term_hi term_lo
+        go [] bdd = gen [] bdd
+        go ((term_p, _):_) (SMT.Leaf _ False) = do
+            omega <- B.Symbol sort <$> freshId "Omega1"
+            return $ B.Omega omega
+        go ((term_p, _):_) (SMT.Leaf _ True) = error "abstFormulae: unexpected satisfiable leaf"
+        go ((term_p, _):pvs') (SMT.Node _ _ hi lo) 
+            | hi == lo = go pvs' hi
+            | otherwise = do
+                term_hi <- go pvs' hi
+                term_lo <- go pvs' lo
+                return $ B.f_branch (B.f_assume term_p         term_hi)
+                                    (B.f_assume (B.Not term_p) term_lo)
+
+    term <- go pvs bdd
+    liftIO $ putStrLn $ render (
+        let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintV 0) cs)
+            doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintV 0 . snd) pvs)
+            doc_fml = brackets $ hsep $ punctuate comma (map (ML.pprintV 0) fml)
+            doc_term = B.pprintTerm 0 term
+        in braces (
+           text "constraints:" <+> doc_cs $+$ 
+           text "predicates:" <+> doc_pvar $+$ 
+           text "formulae:" <+> doc_fml $+$ 
+           text "abst result:" <+> doc_term))
+    return term
 
 -- getSort (abstFormulae cs pv fmls) == TBool
-abstFormula :: Monad m => Constraints -> PVar -> Formula -> m B.Term
-abstFormula cs pv fml = undefined
+abstFormula :: (MonadIO m, MonadId m) => Constraints -> PVar -> Formula -> m B.Term
+abstFormula cs pvs fml = do
+    term <- abstFormulae cs pvs [fml]
+    tup <- B.Symbol (B.Tuple [B.Bool]) <$> freshId "tuple"
+    return $ B.f_let tup term (B.f_proj 0 1 (B.V tup))
 
 fromType :: ML.Type -> PType
 fromType ML.TInt = PInt
@@ -48,7 +110,7 @@ fromType (ML.TFun t1 t2) = PFun (ML.TFun t1 t2)
 --      toSimple curTy == toSimple newTy
 -- assertion:
 --      getSort e' == toSort newTy
-cast :: (Monad m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
+cast :: (MonadIO m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
 cast cs pv e curTy newTy = case (curTy,newTy) of
     (PInt,  PInt) -> return e
     (PBool, PBool) -> return e
@@ -85,6 +147,9 @@ toSort (PFun _ tx tr) = toSort' tx B.:-> toSort' tr
 
 toSort' (_, ty, ps) = B.Tuple [toSort ty, B.Tuple [ B.Bool | _ <- ps ]]
 
+substTermType :: ML.Id -> ML.Id -> TermType -> TermType
+substTermType a b (x,pty,ps) = (x, substPType a b pty, map (substFormula a b) ps)
+
 substPType :: ML.Id -> ML.Id -> PType -> PType
 substPType a b = go where
     f = substFormula a b
@@ -117,7 +182,7 @@ substVFormula a b = go where
 toSymbol :: ML.Id -> PType -> B.Symbol
 toSymbol x ty = B.Symbol (toSort ty) (ML.name x)
 
-abstValue :: MonadId m => Env -> Constraints -> PVar -> ML.Value -> PType -> m B.Term
+abstValue :: (MonadIO m, MonadId m) => Env -> Constraints -> PVar -> ML.Value -> PType -> m B.Term
 abstValue env cs pv = go 
     where 
     go v ty = case v of
@@ -164,7 +229,7 @@ typeOfValue env = go where
                 let PPair _ _ ty2 = go v in ty2
             ML.OpNot v -> PBool
 
-abstTerm :: MonadId m => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
+abstTerm :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
 abstTerm tbl env cs pv t (r,ty,qs) = doit where
     doit = case t of
         ML.Value v -> do
@@ -181,18 +246,18 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
         ML.Let _ x (ML.LApp _ _ f v) t' -> do
             let ty_v = typeOfValue env v 
             let PFun _ (y,ty_y,ps) (r',ty_r',qs') = env M.! f
-            let cs' = addEq y v cs 
             arg_body  <- abstValue env cs pv v ty_y
-            arg_preds <- abstFormulae cs' pv ps
+            arg_preds <- abstFormulae cs pv (map (substVFormula y v) ps)
             let f' = toSymbol f (env M.! f)
             x' <- B.freshSym (ML.name x ++ "_pair") (toSort' (r',ty_r',qs'))
             let x_body  = B.f_proj 0 2 (B.V x')
                 x_preds = B.f_proj 1 2 (B.V x')
                 n = length qs'
-                pv' = [ (B.f_proj i n x_preds, substVFormula r v fml) | (i,fml) <- zip [0..] qs' ] ++ pv
+                pv' = [ (B.f_proj i n x_preds, 
+                         substFormula x r' (substVFormula y v fml)) | (i,fml) <- zip [0..] qs' ] ++ pv
             B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .  
               B.f_let (toSymbol x ty_r') x_body <$>
-                abstTerm tbl (M.insert x ty_r' env) cs' pv' t' (r,ty,qs)
+                abstTerm tbl (M.insert x ty_r' env) cs pv' t' (r,ty,qs)
 
         ML.Let _ f (ML.LFun func) t' -> do
             (e_f,ty_f) <- abstFunDef tbl env cs pv func
@@ -223,13 +288,13 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
             return $ B.Fail fail
 
         ML.Branch _ _ t1 t2 -> do
-            B.f_branch <$> abstTerm tbl env cs pv t1 (r,ty,qs)
-                       <*> abstTerm tbl env cs pv t2 (r,ty,qs)
+            B.f_branch_label <$> abstTerm tbl env cs pv t1 (r,ty,qs)
+                             <*> abstTerm tbl env cs pv t2 (r,ty,qs)
 
 addEq :: ML.Id -> ML.Value -> Constraints -> Constraints
 addEq y v cs = ML.Op (ML.OpEq (ML.Var y) v):cs
 
-abstFunDef :: MonadId m => TypeMap -> Env -> Constraints -> PVar -> ML.FunDef -> m (B.Term, PType)
+abstFunDef :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.FunDef -> m (B.Term, PType)
 abstFunDef tbl env cs pv func = do
     let ML.FunDef ident x t1 = func
     let Left ty_f@(PFun _ (y,ty_y,ps) rty) = tbl IM.! ident
@@ -238,13 +303,18 @@ abstFunDef tbl env cs pv func = do
         let x_body  = B.f_proj 0 2 (B.V x_pair)
             x_preds = B.f_proj 1 2 (B.V x_pair)
             n = length ps
-            pv' = [ (B.f_proj i n x_preds, fml) | (i,fml) <- zip [0..] ps ] ++ pv
+            pv' = [ (B.f_proj i n x_preds, substFormula y x fml) | (i,fml) <- zip [0..] ps ] ++ pv
+            rty' = substTermType y x rty
         B.f_let (toSymbol x ty_y) x_body <$>
-            abstTerm tbl (M.insert x ty_y env) (addEq x (ML.Var y) cs) pv' t1 rty
+            abstTerm tbl (M.insert x ty_y env) cs pv' t1 rty
     return (e,ty_f)
 
-abstProg :: MonadId m => TypeMap -> ML.Program -> m B.Program
+abstProg :: (MonadId m, MonadIO m) => TypeMap -> ML.Program -> m B.Program
 abstProg tbl (ML.Program fs t0) = do
+    liftIO $ forM_ (IM.assocs tbl) $ \(i,pty') -> 
+        case pty' of
+            Left pty -> putStrLn $ render $ int i <+> colon <+> pprintPType 0 pty
+            Right termType -> putStrLn $ render $ int i <+> colon <+> pprintTermType termType
     let env = M.fromList [ (f,ty)  | (f,func) <- fs, let Left ty = tbl IM.! ML.ident func ]
     ds <- forM fs $ \(f,func) -> do
         let f' = toSymbol f (env M.! f)

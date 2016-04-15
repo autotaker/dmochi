@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
-module Language.DMoCHi.ML.SMT(sat,abst,fromBDD) where
+module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..)) where
 
 import Language.DMoCHi.ML.Syntax.Typed
 import Z3.Monad

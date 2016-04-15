@@ -11,7 +11,7 @@ import Prelude hiding(lines)
 
 reservedNames :: [String]
 reservedNames = 
-    ["let","in","fun", "true","false", "fail","assume","not","Bool","X"]
+    ["let","in","fun", "true","false", "fail","assume","not","Bool","X", "omega"]
 
 language :: P.GenLanguageDef String () (Reader (M.Map String Symbol))
 language    = P.LanguageDef
@@ -104,6 +104,7 @@ termP = expr where
         env <- ask
         return $ V $ env M.! x
     failP = (\t -> Fail (Symbol t "")) <$> (reserved "fail" *> parens sortP)
+    omegaP = (\t -> Fail (Symbol t "")) <$> (reserved "omega" *> parens sortP)
     projP = dot *> parens (f_proj <$> natural <*> (reservedOp "/" *> natural))
     tupleP = T <$> do
         n <- natural 
@@ -115,7 +116,7 @@ termP = expr where
             foldl1 f_app <$> many1 expr4 
             <?> "app"
     expr4 = (foldl (flip ($)) <$> atom <*> many projP) <?> "proj"
-    atom = trueP <|> falseP <|> failP <|> varP <|>
+    atom = trueP <|> falseP <|> failP <|> omegaP <|> varP <|>
            parens (tupleP <|> expr) <?> "atom"
 
 symbolP :: Parser Symbol

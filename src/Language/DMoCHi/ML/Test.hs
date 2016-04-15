@@ -97,7 +97,8 @@ doit = do
     let file_boolean = path ++ ".bool"
     let boolProgram = B.toUnTyped boolProgram'
     liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
-    liftIO $ B.printProgram boolProgram
+    liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
+    --liftIO $ B.pprintProgram boolProgram
     
     t_model_checking_begin <- liftIO $ getCurrentTime
     r <- withExceptT BooleanError $ test file_boolean boolProgram

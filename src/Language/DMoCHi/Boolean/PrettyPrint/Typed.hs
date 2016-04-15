@@ -46,6 +46,7 @@ prec (C _)          = 6
 prec (V _)          = 6
 prec (T _)          = 6
 prec (Fail _)       = 6
+prec (Omega _)       = 6
 prec (Proj _ _ _ _) = 5
 prec (App _ _ _)    = 4
 prec (Not _)        = 4
@@ -98,3 +99,4 @@ pprintTerm p _t = parenPrec (prec _t) p $ case _t of
     Not t1 ->
         text "not" <+> pprintTerm (prec _t+1) t1
     Fail x -> text "fail" <> parens (pprintSort (getSort x))
+    Omega x -> text "omega" <> parens (pprintSort (getSort x))

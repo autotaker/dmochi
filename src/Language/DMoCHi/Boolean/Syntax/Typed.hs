@@ -57,7 +57,8 @@ data Term = C Bool
           | And Term Term
           | Or  Term Term
           | Not Term
-          | Fail Symbol deriving(Ord,Eq,Show)
+          | Fail Symbol 
+          | Omega Symbol deriving(Ord,Eq,Show)
 
 f_assume :: Term -> Term -> Term
 f_assume (C True) e = e
@@ -109,6 +110,7 @@ instance HasSort Term where
     getSort (Or _ _)  = Bool
     getSort (Not _)   = Bool
     getSort (Fail x) = getSort x
+    getSort (Omega x) = getSort x
 
 modifySort :: (Sort -> Sort) -> Symbol -> Symbol
 modifySort f s = Symbol (f $ _sort s) (name s)
@@ -136,6 +138,7 @@ toUnTyped (Program ds t0) = B.Program ds' t0' where
     convert (Or t1 t2) = B.If () False (convert t1) (B.C () True) (convert  t2)
     convert (Not t) = B.If () False (convert t) (B.C () False) (B.C () True)
     convert (Fail x) = B.Fail () (name x)
+    convert (Omega x) = B.Omega () (name x)
 
 tCheck :: Program -> Except (Sort,Sort,String,[Term]) ()
 tCheck (Program ds t0) = doit where
@@ -191,6 +194,7 @@ tCheck (Program ds t0) = doit where
             go ctx' t
             check Bool (getSort t) "not" (t:ctx')
         Fail _ -> return ()
+        Omega _ -> return ()
         
                     
         
