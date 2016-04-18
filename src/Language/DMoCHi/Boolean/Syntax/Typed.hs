@@ -121,24 +121,31 @@ order Bool = 0
 order (Tuple xs) = maximum (0:map order xs)
 order (t1 :-> t2) = max (order t1+1) (order t2)
 
-toUnTyped :: Program -> B.Program
-toUnTyped (Program ds t0) = B.Program ds' t0' where
-    ds' = map (\(x,t) -> (name x,convert t)) ds
-    t0' = convert t0
-    convert (C b) = B.C () b
-    convert (V x) = B.V () (name x)
-    convert (T ts) = B.T () (map convert ts)
-    convert (Lam x t) = B.Lam () (name x) (convert t)
-    convert (Let _ x tx t) = B.Let () (name x) (convert tx) (convert t)
-    convert (App _ t1 t2) = B.App () (convert t1) (convert t2)
-    convert (Proj _ i s t) = B.Proj () (B.ProjN i) (B.ProjD s) (convert t)
-    convert (Assume _ p t) = B.If () False (convert p) (convert t) (B.Omega () "")
-    convert (Branch _ b t1 t2) = B.If () b (B.TF ()) (convert t1) (convert t2)
-    convert (And t1 t2) = B.If () False (convert t1) (convert t2) (B.C () False)
-    convert (Or t1 t2) = B.If () False (convert t1) (B.C () True) (convert  t2)
-    convert (Not t) = B.If () False (convert t) (B.C () False) (B.C () True)
-    convert (Fail x) = B.Fail () (name x)
-    convert (Omega x) = B.Omega () (name x)
+-- assumption: the given program is alpha-converted
+-- requirement: the output program is also alpha-converted
+toUnTyped :: MonadId m => Program -> m B.Program
+toUnTyped (Program ds t0) = doit where
+    doit = do
+        ds' <- mapM (\(x,t) -> (,) (name x) <$> convert t) ds 
+        t0' <- convert t0
+        return $ B.Program ds' t0'
+    convert (C b) = return $ B.C () b
+    convert (V x) = return $ B.V () (name x)
+    convert (T ts) = B.T () <$> mapM convert ts
+    convert (Lam x t) = B.Lam () (name x) <$> convert t
+    convert (Let _ x tx t) = B.Let () (name x) <$> convert tx <*> (convert t)
+    convert (App _ t1 t2) = B.App () <$> convert t1 <*> convert t2
+    convert (Proj _ i s t) = B.Proj () (B.ProjN i) (B.ProjD s) <$> convert t
+    convert (Assume _ p t) = B.If () False <$> (convert p) <*> (convert t) <*> omega
+    convert (Branch _ b t1 t2) = B.If () b (B.TF ()) <$> (convert t1) <*> (convert t2)
+    convert (And t1 t2) = B.If () False <$> (convert t1) <*> (convert t2) <*> pure (B.C () False)
+    convert (Or t1 t2) = B.If () False <$> (convert t1) <*> pure (B.C () True) <*> (convert  t2)
+    convert (Not t) = B.If () False <$> (convert t) <*> pure (B.C () False) <*> pure (B.C () True)
+    convert (Fail x) = return $ B.Fail () (name x)
+    convert (Omega x) = return $ B.Omega () (name x)
+    omega = do
+        x <- freshId "Omega"
+        return $ B.Omega () x
 
 tCheck :: Program -> Except (Sort,Sort,String,[Term]) ()
 tCheck (Program ds t0) = doit where

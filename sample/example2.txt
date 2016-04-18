@@ -1,0 +1,9 @@
+let f : x:int -> int = 
+  fun x -> 
+    (assume (not (x > 0)); Fail);;
+
+let x = * in
+assume (x > 0);
+let r = f x in
+r
+

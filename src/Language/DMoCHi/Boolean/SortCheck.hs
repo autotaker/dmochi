@@ -48,8 +48,9 @@ gatherP (Program defs t0) env = do
     forM_ defs $ \(f,t) -> do
         s <- gatherT t env
         s `shouldBe` (env M.! f)
-    s0 <- gatherT t0 env
-    s0 `shouldBe` STup []
+    _s0 <- gatherT t0 env
+    return ()
+--    _s0 `shouldBe` STup []
 
 gatherT :: Term a -> Env -> SWM SortLike
 gatherT _t env = go _t where
@@ -114,7 +115,7 @@ unify _cs = execStateT (go _cs) M.empty
                     --assert (length ss1 == length ss2) "Invalid Number of Arguments"
                     go ((sx1,sx2) Q.<| (s1,s2) Q.<| cs)
                 (STup ss1,STup ss2) -> do
-                    assert (length ss1 == length ss2) "Invalid Size of Tuple"
+                    assert (length ss1 == length ss2) $ "Invalid Size of Tuple:" ++ show (s1', s2')
                     go (Q.fromList (zip ss1 ss2) Q.>< cs)
                 (_,_) -> assert False $ "Unification Failed:" ++ show s1' ++ "," ++ show s2'
 

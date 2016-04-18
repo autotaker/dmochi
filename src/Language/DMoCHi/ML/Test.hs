@@ -96,10 +96,11 @@ doit = do
                 printf "Context %d: %s\n" i (show t)
         Right _ -> return ()
     let file_boolean = path ++ ".bool"
-    let boolProgram = B.toUnTyped boolProgram'
+    boolProgram <- B.toUnTyped boolProgram'
     liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
     liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
-    --liftIO $ B.pprintProgram boolProgram
+    liftIO $ putStrLn "Converted program"
+    liftIO $ B.printProgram boolProgram
     
     t_model_checking_begin <- liftIO $ getCurrentTime
     r <- withExceptT BooleanError $ test file_boolean boolProgram

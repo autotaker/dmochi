@@ -275,7 +275,7 @@ extractCE prog flowEnv genv hist =
     execWriterT $ evalFail env genv (mainTerm prog)
     where
     evalFail :: Env -> M.Map Symbol VType -> Term () -> WriterT [Bool] (ReaderT Factory IO) ()
-    evalFail env tenv e = {- traceShow e $ -} case e of
+    evalFail env tenv e = {- traceShow (e,tenv) $ -} case e of
         T s es -> 
             let sub [] = error "extractCE: Tuple: there must be an term that fails"
                 sub (ei:es') = do
@@ -332,7 +332,7 @@ extractCE prog flowEnv genv hist =
                             return (vf,a)
                     (Cls x e0 env' tenv') <- eval env tenv e1 ty1'
                     v2 <- eval env tenv e2 ty2'
-                    evalFail (M.insert x v2 env') (M.insert x ty1' tenv') e0
+                    evalFail (M.insert x v2 env') (M.insert x ty2' tenv') e0
         Fail _ _ -> return ()
     eval :: Env -> M.Map Symbol VType -> Term () -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
     eval env tenv e ety = {- traceShow e $ trace ("type: "++ show ety) $ -} case e of

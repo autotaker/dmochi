@@ -123,8 +123,10 @@ closures (Program ds t0) = (ds >>= (\(_,_,e) -> go e)) <|> go t0
 symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log)
 symbolicExec prog trace = 
     runWriterT $ evalStateT (genEnv >>= (\genv -> do
-        _ <- eval (CallId 0) genv (ML.mainTerm prog)
-        return genv)) (S 1 0 trace)
+        r <- eval (CallId 0) genv (ML.mainTerm prog)
+        case r of
+            Just sv -> error "symbolicExec: This error trace cannot reach to any failure!"
+            Nothing -> return genv)) (S 1 0 trace)
     where
     -- preprocessing
     genEnv = mfix $ \genv -> do

@@ -1,0 +1,9 @@
+let sum : x:int -> int = 
+  fun x -> 
+    (assume (not (x > 0)); 0) <>
+    (assume (x > 0); let y = sum (x - 1) in x + y);;
+
+let x = * in
+let r = sum x in
+assume (r < x); Fail
+
