@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables, LambdaCase #-}
 module Language.DMoCHi.ML.Refine where
 
-import Language.DMoCHi.ML.Syntax.Typed
+import qualified Language.DMoCHi.ML.Syntax.Typed as ML
 import qualified Data.Map as M
 import Control.Applicative
 import Control.Monad
@@ -32,7 +32,7 @@ data ClosureInfo = ClosureInfo { label :: Int -- 対応する関数定義のラ�
 -- 関数返り値の情報
 data ReturnInfo = ReturnInfo { rcallId :: CallId -- 関数呼び出しの識別子
                              , argValue :: SValue -- 引数
-                             , retValue :: SValue -- 返り値
+                             , retValue :: Maybe SValue -- 返り値(ないときはfailを表す)
                              } deriving Show
 
 -- 分岐情報
@@ -58,7 +58,7 @@ data SValue = SVar Id
 
 instance Show SValue where
     showsPrec d (SVar x) = 
-        showParen (d >= 3) $ showString (name x) . showString " : " . shows (getType x)
+        showParen (d >= 3) $ showString (ML.name x) . showString " : " . shows (ML.getType x)
     showsPrec _ (Int i) = shows i
     showsPrec _ (Bool b) = shows b
     showsPrec _ (P v1 v2) = 
@@ -81,16 +81,19 @@ instance Show SValue where
         showParen (d >= 8) $ (showString "not ") . showsPrec 8 v1
     showsPrec d (C cls) = showsPrec d cls
                        
-data Closure = Cls Int {- Label -} ClosureId {- Ident -}  Env
+data Closure = Cls ML.FunDef ClosureId {- Ident -} Env
 
 instance Show Closure where
-    show (Cls i x _) = "Closure " ++ show i ++ " " ++ show x
+    show (Cls i x _) = "Closure " ++ show (ML.ident i) ++ " " ++ show x
 type Env = M.Map Id SValue
+type Id = ML.Id
 
 type Log = ([Constraint],[CallInfo],[ClosureInfo],[ReturnInfo],[BranchInfo])
 
 type M m a = StateT S (WriterT Log m) a
-data S = S { callCounter :: !Int, clsCounter :: !Int, cTrace :: !Trace }
+data S = S { callCounter :: !Int
+           , clsCounter  :: !Int
+           , cTrace      :: !Trace }
 
 incrCall :: S -> S
 incrCall (S x y z) = S (x+1) y z
@@ -101,6 +104,7 @@ incrCls (S x y z) = S x (y+1) z
 pop :: S -> S
 pop (S x y z) = S x y (tail z)
 
+{- needed no longer
 closures :: Program -> [Exp]
 closures (Program ds t0) = (ds >>= (\(_,_,e) -> go e)) <|> go t0
     where
@@ -114,89 +118,80 @@ closures (Program ds t0) = (ds >>= (\(_,_,e) -> go e)) <|> go t0
     sub (LApp _ _ _ _) = empty
     sub (LExp _ e) = go e
     sub (LRand) = empty
+    -}
 
-symbolicExec :: forall m. (MonadId m, MonadFix m) => Program -> Trace -> m (M.Map Id SValue, Log)
-symbolicExec prog trace = runWriterT (evalStateT (genEnv >>= (\genv -> evalFail genv (mainTerm prog) >> return genv)) (S 1 0 trace)) 
+symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log)
+symbolicExec prog trace = 
+    runWriterT $ evalStateT (genEnv >>= (\genv -> do
+        _ <- eval (CallId 0) genv (ML.mainTerm prog)
+        return genv)) (S 1 0 trace)
     where
-    clsTbl :: IM.IntMap Exp
-    clsTbl = IM.fromList $ map (\t@(Lambda _ i _ _) -> (i,t)) $ closures prog
+    -- preprocessing
     genEnv = mfix $ \genv -> do
-        es <- forM (functions prog) $ \(f, _, Lambda _ i _ _) -> do
-            c <- genClosure (CallId 0) i genv
+        es <- forM (ML.functions prog) $ \(f, fdef) -> do
+            c <- genClosure (CallId 0) fdef genv
             return (f,C c)
         return $ M.fromList es
-    n = length (functions prog)
-    evalFail :: Env -> Exp -> M m ()
-    evalFail env = \case
-        Let _ x lv e -> do
-            r <- evalLV (CallId 0) env lv
-            evalFail (M.insert x r env) e
-        Assume _ v e -> do
-            constrain (evalV env v)
-            evalFail env e
-        Fail _ -> return ()
-        Branch _ i e1 e2 -> do
-            b <- consume
-            branch (BranchInfo (CallId 0) i b)
-            if b then
-                evalFail env e1
-            else
-                evalFail env e2
-    evalV :: Env -> Value -> SValue
-    evalV env = \case
-        Var x -> env M.! x
-        CInt x -> Int x
-        CBool x -> Bool x
-        Pair v1 v2 -> P (evalV env v1) (evalV env v2)
-        Op op -> case op of
-            OpAdd v1 v2 -> Add (evalV env v1) (evalV env v2)
-            OpSub v1 v2 -> Sub (evalV env v1) (evalV env v2)
-            OpEq v1 v2  -> Eq (evalV env v1) (evalV env v2)
-            OpLt v1 v2  -> Lt (evalV env v1) (evalV env v2)
-            OpLte v1 v2 -> Lte (evalV env v1) (evalV env v2)
-            OpAnd v1 v2 -> And (evalV env v1) (evalV env v2)
-            OpOr  v1 v2 -> Or (evalV env v1) (evalV env v2)
-            OpFst _ v -> 
-                let P sv _ = evalV env v in sv
-            OpSnd _ v -> 
-                let P _ sv = evalV env v in sv
-            OpNot v1 -> Not (evalV env v1)
-    evalLV :: CallId -> Env -> LetValue -> M m SValue
-    evalLV callSite env = \case 
-        LValue v -> pure $ evalV env v
-        LApp _ label f v -> do
-            let sv = evalV env v
-            let C (Cls i clsId env') = env M.! f
-            let Lambda _ _ x e0 = clsTbl IM.! i
-            j <- newCall label callSite clsId
-            eval True sv j (M.insert x sv env') e0
-        LExp _ e -> eval False (Int 0) callSite env e
-        LRand -> SVar . Id TInt <$> freshId "rand"
-
-    eval :: Bool -> SValue -> CallId -> Env -> Exp -> M m SValue
-    eval isTail arg callSite env _e = case _e of
-        Value v -> do
+    -- n = length (functions prog)
+    eval :: CallId -> Env -> ML.Exp -> M m (Maybe SValue)
+    eval callSite env _e = case _e of
+        ML.Value v -> do
             let sv = evalV env v 
-            when isTail (retval (ReturnInfo callSite arg sv))
-            return sv
-        Lambda _ i _ _ -> do
-            sv <- C <$> genClosure callSite i env
-            when isTail (retval (ReturnInfo callSite arg sv))
-            return sv
-        Let _ x lv e -> do
+            -- when isTail (retval (ReturnInfo callSite arg sv))
+            return $ Just sv
+        ML.Let _ x lv e -> do
             r <- evalLV callSite env lv
-            eval isTail arg callSite (M.insert x r env) e
-        Assume _ v e -> do
+            case r of
+                Just sv -> eval callSite (M.insert x sv env) e
+                Nothing -> return Nothing
+        ML.Assume _ v e -> do
             constrain (evalV env v)
-            eval isTail arg callSite env e
-        Branch _ i e1 e2 -> do
+            eval callSite env e
+        ML.Fail _ -> return Nothing
+        ML.Branch _ i e1 e2 -> do
             b <- consume
             branch (BranchInfo callSite i b)
             if b then
-                eval isTail arg callSite env e1
+                eval callSite env e1
             else
-                eval isTail arg callSite env e2
+                eval callSite env e2
 
+    evalV :: Env -> ML.Value -> SValue
+    evalV env = \case
+        ML.Var x -> env M.! x
+        ML.CInt x -> Int x
+        ML.CBool x -> Bool x
+        ML.Pair v1 v2 -> P (evalV env v1) (evalV env v2)
+        ML.Op op -> case op of
+            ML.OpAdd v1 v2 -> Add (evalV env v1) (evalV env v2)
+            ML.OpSub v1 v2 -> Sub (evalV env v1) (evalV env v2)
+            ML.OpEq  v1 v2  -> Eq (evalV env v1) (evalV env v2)
+            ML.OpLt  v1 v2  -> Lt (evalV env v1) (evalV env v2)
+            ML.OpLte v1 v2 -> Lte (evalV env v1) (evalV env v2)
+            ML.OpAnd v1 v2 -> And (evalV env v1) (evalV env v2)
+            ML.OpOr  v1 v2 -> Or (evalV env v1) (evalV env v2)
+            ML.OpFst _ v -> 
+                let P sv _ = evalV env v in sv
+            ML.OpSnd _ v -> 
+                let P _ sv = evalV env v in sv
+            ML.OpNot v1 -> Not (evalV env v1)
+    evalLV :: CallId -> Env -> ML.LetValue -> M m (Maybe SValue)
+    evalLV callSite env = \case 
+        ML.LValue v -> pure $ Just (evalV env v)
+        ML.LApp _ label f v -> do
+            let sv = evalV env v
+            let C (Cls fdef clsId env') = env M.! f
+            let x  = ML.arg fdef
+                e0 = ML.body fdef
+            j <- newCall label callSite clsId
+            r <- eval j (M.insert x sv env') e0
+            retval (ReturnInfo j sv r)
+            return r
+        ML.LFun fdef -> Just . C <$> genClosure callSite fdef env
+        ML.LExp _ e -> eval callSite env e
+        ML.LRand -> Just . SVar . ML.Id ML.TInt <$> freshId "rand"
+
+    -- utilities
     constrain :: Constraint -> M m ()
     constrain c = tell ([c],[],[],[],[])
     branch :: BranchInfo -> M m ()
@@ -209,17 +204,19 @@ symbolicExec prog trace = runWriterT (evalStateT (genEnv >>= (\genv -> evalFail 
         modify incrCall
         tell ([],[CallInfo clsId i pcall (CallId j)],[],[],[])
         return (CallId j)
-    genClosure :: CallId -> Int -> Env -> M m Closure
-    genClosure callSite label env = do
+    genClosure :: CallId -> ML.FunDef -> Env -> M m Closure
+    genClosure callSite fdef env = do
         j <- clsCounter <$> get
         modify incrCls
-        tell ([],[],[ClosureInfo label (ClosureId j) callSite],[],[])
-        return (Cls label (ClosureId j) env)
+        tell ([],[],[ClosureInfo (ML.ident fdef) (ClosureId j) callSite],[],[])
+        return (Cls fdef (ClosureId j) env)
     consume :: M m Bool
     consume = do
         b <- head . cTrace <$> get
         modify pop
         return b
+
+{- 
 -- Refinement types
 data RType = RBool | RInt | RFun !(IM.IntMap RFunAssoc) | RPair !RType !RType deriving(Show)
 
@@ -630,3 +627,4 @@ substValue env = go where
         OpFst t a -> OpFst t (go a)
         OpSnd t a -> OpSnd t (go a)
     go w = w
+    -}

@@ -24,7 +24,8 @@ import Text.Parsec(ParseError)
 import Data.Time
 import Text.PrettyPrint
 import Language.DMoCHi.Common.Id
--- import Language.DMoCHi.ML.Refine
+import qualified Language.DMoCHi.ML.Refine as Refine
+
 -- import qualified Language.DMoCHi.ML.HornClause as Horn
 -- import Language.DMoCHi.ML.HornClauseParser(parseSolution)
 
@@ -104,6 +105,16 @@ doit = do
     r <- withExceptT BooleanError $ test file_boolean boolProgram
     liftIO $ print r
     t_model_checking_end <- liftIO $ getCurrentTime
+
+    case r of
+        Just trace -> do
+            (genv, (consts,calls,closures,returns,branches)) <- Refine.symbolicExec typedProgram trace
+            liftIO $ print consts
+            liftIO $ print calls
+            liftIO $ print closures
+            liftIO $ print returns
+            liftIO $ print branches
+            liftIO $ print genv
     return ()
 
 
