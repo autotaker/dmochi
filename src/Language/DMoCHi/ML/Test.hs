@@ -26,7 +26,7 @@ import Text.PrettyPrint
 import Language.DMoCHi.Common.Id
 import qualified Language.DMoCHi.ML.Refine as Refine
 
--- import qualified Language.DMoCHi.ML.HornClause as Horn
+import qualified Language.DMoCHi.ML.HornClause as Horn
 -- import Language.DMoCHi.ML.HornClauseParser(parseSolution)
 
 data MainError = NoInputSpecified
@@ -109,6 +109,11 @@ doit = do
 
     case r of
         Just trace -> do
+            (clauses, env) <- Refine.refineCGen typedProgram trace
+            let file_hcs = path ++ ".hcs"
+            liftIO $ putStr $ show (Horn.HCCS clauses)
+            liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
+            {-
             (genv, (consts,calls,closures,returns,branches)) <- Refine.symbolicExec typedProgram trace
             liftIO $ print consts
             liftIO $ print calls
@@ -116,6 +121,7 @@ doit = do
             liftIO $ print returns
             liftIO $ print branches
             liftIO $ print genv
+            -}
     return ()
 
 

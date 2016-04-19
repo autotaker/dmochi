@@ -20,6 +20,7 @@ data Term = Bool Bool
           | Lt  Term Term
           | Lte Term Term
           | Gte Term Term
+          | Pair Term Term
 
 instance Show HCCS where
     show (HCCS cs) = unlines $ map show cs
@@ -35,10 +36,11 @@ instance Show Term where
     showsPrec _ (Bool False) = showString "bot"
     showsPrec _ (Int i) = shows i
     showsPrec _ (Var x) = showString x
+    showsPrec _ (Pair t1 t2) = showParen True $ shows t1 . showChar ',' . showChar ' ' . shows t2
     showsPrec _ (Pred p []) = showString $ p ++"(dummy)"
     showsPrec _ (Pred p ps) = 
         showString p . showChar '(' .
-        (foldr1 (\a b -> a . showChar ',' . b) (map shows ps)) .
+        (foldr1 (\a b -> a . showChar ',' . showChar ' ' . b) (map shows ps)) .
         showChar ')'
     showsPrec d (Add t1 t2) = showParen (d >= 5) $ 
         (showsPrec 5 t1) . showString " + " . (showsPrec 5 t2)

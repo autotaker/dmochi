@@ -1,0 +1,11 @@
+let f : p : x:int * int -> r: int * int = 
+  fun x -> (x.fst, x.fst + x.snd);;
+
+let x = * in
+let y = * in
+assume (x > 0);
+assume (y > 0);
+let r = f (x,y) in
+assume (r.snd <= 0);
+Fail
+

@@ -1,0 +1,12 @@
+let f : p : (g : (x:int -> int) * int) -> int =
+  fun p ->
+    let g = p.fst in
+    let r = g p.snd in
+    r;;
+let succ : x : int -> int =
+  fun x -> x + 1;;
+let x = * in
+let r = f (succ, x) in
+assume (r <= x);
+Fail
+

@@ -80,7 +80,7 @@ letP = (Let <$> (reserved "let" *> identifier)
            <*> sub
            <*> (reserved "in" *> exprP)) <?> "let"
     where sub = LExp <$> (reservedOp ":" *> ptypeP) <*> (reservedOp "=" *> exprP)
-            <|> try (LApp <$> (reservedOp "=" *> identifier) <*> many1 termP)
+            <|> try (LApp <$> (reservedOp "=" *> identifier) <*> many1 valueP)
             <|> (reservedOp "=" *> (LValue <$> valueP <|> LRand <$ reservedOp "*"))
 
 valueP :: Parser Value

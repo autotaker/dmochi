@@ -267,6 +267,11 @@ data Value = VB Bool | Cls Symbol (Term ()) Env TEnv | Tup [Value]
 type Env = M.Map Symbol Value
 type TEnv = M.Map Symbol VType
 
+instance Show Value where
+    show (VB b) = show b
+    show (Cls _ _ _ _) = show "<closure>"
+    show (Tup vs) = show vs
+
 extractCE :: Program -> M.Map Symbol TTypeList -> TEnv -> [TEnv] ->  M [Bool]
 extractCE prog flowEnv genv hist = 
     let env0 = M.fromList [ (f,Cls x (Omega () "") env0 M.empty) | (f,Lam _ x _) <- definitions prog ] in
@@ -335,7 +340,7 @@ extractCE prog flowEnv genv hist =
                     evalFail (M.insert x v2 env') (M.insert x ty2' tenv') e0
         Fail _ _ -> return ()
     eval :: Env -> M.Map Symbol VType -> Term () -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
-    eval env tenv e ety = {- traceShow e $ trace ("type: "++ show ety) $ -} case e of
+    eval env tenv e ety = {- traceShow e $ traceShow ("env",env) $ trace ("type: "++ show ety) $ -} case e of
         V _ x -> return $ env M.! x
         C s b -> return $ VB b
         T s es -> 
@@ -357,7 +362,9 @@ extractCE prog flowEnv genv hist =
             in lift (saturateTerm flowEnv tenv e1) >>= sub
         Proj s n d e1 -> 
             let sub (LCons _ ty1@(VTup _ tys) ty') 
-                    | ety == tys !! projN n = eval env tenv e1 ty1
+                    | ety == tys !! projN n = do
+                        Tup vs <- eval env tenv e1 ty1
+                        return $ vs !! projN n
                     | otherwise = sub ty' in
             lift (saturateTerm flowEnv tenv e1) >>= sub
         App _ e1 e2 -> do
@@ -369,6 +376,7 @@ extractCE prog flowEnv genv hist =
                     guard $ b === TPrim ety
                     guard $ a `elem` ty2
                     return (vf,a)
+            tmp <- eval env tenv e1 ty1'
             (Cls x e0 env' tenv') <- eval env tenv e1 ty1'
             v2 <- eval env tenv e2 ty2'
             eval (M.insert x v2 env') (M.insert x ty2' tenv') e0 ety

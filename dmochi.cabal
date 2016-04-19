@@ -36,6 +36,7 @@ library
                        Language.DMoCHi.Common.Id,
                        Language.DMoCHi.Boolean.Alpha,
                        Language.DMoCHi.Boolean.PrettyPrint.Typed,
+                       Language.DMoCHi.Boolean.Type2
                        Language.DMoCHi.ML.PrettyPrint.UnTyped,
                        Language.DMoCHi.ML.Syntax.UnTyped,
                        Language.DMoCHi.ML.Alpha,
@@ -43,7 +44,7 @@ library
                        Language.DMoCHi.ML.PredicateAbstraction,
                        Language.DMoCHi.ML.TypeCheck,
                        Language.DMoCHi.ML.Refine,
-                       Language.DMoCHi.Boolean.Type2
+                       Language.DMoCHi.ML.HornClause
 
 executable dmochi
   main-is:             Main.hs
