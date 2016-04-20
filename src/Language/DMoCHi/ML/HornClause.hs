@@ -27,7 +27,7 @@ instance Show HCCS where
 
 instance Show Clause where
     show (Clause Bot body) = 
-        " ?- " ++ (concat $ intersperse ", " (map show body)) ++ "."
+        "?- " ++ (concat $ intersperse ", " (map show body)) ++ "."
     show (Clause (PVar p ts) body) = 
         show (Pred p ts) ++ " :- " ++ (concat $ intersperse "," (map show body)) ++ "."
 

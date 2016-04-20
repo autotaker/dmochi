@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables, LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables, LambdaCase, FlexibleContexts #-}
 module Language.DMoCHi.ML.Refine where
 
 import qualified Language.DMoCHi.ML.Syntax.Typed as ML
@@ -33,8 +33,14 @@ data ClosureInfo = ClosureInfo { label :: Int -- 対応する関数定義のラ�
                                } deriving Show
 -- 関数返り値の情報
 data ReturnInfo = ReturnInfo { rcallId :: CallId -- 関数呼び出しの識別子
-                             , argValue :: SValue -- 引数
+                             , argValue :: SValue -- 引数(let式の場合は(Int 0))
                              , retValue :: Maybe SValue -- 返り値(ないときはfailを表す)
+                             } deriving Show
+
+-- Let式の評価結果情報
+data LetExpInfo = LetExpInfo { lCallId :: CallId -- 評価時の親関数呼び出し識別子
+                             , lLabel :: Int -- 呼び出されたlet式のラベル
+                             , evalValue :: Maybe SValue -- 評価結果(ないときはfailを表す)
                              } deriving Show
 
 -- 分岐情報
@@ -57,6 +63,22 @@ data SValue = SVar Id
             | Or SValue SValue
             | Not SValue
             | C Closure
+
+instance ML.HasType SValue where
+    getType (SVar x)  = ML.getType x
+    getType (Int i)   = ML.TInt
+    getType (Bool i)  = ML.TBool
+    getType (P v1 v2) = ML.TPair (ML.getType v1) (ML.getType v2)
+    getType (Add _ _) = ML.TInt
+    getType (Sub _ _) = ML.TInt
+    getType (Eq _ _)  = ML.TBool
+    getType (Lt _ _)  = ML.TBool
+    getType (Lte _ _) = ML.TBool
+    getType (And _ _) = ML.TBool
+    getType (Or  _ _) = ML.TBool
+    getType (Not _) = ML.TBool
+    getType (C cls)   = ML.getType cls
+
 
 instance Show SValue where
     showsPrec d (SVar x) = 
@@ -85,12 +107,15 @@ instance Show SValue where
                        
 data Closure = Cls ML.FunDef ClosureId {- Ident -} Env
 
+instance ML.HasType Closure where
+    getType (Cls fdef _ _) = ML.getType fdef
+
 instance Show Closure where
     show (Cls i x _) = "Closure " ++ show (ML.ident i) ++ " " ++ show x
 type Env = M.Map Id SValue
 type Id = ML.Id
 
-type Log = ([Constraint],[CallInfo],[ClosureInfo],[ReturnInfo],[BranchInfo])
+type Log = ([Constraint],[CallInfo],[ClosureInfo],[ReturnInfo],([BranchInfo],[LetExpInfo]))
 
 type M m a = StateT S (WriterT Log m) a
 data S = S { callCounter :: !Int
@@ -192,27 +217,31 @@ symbolicExec prog trace =
             retval (ReturnInfo j sv r)
             return r
         ML.LFun fdef -> Just . C <$> genClosure callSite fdef env
-        ML.LExp _ e -> eval callSite env e
+        ML.LExp label e -> do
+            r <- eval callSite env e
+            letexp (LetExpInfo callSite label r)
+            return r
         ML.LRand -> Just . SVar . ML.Id ML.TInt <$> freshId "rand"
 
     -- utilities
     constrain :: Constraint -> M m ()
-    constrain c = tell ([c],[],[],[],[])
+    constrain c = tell ([c],[],[],[],([],[]))
     branch :: BranchInfo -> M m ()
-    branch c = tell ([],[],[],[],[c])
+    branch c = tell ([],[],[],[],([c],[]))
     retval :: ReturnInfo -> M m ()
-    retval c = tell ([],[],[],[c],[])
+    retval c = tell ([],[],[],[c],([],[]))
+    letexp c = tell ([],[],[],[],([],[c]))
     newCall :: Int -> CallId -> ClosureId -> M m CallId
     newCall i pcall clsId = do
         j <- callCounter <$> get
         modify incrCall
-        tell ([],[CallInfo clsId i pcall (CallId j)],[],[],[])
+        tell ([],[CallInfo clsId i pcall (CallId j)],[],[],([],[]))
         return (CallId j)
     genClosure :: CallId -> ML.FunDef -> Env -> M m Closure
     genClosure callSite fdef env = do
         j <- clsCounter <$> get
         modify incrCls
-        tell ([],[],[ClosureInfo (ML.ident fdef) (ClosureId j) callSite],[],[])
+        tell ([],[],[ClosureInfo (ML.ident fdef) (ClosureId j) callSite],[],([],[]))
         return (Cls fdef (ClosureId j) env)
     consume :: M m Bool
     consume = do
@@ -269,7 +298,7 @@ termOfFormula (Formula i vs) = Horn.Pred ("P"++show i) (map termOfValue vs)
 
 termOfValue :: SValue -> Horn.Term
 termOfValue = \case
-    SVar x -> Horn.Var (filter (/='_') $ ML.name x)
+    SVar x -> Horn.Var (ML.name x)
     Int i -> Horn.Int i
     Bool b -> Horn.Bool b
     P v1 v2  -> Horn.Pair (termOfValue v1) (termOfValue v2)
@@ -289,8 +318,16 @@ termOfValue = \case
         _ -> error "termOfValue: negation of Boolean combination is not supported"
     C _ -> error "termOfValue: unexpected closure"
 
-genRType :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> [Id] -> SValue -> m RType
-genRType calls closures returns = gen 0 . map decompose . filter (isBase) where
+
+type RTypeGen m = ([Id] -> SValue -> m RType, [Id] -> Maybe SValue -> m RPostType)
+
+genRTypeFactory :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> RTypeGen m
+genRTypeFactory calls closures returns = (genRType, genRPostType)
+    where
+    genRType :: MonadId m => [Id] -> SValue -> m RType
+    genRType = gen 0 . foldr push []
+    genRPostType :: MonadId m => [Id] -> Maybe SValue -> m RPostType
+    genRPostType = genPost 0 . foldr push []
     rtnTbl = IM.fromList [ (unCallId (rcallId info),info) | info <- returns ]
     gen _ _ (SVar x) = case ML.getType x of
         ML.TInt -> pure RInt
@@ -318,21 +355,25 @@ genRType calls closures returns = gen 0 . map decompose . filter (isBase) where
             let ReturnInfo _ arg_v mv = rtnTbl IM.! (unCallId j)
             let xj = ML.Id ty_arg (ML.name x)
             arg_ty <- gen (unCallId j) env arg_v
-            posTy <- case mv of 
-                Just v -> do
-                    pty <- gen (unCallId j) (push xj env) v
-                    let rj = ML.Id ty_ret "r"
-                    p0 <- freshInt
-                    return $ RPostType rj pty (Formula p0 (push rj $ push xj env))
-                Nothing -> return RPostTypeFailure
+            posTy <- genPost (unCallId j) (push xj env) mv
             p1 <- freshInt
             return (unCallId j,RFunAssoc xj arg_ty (Formula p1 (push xj env)) posTy)
         return $ RFun $ IM.fromList as
+    genPost lim env mv = case mv of
+        Just v -> do
+            pty <- gen lim env v
+            let rj = ML.Id (ML.getType v) "r"
+            p0 <- freshInt
+            return $ RPostType rj pty (Formula p0 (push rj env))
+        Nothing -> return RPostTypeFailure
+
     isBase x = case ML.getType x of 
         (ML.TFun _ _) -> False
         _ -> True
-    push x env | isBase x = decompose x : env
-               | otherwise = env
+    flatten (SVar x) env | isBase x  = (SVar x) : env
+                         | otherwise = env
+    flatten (P v1 v2) env = flatten v1 (flatten v2 env)
+    push = flatten . decompose
 
 evalRType :: M.Map Id (RType,SValue) -> ML.Value -> (RType,SValue)
 evalRType env = go where
@@ -381,32 +422,41 @@ decompose x = case ML.getType x of
     ML.TInt -> SVar x
     ML.TBool -> SVar x
     ML.TPair t1 t2 -> 
-        P (decompose (ML.Id t1 (ML.name x ++".fst"))) 
-          (decompose (ML.Id t2 (ML.name x ++".snd")))
+        P (decompose (ML.Id t1 (ML.name x ++"$fst"))) 
+          (decompose (ML.Id t2 (ML.name x ++"$snd")))
     ML.TFun _ _ -> SVar x
 
-refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m) => ML.Program -> Trace -> m ([Horn.Clause],[(Id,RType)])
+type W m a = WriterT ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])) m a
+
+refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m) => 
+              ML.Program -> Trace -> 
+              m ([Horn.Clause],([(Int,RType)],[(Int,RPostType)]))
 refineCGen prog trace = execWriterT $ do
-    (genv, (consts,calls,closures,returns,branches)) <- symbolicExec prog trace
+    (genv, (consts,calls,closures,returns,(branches,letexps))) <- symbolicExec prog trace
     liftIO $ print consts
     liftIO $ print calls
     liftIO $ print closures
     liftIO $ print returns
     liftIO $ print branches
-    let gen = genRType calls closures returns
-    let addBinding :: Id -> RType -> WriterT ([Horn.Clause],[(Id,RType)]) m ()
-        addBinding f ty = tell ([],[(f,ty)])
-    let addClause :: Horn.Clause -> WriterT ([Horn.Clause],[(Id,RType)]) m () 
-        addClause c = tell ([c],[])
+    liftIO $ print letexps
+    let (gen,genP) = genRTypeFactory calls closures returns
+    let addFuncBinding :: Int -> RType -> W m ()
+        addFuncBinding label ty = tell ([],([(label,ty)],[]))
+        addExpBinding :: Int -> RPostType -> W m ()
+        addExpBinding label ty = tell ([],([],[(label,ty)]))
+        addClause :: Horn.Clause -> W m ()
+        addClause c = tell ([c],([],[]))
+
     let callTbl :: M.Map (CallId,Int) CallId
         callTbl = M.fromList [ ((pcallId info,callLabel info),callId info)| info <- calls ]
         closureMap :: M.Map (CallId,Int) ClosureId
         closureMap = M.fromList [ ((cCallId info,label info),closureId info)| info <- closures ]
         branchMap :: M.Map (CallId,Int) Bool
         branchMap = M.fromList [ ((bCallId info,branchId info),direction info) | info <- branches ]
+        letMap :: M.Map (CallId, Int) (Maybe SValue)
+        letMap = M.fromList [ ((lCallId info,lLabel info),evalValue info) | info <- letexps ]
     genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,v) -> do
         ty <- gen [] v
-        addBinding f ty
         return (f,(ty,decompose f))
 
     let check :: M.Map Id (RType,SValue) ->   {- environment -}
@@ -414,7 +464,7 @@ refineCGen prog trace = execWriterT $ do
                  CallId ->                    {- callsite -}
                  ML.Exp ->                    {- checking expr -}
                  RPostType ->                 {- expected type -}
-                 WriterT ([Horn.Clause],[(Id,RType)]) m ()
+                 W m ()
         check env cs callSite _e tau = case _e of
             ML.Let _ x (ML.LValue v) e -> do
                 let env' = M.insert x (evalRType env v) env
@@ -441,8 +491,20 @@ refineCGen prog trace = execWriterT $ do
             ML.Let _ f (ML.LFun fdef) e -> do
                 theta <- checkFunDef env cs callSite fdef
                 let env' = M.insert f (theta,decompose f) env
-                addBinding f theta
+                addFuncBinding (ML.ident fdef) theta
                 check env' cs callSite e tau
+            ML.Let _ x (ML.LExp label e') e -> do
+                let letv = letMap M.! (callSite, label)
+                tau' <- genP (M.keys env) letv
+                addExpBinding label tau'
+                check env cs callSite e' tau'
+                case tau' of
+                    RPostType _ _ _ -> do
+                        let x'   = decompose x
+                            env' = M.insert x (posType tau', x') env
+                            cs'  = Right (substLFormula (posName tau') x' (posCond tau')) : cs
+                        check env' cs' callSite e tau
+                    RPostTypeFailure -> return ()
             ML.Assume _ v e -> do
                 let (_,sv) = evalRType env v
                 let cs' = Left sv : cs
@@ -513,6 +575,7 @@ refineCGen prog trace = execWriterT $ do
         i <- freshInt
         theta <- checkFunDef genv' [] (CallId 0) fdef
         subType [] theta (fst $ genv' M.! f)
+        addFuncBinding (ML.ident fdef) (fst $ genv' M.! f)
     x <- freshId "main"
     i <- freshInt
     check genv' [] (CallId 0) (ML.mainTerm prog) RPostTypeFailure

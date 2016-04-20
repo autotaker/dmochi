@@ -27,7 +27,7 @@ import Language.DMoCHi.Common.Id
 import qualified Language.DMoCHi.ML.Refine as Refine
 
 import qualified Language.DMoCHi.ML.HornClause as Horn
--- import Language.DMoCHi.ML.HornClauseParser(parseSolution)
+import qualified Language.DMoCHi.ML.HornClauseParser as Horn
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
@@ -113,16 +113,12 @@ doit = do
             let file_hcs = path ++ ".hcs"
             liftIO $ putStr $ show (Horn.HCCS clauses)
             liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
-            {-
-            (genv, (consts,calls,closures,returns,branches)) <- Refine.symbolicExec typedProgram trace
-            liftIO $ print consts
-            liftIO $ print calls
-            liftIO $ print closures
-            liftIO $ print returns
-            liftIO $ print branches
-            liftIO $ print genv
-            -}
+            liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
+            parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
+            --liftIO $ print parseRes
+            return ()
     return ()
+
 
 
     {-
