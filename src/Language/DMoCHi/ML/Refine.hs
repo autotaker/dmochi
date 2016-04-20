@@ -1,8 +1,9 @@
-{-# LANGUAGE ScopedTypeVariables, LambdaCase, FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables, LambdaCase, FlexibleContexts, BangPatterns #-}
 module Language.DMoCHi.ML.Refine where
 
 import qualified Language.DMoCHi.ML.Syntax.Typed as ML
 import qualified Language.DMoCHi.ML.PrettyPrint.Typed as ML
+import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Data.Map as M
 import Control.Applicative
 import Control.Monad
@@ -10,7 +11,7 @@ import Control.Monad.Writer
 import Control.Monad.State.Strict
 import qualified Data.IntMap as IM
 import Language.DMoCHi.Common.Id
-import Data.List(intersperse,nub)
+import Data.List(intersperse,nub,foldl')
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import Debug.Trace
 import Text.PrettyPrint
@@ -625,91 +626,70 @@ substSValue x v _sv = case _sv of
     C cls       -> error "substSValue: substituting closure is not supported"
     Int i       -> _sv
     Bool b      -> _sv
-    
 
-{- 
-refine :: Program -> [(Id,RType)] -> [(String,[Id],Value)] -> Program
-refine prog tassoc subst = prog' where
-    genv :: M.Map Id [RType]
-    genv = M.fromListWith (++) $ map (\(x,y) -> (x,[y])) tassoc
-    penv = M.fromList [ (s,(xs,v)) | (s,xs,v) <- subst ]
+refineTermType :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> RPostType -> PAbst.TermType -> PAbst.TermType
+refineTermType penv env (RPostType r rty fml) (abst_r, abst_rty, abst_fml) = (abst_r, abst_rty', abst_fml')
+    where
+    abst_rty' = refinePType penv env rty abst_rty
+    phi' = refineLFormula penv (extendEnv r (ML.Var abst_r) env) fml
+    abst_fml' = phi' : abst_fml
+refineTermType _ _ RPostTypeFailure termType = termType
 
-    prog' = Program ds' t0'
-    ds' = [ (f,toPType $ decomp (refinePType (head $ genv M.! f) (fromPType pty)),refineTerm e) | (f,pty,e) <- functions prog ]
-    t0' = refineTerm (mainTerm prog)
-
-    decomp :: PType' -> PType' -- 述語を原始論理式に分解
-    decomp PInt' = PInt'
-    decomp PBool' = PBool'
-    decomp (PFun' ty (x,ty_x,ps) (ty_r,qs)) = PFun' ty (x,decomp ty_x,ps') (decomp ty_r,qs')
+refinePType :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> RType -> PAbst.PType -> PAbst.PType
+refinePType _ _ RBool PAbst.PBool = PAbst.PBool
+refinePType _ _ RInt PAbst.PInt = PAbst.PInt
+refinePType penv env (RPair rty1 rty2) (PAbst.PPair ty pty1 pty2) = 
+    PAbst.PPair ty (refinePType penv env rty1 pty1) (refinePType penv env rty2 pty2)
+refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
+    where
+    pty' = uncurry (PAbst.PFun ty) $ foldl' f (pty_x0, pty_r0) (IM.elems fassoc)
+    f ((abst_x, abst_pty, abst_fml), pty_r) as = pre `seq` abst_pty' `seq` (pty_x', pty_r')
         where
-        ps' = nub $ go ps
-        qs' = nub $ go qs
-        go l = do
-            (y,v) <- l
-            w <- sub v
-            return (y,w)
-        sub (CBool _) = empty
-        {-
-        sub (Op (OpAnd v1 v2)) = sub v1 <|> sub v2
-        sub (Op (OpOr v1 v2)) = sub v1 <|> sub v2
-        -}
-        sub v = pure v
-    refinePType :: RType -> PType' -> PType'
-    refinePType RInt _ = PInt'
-    refinePType RBool _ = PBool'
-    refinePType (RFun fassoc) (PFun' ty ty_x ty_r) = PFun' ty ty_x' ty_r'
-        where
-        ty_x' = foldl (\(x,pty_x,ps_x) (RFunAssoc y rty1 cond1 _) ->
-                    let p = substCond cond1 in
-                    (x,refinePType rty1 pty_x,(y,p):ps_x)) ty_x (IM.elems fassoc)
-        (x0,_,_) = ty_x
-        ty_r' = foldl (\(pty_r,ps_r) (RFunAssoc y _ _ tau) ->
-                    let RPostType r rty2 cond2 = tau in
-                    let p = substCond (substLFormula y (decompose x0) cond2) in
-                    let pty_r' = refinePType (substRType y (decompose x0) rty2) pty_r in
-                    (pty_r',(r,p):ps_r)) ty_r (IM.elems fassoc)
+        env'  = extendEnv (argName as) (ML.Var abst_x) env
+        pre   = refineLFormula penv env' (preCond as)
+        abst_pty' = refinePType penv env (argType as) abst_pty
+        pty_x' = (abst_x, abst_pty', pre : abst_fml)
+        pty_r' = refineTermType penv env' (resType as) pty_r
 
-    refineTerm :: Exp -> Exp
-    refineTerm (Value v) = Value v
-    refineTerm (Let ty f (LExp pty (Lambda ty0 label x e0)) e) = 
-        Let ty f (LExp (toPType $ decomp pty') (Lambda ty0 label x e0')) e' 
-            where
-            rtys = case M.lookup f genv of
-                Just l -> l
-                Nothing -> []
-            pty' = foldr refinePType (fromPType pty) rtys
-            e0' = refineTerm e0
-            e' = refineTerm e
-    refineTerm (Let ty f (LValue v) e) = Let ty f (LValue v) (refineTerm e)
-    refineTerm (Let ty f (LApp ty0 label x v) e) = Let ty f (LApp ty0 label x v) (refineTerm e)
-    refineTerm (Let ty f LRand e) = Let ty f LRand (refineTerm e)
-    refineTerm (Assume ty v e) = Assume ty v (refineTerm e)
-    refineTerm (Lambda ty l x e) = Lambda ty l x (refineTerm e)
-    refineTerm (Fail ty) = Fail ty
-    refineTerm (Branch ty l e1 e2) = Branch ty l (refineTerm e1) (refineTerm e2)
+refineLFormula :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> LFormula -> PAbst.Formula
+refineLFormula penv env fml = phi' where
+    Formula i args = fml
+    (args_phi, phi) = penv IM.! i
+    env' = M.union (M.fromList $ zip (map ML.name args_phi) (map recover args)) env
+    recover (SVar x) = env M.! (ML.name x)
+    phi' = ML.evalV env' phi
         
-    substCond :: LFormula -> Value
-    substCond (Formula i xs) =
-        let (ys,v) = penv M.! ("P"++show i) in
-        let env = M.fromList $ zip ys (map Var xs) in
-        substValue env v
-    substCond (Subst theta fml) =
-        let env = M.fromList $ map (\(x,v) -> (x,toValue v)) theta in
-        substValue env (substCond fml)
-    toValue (SVar x) = Var x
-    toValue (Int i) = CInt i
-    toValue (Bool b) = CBool b
-    toValue (P v1 v2) = Pair (toValue v1) (toValue v2)
-    toValue (Add v1 v2) = Op (OpAdd (toValue v1) (toValue v2))
-    toValue (Sub v1 v2) = Op (OpSub (toValue v1) (toValue v2))
-    toValue (Eq v1 v2) = Op (OpEq (toValue v1) (toValue v2))
-    toValue (Lt v1 v2) = Op (OpLt (toValue v1) (toValue v2))
-    toValue (Lte v1 v2) = Op (OpLte (toValue v1) (toValue v2))
-    toValue (And v1 v2) = Op (OpAnd (toValue v1) (toValue v2))
-    toValue (Or v1 v2) = Op (OpOr (toValue v1) (toValue v2))
-    toValue (Not v1) = Op (OpNot (toValue v1))
+extendEnv :: Id -> ML.Value -> M.Map String ML.Value -> M.Map String ML.Value
+extendEnv x v env = case ML.getType x of
+    ML.TInt -> M.insert (ML.name x) v env
+    ML.TBool -> M.insert (ML.name x) v env
+    ML.TPair t1 t2 -> extendEnv x1 v1 $ extendEnv x2 v2 env
+        where
+        x1 = ML.Id t1 (ML.name x ++ "$fst")
+        x2 = ML.Id t2 (ML.name x ++ "$snd")
+        v1 = ML.Op (ML.OpFst t1 v)
+        v2 = ML.Op (ML.OpSnd t2 v)
+    ML.TFun _ _ -> env
 
+refine :: IM.IntMap [Id] -> [(Int,RType)] -> [(Int,RPostType)] -> [(String,[Id],ML.Value)] -> PAbst.TypeMap -> PAbst.TypeMap
+refine fvMap rtyAssoc rpostAssoc subst typeMap = typeMap'' where
+    penv = IM.fromList [ (read (drop 1 s),(xs,v)) | (s,xs,v) <- subst ]
+    typeMap' = foldl' (\acc (i, rty) -> 
+                    let Left !pty = acc IM.! i
+                        !fv   = fvMap IM.! i
+                        !env  = foldl' (\_env x -> extendEnv x (ML.Var x) _env) M.empty fv
+                        !pty' = refinePType penv env rty pty
+                    in IM.insert i (Left pty') acc
+               ) typeMap rtyAssoc
+    typeMap'' = foldl' (\acc (i, rpost) ->
+                    let Right !termty = acc IM.! i
+                        !fv = fvMap IM.! i
+                        !env = foldl' (\_env x -> extendEnv x (ML.Var x) _env) M.empty fv
+                        !termty' = refineTermType penv env rpost termty
+                    in IM.insert i (Right termty') acc
+                ) typeMap' rpostAssoc
+
+{-
 substValue :: M.Map Id Value -> Value -> Value
 substValue env = go where
     go (Var y) = case M.lookup y env of

@@ -5,6 +5,7 @@ import Control.Monad
 --import Control.Applicative
 import Control.Monad.State
 import Data.Function(on)
+import qualified Data.Map as M
 
 data Id = Id { _type :: Type, name :: String } deriving(Show)
 
@@ -131,7 +132,27 @@ substV x v = go where
         OpNot a   -> OpNot (go a)
         OpFst t a -> OpFst t (go a)
         OpSnd t a -> OpSnd t (go a)
-    go w = w
+    go (CInt i) = CInt i
+    go (CBool b) = CBool b
+    go (Pair v1 v2) = Pair (go v1) (go v2)
+
+evalV :: M.Map String Value -> Value -> Value
+evalV env = go where
+    go (Var y) = env M.! (name y)
+    go (Op op) = Op $ case op of
+        OpAdd a b -> OpAdd (go a) (go b)
+        OpSub a b -> OpSub (go a) (go b)
+        OpEq  a b -> OpEq  (go a) (go b)
+        OpLt  a b -> OpLt  (go a) (go b)
+        OpLte a b -> OpLte (go a) (go b)
+        OpAnd a b -> OpAnd (go a) (go b)
+        OpOr  a b -> OpOr  (go a) (go b)
+        OpNot a   -> OpNot (go a)
+        OpFst t a -> OpFst t (go a)
+        OpSnd t a -> OpSnd t (go a)
+    go (CInt i) = CInt i
+    go (CBool b) = CBool b
+    go (Pair v1 v2) = Pair (go v1) (go v2)
 
 substPType :: Id -> Value -> PType -> PType
 substPType x v = go where

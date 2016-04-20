@@ -13,7 +13,7 @@ import Language.DMoCHi.Boolean.Syntax.Typed as B(toUnTyped,tCheck)
 import Language.DMoCHi.Boolean.PrettyPrint.HORS(pprintHORS,printHORS)
 import Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
 import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
-import Language.DMoCHi.ML.PredicateAbstraction(abstProg, initTypeMap)
+import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import Language.DMoCHi.ML.PrettyPrint.UnTyped
 import Language.DMoCHi.ML.Alpha
 import qualified Language.DMoCHi.ML.PrettyPrint.Typed as Typed
@@ -87,8 +87,8 @@ doit = do
     t_type_checking_end <- liftIO $ getCurrentTime
 
     liftIO $ putStrLn "Predicate Abstracion"
-    typeMap <- initTypeMap typedProgram
-    boolProgram' <- abstProg typeMap typedProgram
+    (typeMap, fvMap) <- PAbst.initTypeMap typedProgram
+    boolProgram' <- PAbst.abstProg typeMap typedProgram
     case runExcept (B.tCheck boolProgram') of
         Left (s1,s2,str,ctx) -> liftIO $ do
             printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
@@ -109,13 +109,18 @@ doit = do
 
     case r of
         Just trace -> do
-            (clauses, env) <- Refine.refineCGen typedProgram trace
+            (clauses, (rtyAssoc,rpostAssoc)) <- Refine.refineCGen typedProgram trace
             let file_hcs = path ++ ".hcs"
             liftIO $ putStr $ show (Horn.HCCS clauses)
             liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
             liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
             parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
             --liftIO $ print parseRes
+            solution  <- case parseRes of
+                Left err -> throwError $ ParseFailed err
+                Right p  -> return p
+            let typeMap1 = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
+            liftIO $ PAbst.printTypeMap typeMap1
             return ()
     return ()
 

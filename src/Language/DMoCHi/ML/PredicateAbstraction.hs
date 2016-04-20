@@ -26,6 +26,7 @@ type Formula = ML.Value
 type TermType = (ML.Id, PType, [Formula])
 
 type TypeMap = IM.IntMap (Either PType TermType)
+type ScopeMap = IM.IntMap [ML.Id]
 
 pprintTermType :: TermType -> Doc
 pprintTermType (x,pty_x,fml) = braces $ 
@@ -309,12 +310,15 @@ abstFunDef tbl env cs pv func = do
             abstTerm tbl (M.insert x ty_y env) cs pv' t1 rty
     return (e,ty_f)
 
+printTypeMap :: TypeMap -> IO ()
+printTypeMap tbl = forM_ (IM.assocs tbl) $ \(i,pty') -> 
+    case pty' of
+        Left pty -> putStrLn $ render $ int i <+> colon <+> pprintPType 0 pty
+        Right termType -> putStrLn $ render $ int i <+> colon <+> pprintTermType termType
+
 abstProg :: (MonadId m, MonadIO m) => TypeMap -> ML.Program -> m B.Program
 abstProg tbl (ML.Program fs t0) = do
-    liftIO $ forM_ (IM.assocs tbl) $ \(i,pty') -> 
-        case pty' of
-            Left pty -> putStrLn $ render $ int i <+> colon <+> pprintPType 0 pty
-            Right termType -> putStrLn $ render $ int i <+> colon <+> pprintTermType termType
+    liftIO $ printTypeMap tbl
     let env = M.fromList [ (f,ty)  | (f,func) <- fs, let Left ty = tbl IM.! ML.ident func ]
     ds <- forM fs $ \(f,func) -> do
         let f' = toSymbol f (env M.! f)
@@ -325,31 +329,33 @@ abstProg tbl (ML.Program fs t0) = do
         abstTerm tbl env [] [] t0 (r,PInt,[])
     return $ B.Program ds e0
 
-initTypeMap :: MonadId m => ML.Program -> m TypeMap
+initTypeMap :: MonadId m => ML.Program -> m (TypeMap,ScopeMap)
 initTypeMap (ML.Program fs t0) = do
     es <- execWriterT $ do
-        let gather (ML.Value _) = return ()
-            gather (ML.Let s _ lv e) = do
+        let gather _ (ML.Value _) = return ()
+            gather fv (ML.Let s x lv e) = do
                 case lv of
                     ML.LValue _ -> return ()
                     ML.LApp _ _ _ _ -> return ()
-                    ML.LFun f -> gatherF f
+                    ML.LFun f -> gatherF fv f
                     ML.LExp i e' -> do
-                        gather e'
+                        gather fv e'
                         ty <- genTermType s
-                        tell (DL.singleton (i, Right ty))
+                        tell (DL.singleton (i, Right ty, fv))
                     ML.LRand -> return ()
-                gather e
-            gather (ML.Assume _ _ e) = gather e
-            gather (ML.Fail _) = return ()
-            gather (ML.Branch _ _ e1 e2) = gather e1 >> gather e2
-            gatherF f = do
-                gather (ML.body f)
+                gather (x : fv) e
+            gather fv (ML.Assume _ _ e) = gather fv e
+            gather _ (ML.Fail _) = return ()
+            gather fv (ML.Branch _ _ e1 e2) = gather fv e1 >> gather fv e2
+            gatherF fv f = do
+                gather (ML.arg f : fv) (ML.body f)
                 ty <- genPType (ML.getType f)
-                tell (DL.singleton (ML.ident f,Left ty))
-        forM_ fs $ \(_, f) -> gatherF f
-        gather t0
-    return $ IM.fromList $ DL.toList es
+                tell (DL.singleton (ML.ident f,Left ty, fv))
+        let fv = map fst fs
+        forM_ fs $ \(_, f) -> gatherF fv f
+        gather fv t0
+    let (es1,es2) = unzip [ ((i,v1),(i,v2)) | (i, v1, v2) <- DL.toList es ]
+    return (IM.fromList es1, IM.fromList es2)
 
 genTermType :: MonadId m => ML.Type -> m TermType
 genTermType s = do

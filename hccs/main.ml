@@ -76,18 +76,20 @@ let () =
                  |> (fun ans -> 
                         let channel = open_out (filename ^ ".ans") in
                         let f = Format.formatter_of_out_channel channel in
-                        Format.fprintf f "solution.@\n%a@\n" PredSubst.pr ans)
+                        Format.fprintf f "solution.@\n%a@\n%!" PredSubst.pr ans)
                with
                | HCCSSolver.NoSolution ->
                   Format.printf "no solution.@,";
                   let channel = open_out (filename ^ ".ans") in
                   let f = Format.formatter_of_out_channel channel in
-                  Format.fprintf f "no solution.@\n"
+                  Format.fprintf f "no solution.@\n!";
+                  close_out channel
                | HCCSSolver.Unknown ->
                   Format.printf "unknown.@,";
                   let channel = open_out (filename ^ ".ans") in
                   let f = Format.formatter_of_out_channel channel in
-                  Format.fprintf f "unknown.@\n"
+                  Format.fprintf f "unknown.@\n!";
+                  close_out channel
              end;
              SMTProver.close ())
             FPATConfig.usage

@@ -1,0 +1,4 @@
+let x = * in
+let e : int = assume x > 0; x in
+assume (x < 0);
+Fail
