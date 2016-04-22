@@ -87,7 +87,7 @@ doit = do
     t_type_checking_end <- liftIO $ getCurrentTime
 
     (typeMap0, fvMap) <- PAbst.initTypeMap typedProgram
-    let lim = 2
+    let lim = 10
     let cegar _ k | k >= lim = return ()
         cegar typeMap k = do
             liftIO $ putStrLn "Predicate Abstracion"

@@ -61,10 +61,14 @@ data Term = C Bool
           | Omega Symbol deriving(Ord,Eq,Show)
 
 f_assume :: Term -> Term -> Term
+f_assume _ e@(Omega _) = e
 f_assume (C True) e = e
 f_assume p e = Assume (getSort e) p e
 f_branch :: Term -> Term -> Term
+f_branch (Omega _) e = e
+f_branch e (Omega _) = e
 f_branch e1 e2 = Branch (getSort e1) False e1 e2
+
 f_branch_label :: Term -> Term -> Term
 f_branch_label e1 e2 = Branch (getSort e1) True e1 e2
 f_let :: Symbol -> Term -> Term -> Term

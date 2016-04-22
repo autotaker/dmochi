@@ -19,6 +19,20 @@ data PType = PInt | PBool
            | PFun ML.Type (ML.Id,PType,[Formula]) (ML.Id,PType,[Formula])
            | PPair ML.Type PType PType
 
+instance Eq PType where
+    PInt == PInt = True
+    PBool == PBool = True
+    (PFun ty_1 (x_1,xty_1,ps_1) (r_1,rty_1,qs_1)) == (PFun ty_2 (x_2,xty_2,ps_2) (r_2,rty_2,qs_2)) =
+        ty_1 == ty_2 && 
+        ps_1 == map (substFormula x_2 x_1) ps_2 &&
+        qs_1 == map (substFormula r_2 r_1 . substFormula x_2 x_1) qs_2 &&
+        xty_1 == xty_2 &&
+        rty_1 == substPType x_2 x_1 rty_2
+    PPair ty pty_fst pty_snd == PPair ty' pty_fst' pty_snd' =
+        ty == ty' && pty_fst == pty_fst' && pty_snd == pty_snd'
+    _ == _ = False
+
+
 type Env = M.Map ML.Id PType
 type Constraints = [Formula]
 type PVar = [(B.Term, Formula)]
@@ -114,8 +128,7 @@ fromType (ML.TFun t1 t2) = PFun (ML.TFun t1 t2)
 --      getSort e' == toSort newTy
 cast :: (MonadIO m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
 cast cs pv e curTy newTy = case (curTy,newTy) of
-    (PInt,  PInt) -> return e
-    (PBool, PBool) -> return e
+    _ | curTy == newTy -> return e
     (PPair _ ty1 ty2, PPair _ ty1' ty2') -> do
         e1 <- cast cs pv (B.f_proj 0 2 e) ty1 ty1'
         e2 <- cast cs pv (B.f_proj 1 2 e) ty2 ty2'
@@ -153,8 +166,11 @@ substTermType :: ML.Id -> ML.Id -> TermType -> TermType
 substTermType a b (x,pty,ps) = (x, substPType a b pty, map (substFormula a b) ps)
 
 substPType :: ML.Id -> ML.Id -> PType -> PType
-substPType a b = go where
-    f = substFormula a b
+substPType a b = substVPType a (ML.Var b)
+
+substVPType :: ML.Id -> ML.Value -> PType -> PType
+substVPType a b = go where
+    f = substVFormula a b
     go PInt = PInt
     go PBool = PBool
     go (PPair t t1 t2) = PPair t (go t1) (go t2)
@@ -203,8 +219,8 @@ abstValue env cs pv = go
             ML.OpEq  v1 v2 -> abstFormula cs pv v
             ML.OpLt  v1 v2 -> abstFormula cs pv v
             ML.OpLte v1 v2 -> abstFormula cs pv v
-            ML.OpAnd v1 v2 -> B.And <$> go v1 PBool <*> go v2 PBool
-            ML.OpOr  v1 v2 -> B.Or  <$> go v1 PBool <*> go v2 PBool
+            ML.OpAnd v1 v2 -> abstFormula cs pv v
+            ML.OpOr  v1 v2 -> abstFormula cs pv v
             ML.OpFst _ v   -> 
                 let PPair _ _ ty2 = typeOfValue env v in
                 B.f_proj 0 2 <$> go v (PPair (ML.getType v) ty ty2)
@@ -260,9 +276,10 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
                 n = length qs'
                 pv' = [ (B.f_proj i n x_preds, 
                          substFormula r' x (substVFormula y v fml)) | (i,fml) <- zip [0..] qs' ] ++ pv
+                ty_r'' = substVPType y v ty_r'
             B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .  
               B.f_let (toSymbol x ty_r') x_body <$>
-                abstTerm tbl (M.insert x ty_r' env) cs pv' t' (r,ty,qs)
+                abstTerm tbl (M.insert x ty_r'' env) cs pv' t' (r,ty,qs)
 
         ML.Let _ f (ML.LFun func) t' -> do
             (e_f,ty_f) <- abstFunDef tbl env cs pv func
