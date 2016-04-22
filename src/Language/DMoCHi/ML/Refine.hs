@@ -627,12 +627,18 @@ substSValue x v _sv = case _sv of
     Int i       -> _sv
     Bool b      -> _sv
 
+updateFormula :: PAbst.Formula -> [PAbst.Formula] -> [PAbst.Formula]
+updateFormula phi fml = case phi of
+    ML.CBool _ -> fml
+    _ | phi `elem` fml -> fml
+      | otherwise -> phi : fml
+
 refineTermType :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> RPostType -> PAbst.TermType -> PAbst.TermType
 refineTermType penv env (RPostType r rty fml) (abst_r, abst_rty, abst_fml) = (abst_r, abst_rty', abst_fml')
     where
     abst_rty' = refinePType penv env rty abst_rty
     phi' = refineLFormula penv (extendEnv r (ML.Var abst_r) env) fml
-    abst_fml' = phi' : abst_fml
+    abst_fml' = updateFormula phi' abst_fml
 refineTermType _ _ RPostTypeFailure termType = termType
 
 refinePType :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> RType -> PAbst.PType -> PAbst.PType
@@ -648,7 +654,7 @@ refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
         env'  = extendEnv (argName as) (ML.Var abst_x) env
         pre   = refineLFormula penv env' (preCond as)
         abst_pty' = refinePType penv env (argType as) abst_pty
-        pty_x' = (abst_x, abst_pty', pre : abst_fml)
+        pty_x' = (abst_x, abst_pty', updateFormula pre abst_fml)
         pty_r' = refineTermType penv env' (resType as) pty_r
 
 refineLFormula :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> LFormula -> PAbst.Formula

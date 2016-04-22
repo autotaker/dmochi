@@ -13,6 +13,7 @@ import qualified Language.DMoCHi.ML.SMT as SMT
 import Language.DMoCHi.Common.Id
 import Control.Monad.Writer
 import Text.PrettyPrint
+import Debug.Trace
 
 data PType = PInt | PBool
            | PFun ML.Type (ML.Id,PType,[Formula]) (ML.Id,PType,[Formula])
@@ -134,10 +135,10 @@ cast cs pv e curTy newTy = case (curTy,newTy) of
                 let r_body = B.f_proj 0 2 $ B.V r_pair
                     r_preds = B.f_proj 1 2 $ B.V r_pair
                     m = length qs
-                    pv'' = [ (B.f_proj i m r_preds, fml) | (i,fml) <-
-                             zip [0..] qs] ++ pv'
+                    qs' = map (substFormula r r' . substFormula x y) qs
+                    pv'' = [ (B.f_proj i m r_preds, fml) | (i,fml) <- zip [0..] qs'] ++ pv'
                 r'_body <- cast cs pv'' r_body (substPType x y ty_r) ty_r'
-                r'_preds <- abstFormulae cs pv'' (map (substFormula r r' . substFormula x y) qs)
+                r'_preds <- abstFormulae cs pv'' qs'
                 return $ B.T [r'_body,r'_preds]
 
 toSort :: PType -> B.Sort
@@ -167,6 +168,9 @@ substVFormula :: ML.Id -> ML.Value -> Formula -> Formula
 substVFormula a b = go where
     go e = case e of
         ML.Var x | x == a -> b
+                 | otherwise -> e
+        ML.CInt _ -> e
+        ML.CBool _ -> e
         ML.Pair v1 v2 -> ML.Pair (go v1) (go v2)
         ML.Op op -> ML.Op $ case op of
             ML.OpAdd v1 v2 -> ML.OpAdd (go v1) (go v2)
@@ -255,7 +259,7 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
                 x_preds = B.f_proj 1 2 (B.V x')
                 n = length qs'
                 pv' = [ (B.f_proj i n x_preds, 
-                         substFormula x r' (substVFormula y v fml)) | (i,fml) <- zip [0..] qs' ] ++ pv
+                         substFormula r' x (substVFormula y v fml)) | (i,fml) <- zip [0..] qs' ] ++ pv
             B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .  
               B.f_let (toSymbol x ty_r') x_body <$>
                 abstTerm tbl (M.insert x ty_r' env) cs pv' t' (r,ty,qs)
@@ -307,7 +311,7 @@ abstFunDef tbl env cs pv func = do
             pv' = [ (B.f_proj i n x_preds, substFormula y x fml) | (i,fml) <- zip [0..] ps ] ++ pv
             rty' = substTermType y x rty
         B.f_let (toSymbol x ty_y) x_body <$>
-            abstTerm tbl (M.insert x ty_y env) cs pv' t1 rty
+            abstTerm tbl (M.insert x ty_y env) cs pv' t1 rty'
     return (e,ty_f)
 
 printTypeMap :: TypeMap -> IO ()

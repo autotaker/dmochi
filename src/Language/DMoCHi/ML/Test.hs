@@ -86,44 +86,49 @@ doit = do
     liftIO $ Typed.printProgram typedProgram
     t_type_checking_end <- liftIO $ getCurrentTime
 
-    liftIO $ putStrLn "Predicate Abstracion"
-    (typeMap, fvMap) <- PAbst.initTypeMap typedProgram
-    boolProgram' <- PAbst.abstProg typeMap typedProgram
-    case runExcept (B.tCheck boolProgram') of
-        Left (s1,s2,str,ctx) -> liftIO $ do
-            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
-            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
-                printf "Context %d: %s\n" i (show t)
-        Right _ -> return ()
-    let file_boolean = path ++ ".bool"
-    boolProgram <- B.toUnTyped boolProgram'
-    liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
-    liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
-    liftIO $ putStrLn "Converted program"
-    liftIO $ B.printProgram boolProgram
-    
-    t_model_checking_begin <- liftIO $ getCurrentTime
-    r <- withExceptT BooleanError $ test file_boolean boolProgram
-    liftIO $ print r
-    t_model_checking_end <- liftIO $ getCurrentTime
+    (typeMap0, fvMap) <- PAbst.initTypeMap typedProgram
+    let lim = 2
+    let cegar _ k | k >= lim = return ()
+        cegar typeMap k = do
+            liftIO $ putStrLn "Predicate Abstracion"
+            boolProgram' <- PAbst.abstProg typeMap typedProgram
+            case runExcept (B.tCheck boolProgram') of
+                Left (s1,s2,str,ctx) -> liftIO $ do
+                    printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+                    forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                        printf "Context %d: %s\n" i (show t)
+                Right _ -> return ()
+            let file_boolean = path ++ ".bool"
+            boolProgram <- B.toUnTyped boolProgram'
+            liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
+            liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
+            liftIO $ putStrLn "Converted program"
+            liftIO $ B.printProgram boolProgram
+            
+            t_model_checking_begin <- liftIO $ getCurrentTime
+            r <- withExceptT BooleanError $ test file_boolean boolProgram
+            liftIO $ print r
+            t_model_checking_end <- liftIO $ getCurrentTime
 
-    case r of
-        Just trace -> do
-            (clauses, (rtyAssoc,rpostAssoc)) <- Refine.refineCGen typedProgram trace
-            let file_hcs = path ++ ".hcs"
-            liftIO $ putStr $ show (Horn.HCCS clauses)
-            liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
-            liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
-            parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-            --liftIO $ print parseRes
-            solution  <- case parseRes of
-                Left err -> throwError $ ParseFailed err
-                Right p  -> return p
-            let typeMap1 = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
-            liftIO $ PAbst.printTypeMap typeMap1
+            case r of
+                Just trace -> do
+                    (clauses, (rtyAssoc,rpostAssoc)) <- Refine.refineCGen typedProgram trace
+                    let file_hcs = path ++ ".hcs"
+                    liftIO $ putStr $ show (Horn.HCCS clauses)
+                    liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
+                    liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
+                    parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
+                    --liftIO $ print parseRes
+                    solution  <- case parseRes of
+                        Left err -> throwError $ ParseFailed err
+                        Right p  -> return p
+                    let typeMap' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
+                    cegar typeMap' (k+1)
+                Nothing -> do
+                    liftIO $ putStrLn "Safe!!"
+                    return ()
             return ()
-    return ()
-
+    cegar typeMap0 0
 
 
     {-
