@@ -102,7 +102,7 @@ convertLambda :: (MonadError TypeError m, MonadId m) => Env -> U.Id -> U.Exp -> 
 convertLambda env arg body (TFun t1 t2) = do
     i <- freshInt
     FunDef i (Id t1 arg) <$> convertE (M.insert arg t1 env) t2 body
-convertLambda _ _ _ _ = throwError $ OtherError "Expecting function"
+convertLambda _ x _ _ = throwError $ OtherError $ "Expecting function:" ++ x
 
 
 -- f v1 v2 .. vn ==> (yn-1 vn,[(y1,f v1),(y2,y1 v2),...,(yn-1,yn-2,vn-1)])
@@ -124,7 +124,7 @@ convertLV env lv = case lv of
                             shouldBeValue v  t1
                             x <- Id t2 <$> freshId "tmp"
                             return (t2,x:acc)
-                        _ -> throwError $ OtherError $ "Excepting function") (ty,[]) vs'
+                        _ -> throwError $ OtherError $ "Excepting function" ++ show (f,vs)) (ty,[]) vs'
                 is <- replicateM (length vs) freshInt
                 let ys = reverse (tail xs)
                     f' = Id ty f

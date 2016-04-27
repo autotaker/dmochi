@@ -82,7 +82,7 @@ type M a = ReaderT Factory IO a
 data Context = Context { flowEnv :: M.Map Symbol TTypeList
                        , symEnv  :: M.Map Symbol  VType 
                        , flowTbl :: IOArray Id TTypeList
-                       , symHist :: [M.Map Symbol VType]} deriving(Eq)
+                       , symHist :: [(M.Map Symbol TTypeList, M.Map Symbol VType)]} deriving(Eq)
 
 
 saturateFlow ::  (Array Id [Id], M.Map Symbol Id, Array Id (Maybe (Term (Id,S.Set String)))) -> M.Map Symbol VType -> IOArray Id TTypeList -> M (M.Map Symbol TTypeList)
@@ -263,71 +263,72 @@ initContext (Program defs _) (_,mapSym,leafTbl) = do
 
 type STerm = Term (Id,S.Set String)
 
-data Value = VB Bool | Cls Symbol (Term ()) Env TEnv | Tup [Value]
+data Value = VB Bool | Cls Symbol (Term ()) Env FEnv TEnv | Tup [Value]
 type Env = M.Map Symbol Value
 type TEnv = M.Map Symbol VType
+type FEnv = M.Map Symbol TTypeList
 
 instance Show Value where
     show (VB b) = show b
-    show (Cls _ _ _ _) = show "<closure>"
+    show (Cls _ _ _ _ _) = show "<closure>"
     show (Tup vs) = show vs
 
-extractCE :: Program -> M.Map Symbol TTypeList -> TEnv -> [TEnv] ->  M [Bool]
+extractCE :: Program -> M.Map Symbol TTypeList -> TEnv -> [(FEnv,TEnv)] ->  M [Bool]
 extractCE prog flowEnv genv hist = 
-    let env0 = M.fromList [ (f,Cls x (Omega () "") env0 M.empty) | (f,Lam _ x _) <- definitions prog ] in
-    let f genv env = M.fromList [ (f,Cls x e0 env genv) | (f,Lam _ x e0) <- definitions prog ] in
+    let env0 = M.fromList [ (f,Cls x (Omega () "") env0 M.empty M.empty) | (f,Lam _ x _) <- definitions prog ] in
+    let f (fenv,genv) env = M.fromList [ (f,Cls x e0 env fenv genv) | (f,Lam _ x e0) <- definitions prog ] in
     let env = foldr f env0 hist in
-    execWriterT $ evalFail env genv (mainTerm prog)
+    execWriterT $ evalFail env flowEnv genv (mainTerm prog)
     where
-    evalFail :: Env -> M.Map Symbol VType -> Term () -> WriterT [Bool] (ReaderT Factory IO) ()
-    evalFail env tenv e = {- traceShow (e,tenv) $ -} case e of
+    evalFail :: Env -> FEnv -> TEnv -> Term () -> WriterT [Bool] (ReaderT Factory IO) ()
+    evalFail env fenv tenv e = {- traceShow (e,tenv) $ -} case e of
         T s es -> 
             let sub [] = error "extractCE: Tuple: there must be an term that fails"
                 sub (ei:es') = do
-                    tyi <- lift $ saturateTerm flowEnv tenv ei
+                    tyi <- lift $ saturateTerm fenv tenv ei
                     case tyi of
                         LNil _ -> error "extractCE: Tuple: this term may not diverge" 
-                        LFail _ -> evalFail env tenv ei
-                        LCons _ etyi _ -> eval env tenv ei etyi >> sub es'
+                        LFail _ -> evalFail env fenv tenv ei
+                        LCons _ etyi _ -> eval env fenv tenv ei etyi >> sub es'
             in sub es 
         Let _ x e1 e2 -> 
-            let sub (LFail _) = evalFail env tenv e1 
+            let sub (LFail _) = evalFail env fenv tenv e1 
                 sub (LCons _ ty1 ts) = do
                     let tenv' = M.insert x ty1 tenv
-                    ty2 <- lift $ saturateTerm flowEnv tenv' e2
+                    ty2 <- lift $ saturateTerm fenv tenv' e2
                     if TFail `telem` ty2 then do
-                        ex <- eval env tenv e1 ty1
-                        evalFail (M.insert x ex env) tenv' e2
+                        ex <- eval env fenv tenv e1 ty1
+                        evalFail (M.insert x ex env) fenv tenv' e2
                     else
                         sub ts 
-            in lift (saturateTerm flowEnv tenv e1) >>= sub
-        Proj s n d e1 -> evalFail env tenv e1
+            in lift (saturateTerm fenv tenv e1) >>= sub
+        Proj s n d e1 -> evalFail env fenv tenv e1
         If _ b e1 e2 e3 -> do
-            ty1 <- lift $ saturateTerm flowEnv tenv e1
+            ty1 <- lift $ saturateTerm fenv tenv e1
             if TFail `telem` ty1 then
-                evalFail env tenv e1
+                evalFail env fenv tenv e1
             else do
-                ty2 <- lift $ saturateTerm flowEnv tenv e2
+                ty2 <- lift $ saturateTerm fenv tenv e2
                 vtrue <- buildType (bool True)
                 vfalse <- buildType (bool False)
                 if vtrue `elem` ty1 && TFail `telem` ty2 then
-                    eval env tenv e1 vtrue >>
+                    eval env fenv tenv e1 vtrue >>
                     tell (if b then [True] else []) >> 
-                    evalFail env tenv e2
+                    evalFail env fenv tenv e2
                 else 
-                    eval env tenv e1 vfalse >>
+                    eval env fenv tenv e1 vfalse >>
                     tell (if b then [False] else []) >> 
-                    evalFail env tenv e3
+                    evalFail env fenv tenv e3
         App _ e1 e2 ->  do
-            ty1 <- lift (saturateTerm flowEnv tenv e1)
+            ty1 <- lift (saturateTerm fenv tenv e1)
             if TFail `telem` ty1 then
-                evalFail env tenv e1
+                evalFail env fenv tenv e1
             else do
                 let (LCons _ ty1' _) = ty1 
-                ty2 <- lift (saturateTerm flowEnv tenv e2)
+                ty2 <- lift (saturateTerm fenv tenv e2)
                 if TFail `telem` ty2 then do
-                    eval env tenv e1 ty1'
-                    evalFail env tenv e2
+                    eval env fenv tenv e1 ty1'
+                    evalFail env fenv tenv e2
                 else do
                     let (ty1',ty2') = head $ do
                             vf@(VFun _ vs) <- unfoldV ty1
@@ -335,70 +336,68 @@ extractCE prog flowEnv genv hist =
                             guard $ b === TFail
                             guard $ a `elem` ty2
                             return (vf,a)
-                    (Cls x e0 env' tenv') <- eval env tenv e1 ty1'
-                    v2 <- eval env tenv e2 ty2'
-                    evalFail (M.insert x v2 env') (M.insert x ty2' tenv') e0
+                    (Cls x e0 env' fenv' tenv') <- eval env fenv tenv e1 ty1'
+                    v2 <- eval env fenv tenv e2 ty2'
+                    evalFail (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0
         Fail _ _ -> return ()
-    eval :: Env -> M.Map Symbol VType -> Term () -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
-    eval env tenv e ety = {- traceShow e $ traceShow ("env",env) $ trace ("type: "++ show ety) $ -} case e of
+    eval :: Env -> FEnv -> TEnv -> Term () -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
+    eval env fenv tenv e ety = traceShow e $ traceShow ("env",env) $ trace ("type: "++ show ety) $  case e of
         V _ x -> return $ env M.! x
         C s b -> return $ VB b
         T s es -> 
             let VTup _ tys = ety in 
-            Tup <$> zipWithM (\ei tyi -> eval env tenv ei tyi) es tys
+            Tup <$> zipWithM (\ei tyi -> eval env fenv tenv ei tyi) es tys
         TF s -> case ety of
             VT _ -> return $ VB True
             VF _ -> return $ VB False
-        Lam s x e1 -> return $ Cls x e1 env tenv
+        Lam s x e1 -> return $ Cls x e1 env fenv tenv
         Let _ x e1 e2 ->
             let sub (LCons _ ty1 ts) = do
                     let tenv' = M.insert x ty1 tenv
-                    ty2 <- lift $ saturateTerm flowEnv tenv' e2
-                    if ety `elem` ty2 then do
-                        ex <- eval env tenv e1 ty1
-                        eval (M.insert x ex env) tenv' e2 ety
+                    ty2 <- lift $ saturateTerm fenv tenv' e2
+                    traceShow (ty1, ty2) $ if ety `elem` ty2 then do
+                        ex <- eval env fenv tenv e1 ty1
+                        eval (M.insert x ex env) fenv tenv' e2 ety
                     else
                         sub ts
-            in lift (saturateTerm flowEnv tenv e1) >>= sub
+            in lift (saturateTerm fenv tenv e1) >>= sub
         Proj s n d e1 -> 
             let sub (LCons _ ty1@(VTup _ tys) ty') 
                     | ety == tys !! projN n = do
-                        Tup vs <- eval env tenv e1 ty1
+                        Tup vs <- eval env fenv tenv e1 ty1
                         return $ vs !! projN n
                     | otherwise = sub ty' in
-            lift (saturateTerm flowEnv tenv e1) >>= sub
+            lift (saturateTerm fenv tenv e1) >>= sub
         App _ e1 e2 -> do
-            ty1 <- lift (saturateTerm flowEnv tenv e1)
-            ty2 <- lift (saturateTerm flowEnv tenv e2)
+            ty1 <- lift (saturateTerm fenv tenv e1)
+            ty2 <- lift (saturateTerm fenv tenv e2)
             let (ty1',ty2') = head $ do
                     vf@(VFun _ vs) <- unfoldV ty1
                     (a,b) <- unfoldFun vs
                     guard $ b === TPrim ety
                     guard $ a `elem` ty2
                     return (vf,a)
-            tmp <- eval env tenv e1 ty1'
-            (Cls x e0 env' tenv') <- eval env tenv e1 ty1'
-            v2 <- eval env tenv e2 ty2'
-            eval (M.insert x v2 env') (M.insert x ty2' tenv') e0 ety
+            tmp <- eval env fenv tenv e1 ty1'
+            (Cls x e0 env' fenv' tenv') <- eval env fenv tenv e1 ty1'
+            v2 <- eval env fenv tenv e2 ty2'
+            eval (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0 ety
         If _ b e1 e2 e3 -> do
-            ty1 <- lift $ saturateTerm flowEnv tenv e1
-            ty2 <- lift $ saturateTerm flowEnv tenv e2
+            ty1 <- lift $ saturateTerm fenv tenv e1
+            ty2 <- lift $ saturateTerm fenv tenv e2
             vtrue <- buildType (bool True)
             vfalse <- buildType (bool False)
             if vtrue `elem` ty1 && ety `elem` ty2 then
-                eval env tenv e1 vtrue >>
+                eval env fenv tenv e1 vtrue >>
                 tell (if b then [True] else []) >> 
-                eval env tenv e2 ety
+                eval env fenv tenv e2 ety
             else 
-                eval env tenv e1 vfalse >>
+                eval env fenv tenv e1 vfalse >>
                 tell (if b then [False] else []) >> 
-                eval env tenv e3 ety
-
+                eval env fenv tenv e3 ety
     telem :: TType -> TTypeList -> Bool
     telem TFail (LFail _) = True
     telem TFail _ = False
     telem (TPrim v) ts = elem v ts
-                
 
 
 saturate :: Program -> FlowGraph -> IO (Maybe [Bool],Context)
@@ -430,7 +429,7 @@ saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flo
             readIORef (combCounter factory)  >>= printf "Comb    :%8d\n"
             putStrLn ""
         t0 <- saturateTerm env1 env2 t0'
-        let ctx' = Context env1 env2 (flowTbl ctx) (symEnv ctx:symHist ctx)
+        let ctx' = Context env1 env2 (flowTbl ctx) ((env1, symEnv ctx):symHist ctx)
         case t0 of
             LFail _ -> do
                 liftIO $ putStrLn "extracting a counterexample"
