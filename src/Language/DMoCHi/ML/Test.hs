@@ -92,17 +92,19 @@ doit = do
         cegar typeMap k = do
             liftIO $ putStrLn "Predicate Abstracion"
             boolProgram' <- PAbst.abstProg typeMap typedProgram
-            case runExcept (B.tCheck boolProgram') of
-                Left (s1,s2,str,ctx) -> liftIO $ do
-                    printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
-                    forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
-                        printf "Context %d: %s\n" i (show t)
-                Right _ -> return ()
             let file_boolean = path ++ ".bool"
-            boolProgram <- B.toUnTyped boolProgram'
             liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
-            liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
             liftIO $ putStrLn "Converted program"
+            liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
+            case runExcept (B.tCheck boolProgram') of
+                Left (s1,s2,str,ctx) -> do
+                    liftIO $ do
+                        printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+                        forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                            printf "Context %d: %s\n" i (show t)
+                    throwError $ BooleanError "Abstracted Program is ill-typed"
+                Right _ -> return ()
+            let boolProgram = B.toUnTyped boolProgram'
             liftIO $ B.printProgram boolProgram
             
             t_model_checking_begin <- liftIO $ getCurrentTime

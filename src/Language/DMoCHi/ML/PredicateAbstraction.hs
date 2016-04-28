@@ -126,12 +126,13 @@ fromType (ML.TFun t1 t2) = PFun (ML.TFun t1 t2)
 --      toSimple curTy == toSimple newTy
 -- assertion:
 --      getSort e' == toSort newTy
-cast :: (MonadIO m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
-cast cs pv e curTy newTy = case (curTy,newTy) of
+
+cast, cast' :: (MonadIO m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
+cast' cs pv e curTy newTy = case (curTy,newTy) of
     _ | curTy == newTy -> return e
     (PPair _ ty1 ty2, PPair _ ty1' ty2') -> do
-        e1 <- cast cs pv (B.f_proj 0 2 e) ty1 ty1'
-        e2 <- cast cs pv (B.f_proj 1 2 e) ty2 ty2'
+        e1 <- cast' cs pv (B.f_proj 0 2 e) ty1 ty1'
+        e2 <- cast' cs pv (B.f_proj 1 2 e) ty2 ty2'
         return $ B.T [e1,e2]
     (PFun _ (x,ty_x,ps) (r,ty_r,qs), 
      PFun _ (y,ty_y,ps') (r',ty_r',qs')) -> do
@@ -141,18 +142,37 @@ cast cs pv e curTy newTy = case (curTy,newTy) of
                 y_preds = B.f_proj 1 2 (B.V y_pair)
                 n = length ps'
                 pv' = [ (B.f_proj i n y_preds, fml) | (i,fml) <- zip [0..] ps'] ++ pv
-            x_body  <- cast cs pv' y_body ty_y ty_x
+            x_body  <- cast' cs pv' y_body ty_y ty_x
             x_preds <- abstFormulae cs pv' (map (substFormula x y) ps)
             r_pair <- B.freshSym (ML.name r) (toSort' (r,ty_r,qs))
-            B.f_let r_pair (B.f_app e (B.T [x_body,x_preds])) <$> do
-                let r_body = B.f_proj 0 2 $ B.V r_pair
-                    r_preds = B.f_proj 1 2 $ B.V r_pair
+            B.f_let r_pair (B.f_app e (B.T [x_body,x_preds])) <$> do -- let r_pair = e (x_body, x_preds) in
+                let r_body = B.f_proj 0 2 $ B.V r_pair  -- r_body corresponds to ty_r
+                    r_preds = B.f_proj 1 2 $ B.V r_pair -- r_preds corresponds to qs
                     m = length qs
-                    qs' = map (substFormula r r' . substFormula x y) qs
-                    pv'' = [ (B.f_proj i m r_preds, fml) | (i,fml) <- zip [0..] qs'] ++ pv'
-                r'_body <- cast cs pv'' r_body (substPType x y ty_r) ty_r'
+                    pv'' = [ (B.f_proj i m r_preds, 
+                              substFormula r r' $ substFormula x y fml) | (i,fml) <- zip [0..] qs] ++ pv'
+                r'_body <- cast' cs pv'' r_body (substPType x y ty_r) ty_r'
                 r'_preds <- abstFormulae cs pv'' qs'
-                return $ B.T [r'_body,r'_preds]
+                return $ B.T [r'_body,r'_preds] 
+cast cs pv e curTy newTy = do
+    r <- cast' cs pv e curTy newTy
+    liftIO $ putStrLn $ render $
+        let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintV 0) cs)
+            doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintV 0 . snd) pv)
+            doc_e = B.pprintTerm 0 e
+            doc_curTy = pprintPType 0 curTy
+            doc_newTy = pprintPType 0 newTy
+            doc_r = B.pprintTerm 0 r
+        in braces (
+           text "constraints:" <+> doc_cs $+$ 
+           text "predicates:" <+> doc_pvar $+$ 
+           text "prev term:" <+> doc_e $+$ 
+           text "prev type:" <+> doc_curTy $+$
+           text "new  type:" <+> doc_newTy $+$
+           text "abst result:" <+> doc_r)
+    return r
+
+
 
 toSort :: PType -> B.Sort
 toSort PInt = B.Tuple []

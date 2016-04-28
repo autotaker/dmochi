@@ -25,6 +25,8 @@ import qualified Language.DMoCHi.Boolean.Syntax as B
 import Control.Monad
 import Control.Monad.Except
 import Language.DMoCHi.Common.Id
+import qualified Data.Map as M
+import Control.Monad.Identity
 data Symbol = Symbol { _sort :: Sort, name :: String } deriving(Show)
 
 freshSym :: MonadId m => String -> Sort -> m Symbol
@@ -125,10 +127,8 @@ order Bool = 0
 order (Tuple xs) = maximum (0:map order xs)
 order (t1 :-> t2) = max (order t1+1) (order t2)
 
--- assumption: the given program is alpha-converted
--- requirement: the output program is also alpha-converted
-toUnTyped :: MonadId m => Program -> m B.Program
-toUnTyped (Program ds t0) = doit where
+toUnTyped :: Program -> B.Program
+toUnTyped (Program ds t0) = runIdentity doit where
     doit = do
         ds' <- mapM (\(x,t) -> (,) (name x) <$> convert t) ds 
         t0' <- convert t0
@@ -148,66 +148,65 @@ toUnTyped (Program ds t0) = doit where
     convert (Fail x) = return $ B.Fail () (name x)
     convert (Omega x) = return $ B.Omega () (name x)
     omega = do
-        x <- freshId "Omega"
-        return $ B.Omega () x
+        -- x <- freshId "Omega"
+        return $ B.Omega () ""
 
 tCheck :: Program -> Except (Sort,Sort,String,[Term]) ()
 tCheck (Program ds t0) = doit where
     check s1 s2 str ctx = when (s1 /= s2) $ throwError (s1,s2,str,ctx)
+    doit :: Except (Sort,Sort,String,[Term]) ()
     doit = do
+        let env = M.fromList [ (x , getSort x) | (x,_) <- ds ]
         forM_ ds $ \(x,t) -> do
-            go [] t
+            go env [] t
             check (getSort x) (getSort t) "let rec" []
-        go [] t0
-    go ctx _t = let ctx' = _t:ctx in case _t of
+        go env [] t0
+    go :: M.Map Symbol Sort -> [Term] -> Term -> Except (Sort,Sort,String,[Term]) ()
+    go env ctx _t = let ctx' = _t:ctx in case _t of
         C _ -> return ()
-        V _ -> return ()
-        T ts -> mapM_ (go ctx') ts
-        Lam _ t -> go ctx' t
+        V x -> check (getSort x) (env M.! x) "var" ctx'
+        T ts -> mapM_ (go env ctx') ts
+        Lam x t -> go (M.insert x (getSort x) env) ctx' t
         Let s x tx t -> do
-            go ctx' tx
+            go env ctx' tx
             check (getSort x) (getSort tx) "let var" ctx'
-            go ctx' t
+            go (M.insert x (getSort x) env) ctx' t
             check s (getSort t) "let body" ctx'
         App s t1 t2 -> do
-            go ctx' t1
-            go ctx' t2
+            go env ctx' t1
+            go env ctx' t2
             case getSort t1 of
                 s1 :-> s2 -> check s1 (getSort t2) "app arg" ctx' >> 
                              check s s2 "app result" ctx'
                 s' -> throwError (s',X,"app fun",ctx')
         Proj s i n t -> do
-            go ctx' t
+            go env ctx' t
             case getSort t of
                 Tuple ts | length ts == n -> check s (ts !! i) "proj" ctx'
                 s' -> throwError (s',X,"tuple size",t:ctx')
         Assume s p t -> do
-            go ctx' p
+            go env ctx' p
             check (getSort p) Bool "assume pred" (p:ctx')
-            go ctx' t
+            go env ctx' t
             check s (getSort t) "assume body" ctx'
         Branch s _ t1 t2 -> do
-            go ctx' t1
+            go env ctx' t1
             check s (getSort t1) "branch fst" (t1:ctx')
-            go ctx' t2
+            go env ctx' t2
             check s (getSort t2) "branch snd" (t2:ctx')
         And t1 t2 -> do
-            go ctx' t1
+            go env ctx' t1
             check Bool (getSort t1) "and fst" (t1:ctx')
-            go ctx' t2
+            go env ctx' t2
             check Bool (getSort t2) "and snd" (t2:ctx')
         Or t1 t2 -> do
-            go ctx' t1
+            go env ctx' t1
             check Bool (getSort t1) "or fst" (t1:ctx')
-            go ctx' t2
+            go env ctx' t2
             check Bool (getSort t2) "or snd" (t2:ctx')
         Not t -> do
-            go ctx' t
+            go env ctx' t
             check Bool (getSort t) "not" (t:ctx')
         Fail _ -> return ()
         Omega _ -> return ()
-        
-                    
-        
-        
 
