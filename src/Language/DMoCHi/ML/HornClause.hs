@@ -20,7 +20,11 @@ data Term = Bool Bool
           | Lt  Term Term
           | Lte Term Term
           | Gte Term Term
-          | Pair Term Term
+--          | Pair Term Term
+          | Not Term
+          | And Term Term
+          | Iff Term Term
+          | Or  Term Term
 
 instance Show HCCS where
     show (HCCS cs) = unlines $ map show cs
@@ -36,7 +40,7 @@ instance Show Term where
     showsPrec _ (Bool False) = showString "bot"
     showsPrec _ (Int i) = shows i
     showsPrec _ (Var x) = showString x
-    showsPrec _ (Pair t1 t2) = showParen True $ shows t1 . showChar ',' . showChar ' ' . shows t2
+    -- showsPrec _ (Pair t1 t2) = showParen True $ shows t1 . showChar ',' . showChar ' ' . shows t2
     showsPrec _ (Pred p []) = showString $ p ++"(dummy)"
     showsPrec _ (Pred p ps) = 
         showString p . showChar '(' .
@@ -58,5 +62,12 @@ instance Show Term where
         (showsPrec 4 t1) . showString " <= " . (showsPrec 4 t2)
     showsPrec d (Gte t1 t2) = showParen (d >= 4) $
         (showsPrec 4 t1) . showString " >= " . (showsPrec 4 t2)
+    showsPrec d (And t1 t2) = showParen (d >= 3) $
+        (showsPrec 3 t1) . showString " /\\ " . (showsPrec 4 t2)
+    showsPrec d (Or  t1 t2) = showParen (d >= 3) $
+        (showsPrec 3 t1) . showString " \\/ " . (showsPrec 4 t2)
+    showsPrec d (Iff t1 t2) = showParen (d >= 3) $
+        (showsPrec 3 t1) . showString " <=> " . (showsPrec 4 t2)
+    showsPrec d (Not t1) = showChar '!' . (showsPrec 6 t1)
 
 

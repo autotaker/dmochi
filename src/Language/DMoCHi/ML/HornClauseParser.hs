@@ -50,7 +50,7 @@ commaSep :: Parser a -> Parser [a]
 commaSep = P.commaSep lexer
 
 mainP :: Parser [(String,[Id],Value)]
-mainP = string "solution." >> whiteSpace >> many defP
+mainP = string "solution." >> whiteSpace >> many defP <* eof
 
 defP :: Parser (String,[Id],Value)
 defP = do
@@ -71,6 +71,7 @@ exprP env = it where
               , [binary "*" scalar AssocNone]
               , [binary "+" (after2 Op OpAdd) AssocLeft, binary "-" (after2 Op OpSub) AssocLeft]
               , [binary "=" (after2 Op OpEq)  AssocNone, 
+                 binary "<>" (\a b -> Op $ OpNot $ Op $ OpEq a b) AssocNone,
                  binary "<" (after2 Op OpLt) AssocNone,
                  binary "<=" (after2 Op OpLte) AssocNone,
                  binary ">=" (after2 Op (flip OpLte)) AssocNone,

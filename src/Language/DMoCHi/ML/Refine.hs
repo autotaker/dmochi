@@ -63,6 +63,7 @@ data SValue = SVar Id
             | And SValue SValue
             | Or SValue SValue
             | Not SValue
+            | Iff SValue SValue
             | C Closure
 
 instance ML.HasType SValue where
@@ -102,6 +103,8 @@ instance Show SValue where
         showParen (d >= 4) $ (showsPrec 4 v1) . (showString " && ") . (showsPrec 4 v2)
     showsPrec d (Or v1 v2) = 
         showParen (d >= 3) $ (showsPrec 3 v1) . (showString " || ") . (showsPrec 3 v2)
+    showsPrec d (Iff v1 v2) = 
+        showParen (d >= 3) $ (showsPrec 3 v1) . (showString " <=> ") . (showsPrec 3 v2)
     showsPrec d (Not v1) = 
         showParen (d >= 8) $ (showString "not ") . showsPrec 8 v1
     showsPrec d (C cls) = showsPrec d cls
@@ -297,18 +300,20 @@ pprintFormula x = go M.empty x "" where
 termOfFormula :: LFormula -> Horn.Term
 termOfFormula (Formula i vs) = Horn.Pred ("P"++show i) (map termOfValue vs)
 
+
+-- assume that the value has type int
 termOfValue :: SValue -> Horn.Term
 termOfValue = \case
     SVar x -> Horn.Var (ML.name x)
     Int i -> Horn.Int i
-    Bool b -> Horn.Bool b
-    P v1 v2  -> Horn.Pair (termOfValue v1) (termOfValue v2)
-    --error "termOfValue: pairs are not supported"
+--    P v1 v2  -> Horn.Pair (termOfValue v1) (termOfValue v2)
     Add v1 v2 -> Horn.Add (termOfValue v1) (termOfValue v2)
     Sub v1 v2 -> Horn.Sub (termOfValue v1) (termOfValue v2)
-    Eq v1 v2 -> Horn.Eq (termOfValue v1) (termOfValue v2)
-    Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
-    Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
+    v -> error $ "termOfValue: unexpected value: " ++ show v
+--    Eq v1 v2 -> Horn.Eq (termOfValue v1) (termOfValue v2)
+--    Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
+--    Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
+{-
     Not v -> case v of
         Bool b -> Horn.Bool (not b)
         Eq v1 v2 -> Horn.NEq (termOfValue v1) (termOfValue v2)
@@ -318,6 +323,22 @@ termOfValue = \case
         C _ -> error "termOfValue: unexpected closure"
         _ -> error "termOfValue: negation of Boolean combination is not supported"
     C _ -> error "termOfValue: unexpected closure"
+-}
+
+-- assume the value has type bool
+atomOfValue :: SValue -> Horn.Term
+atomOfValue = \case
+    SVar x -> case ML.getType x of
+        ML.TBool -> Horn.Var (ML.name x) `Horn.Eq` Horn.Int 1
+    Bool b -> Horn.Bool b
+    Eq v1 v2 -> Horn.Eq (termOfValue v1) (termOfValue v2)
+    Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
+    Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
+    Not v -> Horn.Not (atomOfValue v)
+    And v1 v2 -> Horn.And (atomOfValue v1) (atomOfValue v2)
+    Iff v1 v2 -> Horn.Iff (atomOfValue v1) (atomOfValue v2)
+    Or  v1 v2 -> Horn.Or  (atomOfValue v1) (atomOfValue v2)
+    v -> error $ "atomOfValue: unexpected value: " ++ show v
 
 
 type RTypeGen m = ([Id] -> SValue -> m RType, [Id] -> Maybe SValue -> m RPostType)
@@ -333,6 +354,7 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
     gen _ _ (SVar x) = case ML.getType x of
         ML.TInt -> pure RInt
         ML.TBool -> pure RBool
+        ty -> error $ "gen: unexpected type: " ++ show ty
     gen _ _ (Int _) = pure RInt
     gen _ _ (Bool _) = pure RBool
     gen lim env (P v1 v2) = RPair <$> gen lim env v1 <*> gen lim env v2
@@ -340,6 +362,7 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
     gen _ _ (Sub _ _) = pure RInt
     gen _ _ (Eq _ _) = pure RBool
     gen _ _ (Lt _ _) = pure RBool
+    gen _ _ (Lte _ _) = pure RBool
     gen _ _ (And _ _) = pure RBool
     gen _ _ (Or _ _) = pure RBool
     gen _ _ (Not _) = pure RBool
@@ -541,10 +564,12 @@ refineCGen prog trace = execWriterT $ do
             return theta
         clause cs fml = do
             liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
+            (fml,cs) <- deBooleanize fml cs
+            liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==>" ++ show fml
             let hd = case termOfFormula fml of
                     Horn.Pred x ts  -> Horn.PVar x ts
                 body = map f cs
-                f (Left sv) = termOfValue sv
+                f (Left sv) = atomOfValue sv
                 f (Right v) = termOfFormula v
             addClause $ Horn.Clause hd body
         subType cs ty1 ty2 = do
@@ -568,8 +593,11 @@ refineCGen prog trace = execWriterT $ do
         subTypePost cs ty1 ty2 = error $ "subTypePost: unexpected subtyping:" ++ show (cs,ty1,ty2) 
         failClause cs = do
             liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==> False" 
+            let dummy = Formula 0 []
+            (_,cs) <- deBooleanize dummy cs
+            liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==> False"
             let body = map f cs
-                f (Left sv) = termOfValue sv
+                f (Left sv) = atomOfValue sv
                 f (Right v) = termOfFormula v
             addClause $ Horn.Clause Horn.Bot body
     forM_ (ML.functions prog) $ \(f,fdef) -> do
@@ -694,6 +722,51 @@ refine fvMap rtyAssoc rpostAssoc subst typeMap = typeMap'' where
                         !termty' = refineTermType penv env rpost termty
                     in IM.insert i (Right termty') acc
                 ) typeMap' rpostAssoc
+
+deBooleanizeF :: MonadId m => SValue -> LFormula -> m (LFormula, SValue)
+deBooleanizeF fml0 (Formula i vs) = do
+    (fml,ws) <- foldM f (fml0, []) (reverse vs)
+    return (Formula i ws, fml)
+    where
+    f (fml,ws) v = case v of
+        SVar x     -> case ML.getType x of
+            ML.TInt -> return (fml, v : ws)
+            ML.TBool -> return (fml, SVar (ML.Id ML.TInt (ML.name x)) : ws)
+            _ -> error "deBooleanizeF: variable of unexpected type" 
+        Bool True  -> return (fml, Int 1 : ws)
+        Bool False -> return (fml, Int 0 : ws)
+        P _ _ -> error "deBooleanizeF: unexpected tuple"
+        C _ -> error "deBooleanizeF: unexpected closure"
+
+        Int i      -> return (fml, v : ws)
+        _ -> case ML.getType v of
+            ML.TInt -> return (fml, v : ws)
+            ML.TBool -> do
+                b <- ML.Id ML.TInt <$> freshId "b"
+                let fml' = (SVar b `Eq` Int 1) `Iff` v
+                return (fml' `And` fml, SVar b : ws)
+
+deBooleanizeA :: SValue -> SValue
+deBooleanizeA (And v1 v2) = And (deBooleanizeA v1) (deBooleanizeA v2)
+deBooleanizeA (Or  v1 v2) = Or  (deBooleanizeA v1) (deBooleanizeA v2)
+deBooleanizeA (Not v1) = Not (deBooleanizeA v1)
+deBooleanizeA (SVar x) = 
+    let y = SVar (ML.Id ML.TInt (ML.name x)) in
+    Eq y (Int 1)
+deBooleanizeA (Iff _ _) = error "deBooleanizeA: unexpected iff"
+deBooleanizeA v = v
+
+deBooleanize :: MonadId m => LFormula -> [Either SValue LFormula] -> m (LFormula, [Either SValue LFormula])
+deBooleanize hd cs = do
+    (hd',fml) <- deBooleanizeF (Bool True) hd
+    (fml',cs') <- foldM f (fml, []) (reverse cs)
+    return (hd',Left fml': cs')
+    where
+    f (fml, ds) _v = case _v of
+        Left sv -> return (fml, Left (deBooleanizeA sv) : ds)
+        Right p -> do
+            (p', fml') <- deBooleanizeF fml p
+            return (fml', Right p' : ds)
 
 {-
 substValue :: M.Map Id Value -> Value -> Value
