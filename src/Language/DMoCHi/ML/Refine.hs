@@ -564,8 +564,10 @@ refineCGen prog trace = execWriterT $ do
             return theta
         clause cs fml = do
             liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
+            {-
             (fml,cs) <- deBooleanize fml cs
             liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==>" ++ show fml
+            -}
             let hd = case termOfFormula fml of
                     Horn.Pred x ts  -> Horn.PVar x ts
                 body = map f cs
@@ -594,8 +596,10 @@ refineCGen prog trace = execWriterT $ do
         failClause cs = do
             liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==> False" 
             let dummy = Formula 0 []
+            {-
             (_,cs) <- deBooleanize dummy cs
             liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==> False"
+            -}
             let body = map f cs
                 f (Left sv) = atomOfValue sv
                 f (Right v) = termOfFormula v

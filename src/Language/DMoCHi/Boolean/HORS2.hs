@@ -1,4 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
 module Language.DMoCHi.Boolean.HORS2 where
+
 import Language.DMoCHi.Boolean.Syntax.Typed 
 import Language.DMoCHi.Boolean.SelectiveCPS(selectiveCPS,elimTupleP,CPSTerm(..),elimBoolP)
 import Language.DMoCHi.Boolean.HORS(HORS(..),ATerm(..),M,Automaton(..))

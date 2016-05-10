@@ -68,9 +68,17 @@ defP = try $ do
 
 exprP :: Parser Exp
 exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") <?> "expr" where
-    simpleP = Value <$> (try valueP) <|> letP <|> assumeP <|> lambdaP <|> failP <|> parens exprP
+    simpleP = Value <$> (try valueP) <|> letP <|> assumeP <|> lambdaP <|> ifP <|> failP <|> parens exprP
     assumeP = Assume <$> (reserved "assume" *> valueP <* semi) 
                      <*> exprP
+    ifP = do
+        reserved "if"
+        pred <- valueP
+        reserved "then"
+        eThen <- exprP
+        reserved "else"
+        eElse <- exprP
+        return $ Branch (Assume pred eThen) (Assume (Op (OpNot pred)) eElse)
     lambdaP = Lambda <$> (reserved "fun" *> identifier <* reservedOp "->") 
                      <*> exprP
     failP   = Fail <$ reserved "Fail"

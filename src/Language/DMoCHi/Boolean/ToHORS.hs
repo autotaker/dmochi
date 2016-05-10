@@ -1,3 +1,4 @@
+module Language.DMoCHi.Boolean.ToHORS(run) where
 import System.Environment
 import Text.Printf
 import Language.DMoCHi.Boolean.Parser.Typed
@@ -28,8 +29,8 @@ doit path = do
         writeFile path2_preface $ f Preface hors2
         writeFile path3 $ f Horsat hors3
 
-main :: IO ()
-main = do
+run :: IO ()
+run = do
     args <- getArgs
     case args of
         [path] -> do

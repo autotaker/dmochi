@@ -341,7 +341,7 @@ extractCE prog flowEnv genv hist =
                     evalFail (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0
         Fail _ _ -> return ()
     eval :: Env -> FEnv -> TEnv -> Term () -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
-    eval env fenv tenv e ety = traceShow e $ traceShow ("env",env) $ trace ("type: "++ show ety) $  case e of
+    eval env fenv tenv e ety = {- traceShow e $ traceShow ("env",env) $ trace ("type: "++ show ety) $ -} case e of
         V _ x -> return $ env M.! x
         C s b -> return $ VB b
         T s es -> 
@@ -355,7 +355,7 @@ extractCE prog flowEnv genv hist =
             let sub (LCons _ ty1 ts) = do
                     let tenv' = M.insert x ty1 tenv
                     ty2 <- lift $ saturateTerm fenv tenv' e2
-                    traceShow (ty1, ty2) $ if ety `elem` ty2 then do
+                    if ety `elem` ty2 then do
                         ex <- eval env fenv tenv e1 ty1
                         eval (M.insert x ex env) fenv tenv' e2 ety
                     else

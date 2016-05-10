@@ -32,11 +32,14 @@ library
                        Language.DMoCHi.Boolean.Syntax.Typed,
                        Language.DMoCHi.Boolean.Test,
                        Language.DMoCHi.Boolean.Test1,
+                       Language.DMoCHi.Boolean.ToHORS,
                        Language.DMoCHi.ML.Test
   other-modules:       Language.DMoCHi.Common.Heap,
                        Language.DMoCHi.Common.Id,
                        Language.DMoCHi.Boolean.Alpha,
                        Language.DMoCHi.Boolean.PrettyPrint.Typed,
+                       Language.DMoCHi.Boolean.PrettyPrint.HORS,
+                       Language.DMoCHi.Boolean.PrettyPrint.SelectiveCPS,
                        Language.DMoCHi.Boolean.Type2
                        Language.DMoCHi.Boolean.Parser.Typed,
                        Language.DMoCHi.ML.PrettyPrint.UnTyped,
@@ -48,6 +51,8 @@ library
                        Language.DMoCHi.ML.Refine,
                        Language.DMoCHi.ML.HornClause
                        Language.DMoCHi.ML.HornClauseParser
+                       Language.DMoCHi.Boolean.HORS2
+                       Language.DMoCHi.Boolean.HORS
 
 executable dmochi
   main-is:             Main.hs
@@ -56,6 +61,15 @@ executable dmochi
   build-depends:       base >=4.8 && <4.9, dmochi
   hs-source-dirs:      src-exec
   default-language:    Haskell2010
+
+executable tohors
+  main-is:             ToHORSMain.hs
+  -- other-modules:       
+  other-extensions:    FlexibleInstances, FlexibleContexts, StandaloneDeriving, BangPatterns, TupleSections, OverloadedStrings, LambdaCase, ViewPatterns, ScopedTypeVariables, GADTs, DataKinds, TypeFamilies, TypeOperators, RankNTypes, DeriveFunctor
+  build-depends:       base >=4.8 && <4.9, dmochi
+  hs-source-dirs:      src-exec
+  default-language:    Haskell2010
+
 
 executable hiboch
   main-is:             Main1.hs
