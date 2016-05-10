@@ -1,0 +1,20 @@
+let ackermann : m : int -> n : int -> int = 
+  fun m -> fun n -> 
+    (assume m = 0; n + 1) <>
+    (assume not(m = 0);
+     (assume n = 0;
+      let r = ackermann (m - 1) 1 in r) <>
+     (assume not (n = 0);
+      let r1 = ackermann m (n - 1) in
+      let r2 = ackermann (m - 1) r1 in
+      r2))
+
+let m = * in
+let n = * in
+assume m >= 0;
+assume n >= 0;
+let r = ackermann m n in
+assume not(r >= n);
+Fail
+
+

@@ -1,0 +1,9 @@
+let fold1 : n : int -> i : int -> int =
+  fun n -> fun i ->
+   (assume i = n - 1; i);;
+
+let n = * in
+assume n > 0;
+let r = fold1 n 0 in
+assume r >= n;
+Fail;;

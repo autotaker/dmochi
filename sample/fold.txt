@@ -1,0 +1,19 @@
+let fold1 : g : (x:int -> y:int -> int) -> n : int -> i : int -> int =
+  fun g -> fun n -> fun i ->
+    if i >= n then 
+       Fail
+    else if i = n - 1 then
+       i
+    else
+       let r = fold1 g n (i+1) in
+       let v = g i r in
+       v;;
+
+let n = * in
+let g : x : int -> y : int -> int = 
+    fun x -> fun y -> if x >= y then x else y
+in
+assume n > 0;
+let r = fold1 g n 0 in
+assume r >= n;
+Fail;;

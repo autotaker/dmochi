@@ -1,0 +1,49 @@
+(*
+type option = None | Some of int
+
+let rec exists test f n m =
+  if n < m
+  then
+    if test (f n)
+    then Some n
+    else exists test f (n+1) m
+  else
+    None
+
+let mult3 n = 3 * n
+
+let main n m =
+  let test x = x = m in
+    match exists test mult3 0 n with
+        None -> ()
+      | Some x -> assert (0 <= x && x < n)
+
+*)
+
+let exists : test : (x:int -> bool) -> 
+             f    : (x:int -> int) -> 
+             n    : int[n.0 <= n] ->
+             m    : int ->
+             (b : bool[b.b] * int[r. 0 <= r; r. r < m]) =
+  fun test -> fun f -> fun n -> fun m ->
+    (assume (n < m);
+     let v = f n in
+     let b = test v in
+     (assume b;(true,n)) <>
+     (assume not b;
+      let r = exists test f (n+1) m in
+      r)
+    ) <>
+    (assume (n >= m);
+     (false,-1));;
+
+let rand_int : n : int -> int = fun n -> 0;;
+let n = rand_int 0 in
+let m = rand_int 0 in
+let test : x : int -> bool = fun x -> x = m in
+let mult3 : x : int -> int = fun x -> x + x + x in
+let r = exists test mult3 0 n in
+assume r.fst;
+assume not (0 <= r.snd && r.snd < n);
+Fail
+

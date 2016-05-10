@@ -1,0 +1,8 @@
+let copy : x:int -> int[r.r=x] = 
+  fun x -> 
+    (assume (x = 0); 0) <>
+    (assume (not (x = 0)); let y = copy (x - 1) in 1 + y);;
+let n = * in
+let n1 = copy n in
+let n2 = copy n1 in
+assume (not (n2 = n)); Fail

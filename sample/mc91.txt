@@ -1,0 +1,12 @@
+let mc91 : x : int -> int = fun x ->
+  (assume x > 100; x - 10) <>
+  (assume not(x > 100);
+   let v1 = mc91 (x + 11) in
+   let v2 = mc91 v1 in
+   v2);;
+let n = * in
+assume n <= 101;
+let r = mc91 n in
+assume not(r = 91);
+Fail
+

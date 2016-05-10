@@ -1,0 +1,10 @@
+let f : x : int -> j : int -> int =
+    fun x -> fun j ->
+        assume not (j = 0);
+        assume x < 0;
+        Fail;;
+
+let n = * in
+let b : int = if n >= 0 then 1 else 0 in
+let r = f n b in
+r
