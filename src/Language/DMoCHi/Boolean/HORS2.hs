@@ -12,7 +12,7 @@ import qualified Data.Map as M
 import Data.Char
 import Language.DMoCHi.Common.Id
 
-toHORS :: (MonadId m,Applicative m) => Program -> m HORS
+toHORS :: (MonadId m, Applicative m) => Program -> m HORS
 toHORS p = do
     (ds,t0) <- selectiveCPS p >>= elimTupleP
     let ranks = [("br",2),("end",0),("fail",0),("btrue",0),("bfalse",0),

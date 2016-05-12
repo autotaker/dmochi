@@ -88,6 +88,10 @@ mkAnd' l  = mkAnd l
 sat :: [Value] -> IO Bool
 sat vs = evalZ3 $ do
     ivs <- mapM toIValue vs
+    {-
+    forM_ ivs $ \(ASTValue v) -> do
+        astToString v >>= liftIO . putStrLn
+    -}
     assert =<< mkAnd' [ v | ASTValue v <- ivs]
     (res, model) <- getModel
     liftIO $ print res

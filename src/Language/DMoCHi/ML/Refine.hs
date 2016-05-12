@@ -5,6 +5,7 @@ import qualified Language.DMoCHi.ML.Syntax.Typed as ML
 import qualified Language.DMoCHi.ML.PrettyPrint.Typed as ML
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Data.Map as M
+import qualified Language.DMoCHi.ML.SMT as SMT
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Writer
@@ -150,6 +151,22 @@ closures (Program ds t0) = (ds >>= (\(_,_,e) -> go e)) <|> go t0
     sub (LExp _ e) = go e
     sub (LRand) = empty
     -}
+
+fromSValue :: SValue -> ML.Value
+fromSValue (SVar x) = ML.Var x
+fromSValue (Int i)  = ML.CInt i
+fromSValue (Bool b) = ML.CBool b
+fromSValue (P v1 v2) = ML.Pair (fromSValue v1) (fromSValue v2)
+fromSValue (Add v1 v2) = ML.Op (ML.OpAdd (fromSValue v1) (fromSValue v2))
+fromSValue (Sub v1 v2) = ML.Op (ML.OpSub (fromSValue v1) (fromSValue v2))
+fromSValue (Eq v1 v2) = ML.Op (ML.OpEq (fromSValue v1) (fromSValue v2))
+fromSValue (Lt v1 v2) = ML.Op (ML.OpLt (fromSValue v1) (fromSValue v2))
+fromSValue (Lte v1 v2) = ML.Op (ML.OpLte (fromSValue v1) (fromSValue v2))
+fromSValue (And v1 v2) = ML.Op (ML.OpAnd (fromSValue v1) (fromSValue v2))
+fromSValue (Or v1 v2) = ML.Op (ML.OpOr (fromSValue v1) (fromSValue v2))
+fromSValue (Not v1) = ML.Op (ML.OpNot (fromSValue v1))
+fromSValue (Iff v1 v2) = error "Iff is not supported"
+fromSValue (C v1) = error "Cannot convert a closure to a syntactic value"
 
 symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log)
 symbolicExec prog trace = 
@@ -454,165 +471,169 @@ type W m a = WriterT ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])) m a
 
 refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m) => 
               ML.Program -> Trace -> 
-              m ([Horn.Clause],([(Int,RType)],[(Int,RPostType)]))
-refineCGen prog trace = execWriterT $ do
+              m (Maybe ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])))
+refineCGen prog trace = do
     (genv, (consts,calls,closures,returns,(branches,letexps))) <- symbolicExec prog trace
     liftIO $ print consts
-    liftIO $ print calls
-    liftIO $ print closures
-    liftIO $ print returns
-    liftIO $ print branches
-    liftIO $ print letexps
-    let (gen,genP) = genRTypeFactory calls closures returns
-    let addFuncBinding :: Int -> RType -> W m ()
-        addFuncBinding label ty = tell ([],([(label,ty)],[]))
-        addExpBinding :: Int -> RPostType -> W m ()
-        addExpBinding label ty = tell ([],([],[(label,ty)]))
-        addClause :: Horn.Clause -> W m ()
-        addClause c = tell ([c],([],[]))
+    isFeasible <- liftIO $ SMT.sat (map fromSValue consts)
+    if isFeasible then
+        return Nothing
+    else fmap Just $ execWriterT $ do
+        liftIO $ print calls
+        liftIO $ print closures
+        liftIO $ print returns
+        liftIO $ print branches
+        liftIO $ print letexps
+        let (gen,genP) = genRTypeFactory calls closures returns
+        let addFuncBinding :: Int -> RType -> W m ()
+            addFuncBinding label ty = tell ([],([(label,ty)],[]))
+            addExpBinding :: Int -> RPostType -> W m ()
+            addExpBinding label ty = tell ([],([],[(label,ty)]))
+            addClause :: Horn.Clause -> W m ()
+            addClause c = tell ([c],([],[]))
 
-    let callTbl :: M.Map (CallId,Int) CallId
-        callTbl = M.fromList [ ((pcallId info,callLabel info),callId info)| info <- calls ]
-        closureMap :: M.Map (CallId,Int) ClosureId
-        closureMap = M.fromList [ ((cCallId info,label info),closureId info)| info <- closures ]
-        branchMap :: M.Map (CallId,Int) Bool
-        branchMap = M.fromList [ ((bCallId info,branchId info),direction info) | info <- branches ]
-        letMap :: M.Map (CallId, Int) (Maybe SValue)
-        letMap = M.fromList [ ((lCallId info,lLabel info),evalValue info) | info <- letexps ]
-    genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,v) -> do
-        ty <- gen [] v
-        return (f,(ty,decompose f))
+        let callTbl :: M.Map (CallId,Int) CallId
+            callTbl = M.fromList [ ((pcallId info,callLabel info),callId info)| info <- calls ]
+            closureMap :: M.Map (CallId,Int) ClosureId
+            closureMap = M.fromList [ ((cCallId info,label info),closureId info)| info <- closures ]
+            branchMap :: M.Map (CallId,Int) Bool
+            branchMap = M.fromList [ ((bCallId info,branchId info),direction info) | info <- branches ]
+            letMap :: M.Map (CallId, Int) (Maybe SValue)
+            letMap = M.fromList [ ((lCallId info,lLabel info),evalValue info) | info <- letexps ]
+        genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,v) -> do
+            ty <- gen [] v
+            return (f,(ty,decompose f))
 
-    let check :: M.Map Id (RType,SValue) ->   {- environment -}
-                 [Either SValue LFormula] ->  {- accumulator of constraints -}
-                 CallId ->                    {- callsite -}
-                 ML.Exp ->                    {- checking expr -}
-                 RPostType ->                 {- expected type -}
-                 W m ()
-        check env cs callSite _e tau = case _e of
-            ML.Let _ x (ML.LValue v) e -> do
-                let env' = M.insert x (evalRType env v) env
-                check env' cs callSite e tau
-            ML.Let _ x (ML.LApp _ i f v) e -> do
-                let (RFun fassoc,_) = env M.! f
-                    (ty_v,sv) = evalRType env v
-                    j = callTbl M.! (callSite,i)
-                    ty_f = fassoc IM.! unCallId j
-                clause cs (substLFormula (argName ty_f) sv (preCond ty_f))
-                subType cs ty_v (argType ty_f)
-                case resType ty_f of
-                    RPostType _ _ _ -> do
-                        let x'    = decompose x
-                            tau_j = substPostType (argName ty_f) sv $ resType ty_f
-                            env'  = M.insert x (posType tau_j,x') env
-                            cs'   = Right (substLFormula (posName tau_j) x' (posCond tau_j)) : cs
-                        check env' cs' callSite e tau
-                    RPostTypeFailure -> return ()
-            ML.Let _ x ML.LRand e -> do
-                let x' = decompose x 
-                    env' = M.insert x (RInt,x') env
-                check env' cs callSite e tau
-            ML.Let _ f (ML.LFun fdef) e -> do
-                theta <- checkFunDef env cs callSite fdef
-                let env' = M.insert f (theta,decompose f) env
-                addFuncBinding (ML.ident fdef) theta
-                check env' cs callSite e tau
-            ML.Let _ x (ML.LExp label e') e -> do
-                let letv = letMap M.! (callSite, label)
-                tau' <- genP (M.keys env) letv
-                addExpBinding label tau'
-                check env cs callSite e' tau'
-                case tau' of
-                    RPostType _ _ _ -> do
-                        let x'   = decompose x
-                            env' = M.insert x (posType tau', x') env
-                            cs'  = Right (substLFormula (posName tau') x' (posCond tau')) : cs
-                        check env' cs' callSite e tau
-                    RPostTypeFailure -> return ()
-            ML.Assume _ v e -> do
-                let (_,sv) = evalRType env v
-                let cs' = Left sv : cs
-                check env cs' callSite e tau
-            ML.Branch _ label e1 e2 -> do
-                let b = branchMap M.! (callSite,label)
-                if b then
-                    check env cs callSite e1 tau
-                else
-                    check env cs callSite e2 tau
-            ML.Value v -> 
-                case tau of
-                    RPostType _ _ _ -> do
-                        let (rty,sv) = evalRType env v
-                        clause cs (substLFormula (posName tau) sv (posCond tau))
-                        subType cs rty (posType tau)
-                    RPostTypeFailure -> do
-                        let s = render $ ML.pprintV 0 v
-                        error $ "This value "++ s ++ " cannot have the refinement type" ++ show tau
-            ML.Fail _ -> 
-                case tau of
-                    RPostTypeFailure -> failClause cs
-                    _ -> error $ "This failure term cannot have the refinement type" ++ show tau
-        checkFunDef env cs callSite fdef@(ML.FunDef label x e0) = do
-            let clsId = closureMap M.! (callSite,label)
-            theta@(RFun fassoc) <- gen (M.keys env) (C (Cls fdef clsId undefined))
-            forM_ (IM.assocs fassoc) $ \(j,ty_f) -> do
-                let xj = argName ty_f
-                    ty_xj = argType ty_f
-                    env' = M.insert x (ty_xj,decompose xj) env
-                    cs' = Right (preCond ty_f) : cs
-                check env' cs' (CallId j) e0 (resType ty_f)
-            return theta
-        clause cs fml = do
-            liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
-            {-
-            (fml,cs) <- deBooleanize fml cs
-            liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==>" ++ show fml
-            -}
-            let hd = case termOfFormula fml of
-                    Horn.Pred x ts  -> Horn.PVar x ts
-                body = map f cs
-                f (Left sv) = atomOfValue sv
-                f (Right v) = termOfFormula v
-            addClause $ Horn.Clause hd body
-        subType cs ty1 ty2 = do
-            liftIO $ putStrLn $ "SubType: " ++ show cs ++ " |- " ++ show ty1 ++ "<:" ++ show ty2
-            case (ty1,ty2) of
-                (RInt,RInt) -> return ()
-                (RBool,RBool) -> return ()
-                (RPair t1 t2,RPair t3 t4) -> subType cs t1 t3 >> subType cs t2 t4
-                (RFun fs1,RFun fs2) -> do
-                    forM_ (IM.assocs fs2) $ \(i,RFunAssoc x2 rty2 cond2 pty2) -> do
-                        let RFunAssoc x1 rty1 cond1 pty1  = fs1 IM.! i
-                        let cs' = Right cond2 : cs
-                        clause cs' (substLFormula x1 (decompose x2) cond1)
-                        subType cs rty2 rty1
-                        subTypePost cs' (substPostType x1 (decompose x2) pty1) pty2
-        subTypePost cs (RPostType r1 ty1 cond1) (RPostType r2 ty2 cond2) = do
-            let cs' = Right (substLFormula r1 (decompose r2) cond1) : cs
-            clause cs' cond2
-            subType cs' ty1 ty2
-        subTypePost cs RPostTypeFailure RPostTypeFailure = return ()
-        subTypePost cs ty1 ty2 = error $ "subTypePost: unexpected subtyping:" ++ show (cs,ty1,ty2) 
-        failClause cs = do
-            liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==> False" 
-            let dummy = Formula 0 []
-            {-
-            (_,cs) <- deBooleanize dummy cs
-            liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==> False"
-            -}
-            let body = map f cs
-                f (Left sv) = atomOfValue sv
-                f (Right v) = termOfFormula v
-            addClause $ Horn.Clause Horn.Bot body
-    forM_ (ML.functions prog) $ \(f,fdef) -> do
+        let check :: M.Map Id (RType,SValue) ->   {- environment -}
+                     [Either SValue LFormula] ->  {- accumulator of constraints -}
+                     CallId ->                    {- callsite -}
+                     ML.Exp ->                    {- checking expr -}
+                     RPostType ->                 {- expected type -}
+                     W m ()
+            check env cs callSite _e tau = case _e of
+                ML.Let _ x (ML.LValue v) e -> do
+                    let env' = M.insert x (evalRType env v) env
+                    check env' cs callSite e tau
+                ML.Let _ x (ML.LApp _ i f v) e -> do
+                    let (RFun fassoc,_) = env M.! f
+                        (ty_v,sv) = evalRType env v
+                        j = callTbl M.! (callSite,i)
+                        ty_f = fassoc IM.! unCallId j
+                    clause cs (substLFormula (argName ty_f) sv (preCond ty_f))
+                    subType cs ty_v (argType ty_f)
+                    case resType ty_f of
+                        RPostType _ _ _ -> do
+                            let x'    = decompose x
+                                tau_j = substPostType (argName ty_f) sv $ resType ty_f
+                                env'  = M.insert x (posType tau_j,x') env
+                                cs'   = Right (substLFormula (posName tau_j) x' (posCond tau_j)) : cs
+                            check env' cs' callSite e tau
+                        RPostTypeFailure -> return ()
+                ML.Let _ x ML.LRand e -> do
+                    let x' = decompose x 
+                        env' = M.insert x (RInt,x') env
+                    check env' cs callSite e tau
+                ML.Let _ f (ML.LFun fdef) e -> do
+                    theta <- checkFunDef env cs callSite fdef
+                    let env' = M.insert f (theta,decompose f) env
+                    addFuncBinding (ML.ident fdef) theta
+                    check env' cs callSite e tau
+                ML.Let _ x (ML.LExp label e') e -> do
+                    let letv = letMap M.! (callSite, label)
+                    tau' <- genP (M.keys env) letv
+                    addExpBinding label tau'
+                    check env cs callSite e' tau'
+                    case tau' of
+                        RPostType _ _ _ -> do
+                            let x'   = decompose x
+                                env' = M.insert x (posType tau', x') env
+                                cs'  = Right (substLFormula (posName tau') x' (posCond tau')) : cs
+                            check env' cs' callSite e tau
+                        RPostTypeFailure -> return ()
+                ML.Assume _ v e -> do
+                    let (_,sv) = evalRType env v
+                    let cs' = Left sv : cs
+                    check env cs' callSite e tau
+                ML.Branch _ label e1 e2 -> do
+                    let b = branchMap M.! (callSite,label)
+                    if b then
+                        check env cs callSite e1 tau
+                    else
+                        check env cs callSite e2 tau
+                ML.Value v -> 
+                    case tau of
+                        RPostType _ _ _ -> do
+                            let (rty,sv) = evalRType env v
+                            clause cs (substLFormula (posName tau) sv (posCond tau))
+                            subType cs rty (posType tau)
+                        RPostTypeFailure -> do
+                            let s = render $ ML.pprintV 0 v
+                            error $ "This value "++ s ++ " cannot have the refinement type" ++ show tau
+                ML.Fail _ -> 
+                    case tau of
+                        RPostTypeFailure -> failClause cs
+                        _ -> error $ "This failure term cannot have the refinement type" ++ show tau
+            checkFunDef env cs callSite fdef@(ML.FunDef label x e0) = do
+                let clsId = closureMap M.! (callSite,label)
+                theta@(RFun fassoc) <- gen (M.keys env) (C (Cls fdef clsId undefined))
+                forM_ (IM.assocs fassoc) $ \(j,ty_f) -> do
+                    let xj = argName ty_f
+                        ty_xj = argType ty_f
+                        env' = M.insert x (ty_xj,decompose xj) env
+                        cs' = Right (preCond ty_f) : cs
+                    check env' cs' (CallId j) e0 (resType ty_f)
+                return theta
+            clause cs fml = do
+                liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
+                {-
+                (fml,cs) <- deBooleanize fml cs
+                liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==>" ++ show fml
+                -}
+                let hd = case termOfFormula fml of
+                        Horn.Pred x ts  -> Horn.PVar x ts
+                    body = map f cs
+                    f (Left sv) = atomOfValue sv
+                    f (Right v) = termOfFormula v
+                addClause $ Horn.Clause hd body
+            subType cs ty1 ty2 = do
+                liftIO $ putStrLn $ "SubType: " ++ show cs ++ " |- " ++ show ty1 ++ "<:" ++ show ty2
+                case (ty1,ty2) of
+                    (RInt,RInt) -> return ()
+                    (RBool,RBool) -> return ()
+                    (RPair t1 t2,RPair t3 t4) -> subType cs t1 t3 >> subType cs t2 t4
+                    (RFun fs1,RFun fs2) -> do
+                        forM_ (IM.assocs fs2) $ \(i,RFunAssoc x2 rty2 cond2 pty2) -> do
+                            let RFunAssoc x1 rty1 cond1 pty1  = fs1 IM.! i
+                            let cs' = Right cond2 : cs
+                            clause cs' (substLFormula x1 (decompose x2) cond1)
+                            subType cs rty2 rty1
+                            subTypePost cs' (substPostType x1 (decompose x2) pty1) pty2
+            subTypePost cs (RPostType r1 ty1 cond1) (RPostType r2 ty2 cond2) = do
+                let cs' = Right (substLFormula r1 (decompose r2) cond1) : cs
+                clause cs' cond2
+                subType cs' ty1 ty2
+            subTypePost cs RPostTypeFailure RPostTypeFailure = return ()
+            subTypePost cs ty1 ty2 = error $ "subTypePost: unexpected subtyping:" ++ show (cs,ty1,ty2) 
+            failClause cs = do
+                liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==> False" 
+                let dummy = Formula 0 []
+                {-
+                (_,cs) <- deBooleanize dummy cs
+                liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==> False"
+                -}
+                let body = map f cs
+                    f (Left sv) = atomOfValue sv
+                    f (Right v) = termOfFormula v
+                addClause $ Horn.Clause Horn.Bot body
+        forM_ (ML.functions prog) $ \(f,fdef) -> do
+            i <- freshInt
+            theta <- checkFunDef genv' [] (CallId 0) fdef
+            subType [] theta (fst $ genv' M.! f)
+            addFuncBinding (ML.ident fdef) (fst $ genv' M.! f)
+        x <- freshId "main"
         i <- freshInt
-        theta <- checkFunDef genv' [] (CallId 0) fdef
-        subType [] theta (fst $ genv' M.! f)
-        addFuncBinding (ML.ident fdef) (fst $ genv' M.! f)
-    x <- freshId "main"
-    i <- freshInt
-    check genv' [] (CallId 0) (ML.mainTerm prog) RPostTypeFailure
-    return ()
+        check genv' [] (CallId 0) (ML.mainTerm prog) RPostTypeFailure
+        return ()
 
 -- assume that v is a decomposed value
 substPostType :: Id -> SValue -> RPostType -> RPostType

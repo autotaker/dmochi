@@ -2,6 +2,7 @@ module Language.DMoCHi.ML.Test(run) where
 import System.Environment
 import System.IO
 import System.Process(callCommand)
+import System.Exit
 import Text.Printf
 import Language.DMoCHi.ML.Syntax.UnTyped
 import Language.DMoCHi.ML.Parser
@@ -49,7 +50,7 @@ run = do
     hSetBuffering stdout NoBuffering
     m <- runFreshT $ runExceptT doit
     case m of
-        Left err -> print err
+        Left err -> print err >> exitFailure
         Right _ -> return ()
 
 
@@ -113,18 +114,21 @@ doit = do
 
             case r of
                 Just trace -> do
-                    (clauses, (rtyAssoc,rpostAssoc)) <- Refine.refineCGen typedProgram trace
-                    let file_hcs = printf "%s_%d.hcs" path k
-                    liftIO $ putStr $ show (Horn.HCCS clauses)
-                    liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
-                    liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
-                    parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-                    --liftIO $ print parseRes
-                    solution  <- case parseRes of
-                        Left err -> throwError $ ParseFailed err
-                        Right p  -> return p
-                    let typeMap' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
-                    cegar typeMap' (k+1)
+                    refine <- Refine.refineCGen typedProgram trace
+                    case refine of
+                        Nothing -> liftIO $ putStrLn "UnSafe!!"
+                        Just (clauses, (rtyAssoc,rpostAssoc)) -> do
+                            let file_hcs = printf "%s_%d.hcs" path k
+                            liftIO $ putStr $ show (Horn.HCCS clauses)
+                            liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
+                            liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
+                            parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
+                            --liftIO $ print parseRes
+                            solution  <- case parseRes of
+                                Left err -> throwError $ ParseFailed err
+                                Right p  -> return p
+                            let typeMap' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
+                            cegar typeMap' (k+1)
                 Nothing -> do
                     liftIO $ putStrLn "Safe!!"
                     return ()
