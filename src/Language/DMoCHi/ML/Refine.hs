@@ -37,6 +37,7 @@ data ClosureInfo = ClosureInfo { label :: Int -- 対応する関数定義のラ�
 data ReturnInfo = ReturnInfo { rcallId :: CallId -- 関数呼び出しの識別子
                              , argValue :: SValue -- 引数(let式の場合は(Int 0))
                              , retValue :: Maybe SValue -- 返り値(ないときはfailを表す)
+                             , retCallId :: CallId -- 関数呼び出し終了時のCallId(exclusive)
                              } deriving Show
 
 -- Let式の評価結果情報
@@ -235,7 +236,8 @@ symbolicExec prog trace =
                 e0 = ML.body fdef
             j <- newCall label callSite clsId
             r <- eval j (M.insert x sv env') e0
-            retval (ReturnInfo j sv r)
+            ret_cid <- callCounter <$> get
+            retval (ReturnInfo j sv r (CallId ret_cid))
             return r
         ML.LFun fdef -> Just . C <$> genClosure callSite fdef env
         ML.LExp label e -> do
@@ -281,7 +283,8 @@ data RPostType = RPostType { posName :: !Id
                            , posType :: !RType
                            , posCond :: !LFormula }
                | RPostTypeFailure
-data LFormula = Formula Int [SValue]
+data LFormula = Formula Meta Int [SValue]
+data Meta = Meta !String [String]
 -- この定義だと{(int,int -> {int | P1})|P2}でP1からタプルの第一要素が参照できない。
 
 instance Show RFunAssoc where
@@ -294,9 +297,10 @@ instance Show RPostType where
     show RPostTypeFailure = "_|_"
 
 instance Show LFormula where
-    show (Formula i vs) = 
-        let s = concat $ intersperse "," $ map show vs in
-        "P_" ++ show i ++ "(" ++ s ++ ")"
+    show (Formula (Meta l accessors) i vs) = 
+        let s = concat $ intersperse "," $ map show vs
+            smeta = "{" ++ concat (intersperse "." (l : reverse accessors))++ "}" in
+        "P" ++ smeta ++ "_" ++ show i ++ "(" ++ s ++ ")"
 
 {-
 pprintFormula :: LFormula -> String
@@ -315,7 +319,10 @@ pprintFormula x = go M.empty x "" where
         -}
 
 termOfFormula :: LFormula -> Horn.Term
-termOfFormula (Formula i vs) = Horn.Pred ("P"++show i) (map termOfValue vs)
+termOfFormula (Formula meta i vs) = Horn.Pred ("P"++ smeta ++ show i) (map termOfValue vs)
+    where
+    Meta l accessors = meta
+    smeta = "{" ++ concat (intersperse "." (l : reverse accessors)) ++ "}"
 
 
 -- assume that the value has type int
@@ -358,54 +365,56 @@ atomOfValue = \case
     v -> error $ "atomOfValue: unexpected value: " ++ show v
 
 
-type RTypeGen m = ([Id] -> SValue -> m RType, [Id] -> Maybe SValue -> m RPostType)
+type RTypeGen m = (String -> [Id] -> SValue -> m RType, String -> [Id] -> Maybe SValue -> m RPostType)
 
 genRTypeFactory :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> RTypeGen m
 genRTypeFactory calls closures returns = (genRType, genRPostType)
     where
-    genRType :: MonadId m => [Id] -> SValue -> m RType
-    genRType = gen 0 . foldr push []
-    genRPostType :: MonadId m => [Id] -> Maybe SValue -> m RPostType
-    genRPostType = genPost 0 . foldr push []
+    genRType :: MonadId m => String -> [Id] -> SValue -> m RType
+    genRType label = gen (0,maxBound) (Meta label []) . foldr push []
+    genRPostType :: MonadId m => String -> [Id] -> Maybe SValue -> m RPostType
+    genRPostType label = genPost (0,maxBound) (Meta label []) . foldr push []
     rtnTbl = IM.fromList [ (unCallId (rcallId info),info) | info <- returns ]
-    gen _ _ (SVar x) = case ML.getType x of
+    meta_add (Meta i l) s = Meta i (s:l)
+    gen _ _ _ (SVar x) = case ML.getType x of
         ML.TInt -> pure RInt
         ML.TBool -> pure RBool
         ty -> error $ "gen: unexpected type: " ++ show ty
-    gen _ _ (Int _) = pure RInt
-    gen _ _ (Bool _) = pure RBool
-    gen lim env (P v1 v2) = RPair <$> gen lim env v1 <*> gen lim env v2
-    gen _ _ (Add _ _) = pure RInt
-    gen _ _ (Sub _ _) = pure RInt
-    gen _ _ (Eq _ _) = pure RBool
-    gen _ _ (Lt _ _) = pure RBool
-    gen _ _ (Lte _ _) = pure RBool
-    gen _ _ (And _ _) = pure RBool
-    gen _ _ (Or _ _) = pure RBool
-    gen _ _ (Not _) = pure RBool
-    gen lim env (C (Cls fdef i _)) = do  -- 
+    gen _ _ _ (Int _) = pure RInt
+    gen _ _ _ (Bool _) = pure RBool
+    gen lim meta env (P v1 v2) = RPair <$> gen lim (meta_add meta "fst") env v1 
+                                       <*> gen lim (meta_add meta "snd") env v2
+    gen _ _ _ (Add _ _) = pure RInt
+    gen _ _ _ (Sub _ _) = pure RInt
+    gen _ _ _ (Eq _ _) = pure RBool
+    gen _ _ _ (Lt _ _) = pure RBool
+    gen _ _ _ (Lte _ _) = pure RBool
+    gen _ _ _ (And _ _) = pure RBool
+    gen _ _ _ (Or _ _) = pure RBool
+    gen _ _ _ (Not _) = pure RBool
+    gen lim meta env (C (Cls fdef i _)) = do  -- 
         let cs = [ callId info | info <- calls, 
-                                 calleeId info == i, 
-                                 unCallId (callId info) > lim 
-                                 -- ループが発生しないようにlim 以降の関数呼び出し以降のみを考える。
+                                 calleeId info == i,
+                                 unCallId (callId info) > fst lim
+                                 -- unCallId (callId info) < snd lim
                                  ] -- TODO Improve Impl
-            -- e@(Lambda ty _ x _) = clsTbl IM.! l
             x  = ML.arg fdef
             ML.TFun ty_arg ty_ret = ML.getType fdef
         as <- forM cs $ \j -> do
-            let ReturnInfo _ arg_v mv = rtnTbl IM.! (unCallId j)
+            let ReturnInfo _ arg_v mv ret_cid = rtnTbl IM.! (unCallId j)
             let xj = ML.Id ty_arg (ML.name x)
-            arg_ty <- gen (unCallId j) env arg_v
-            posTy <- genPost (unCallId j) (push xj env) mv
+            let lim' = (unCallId j, unCallId ret_cid)
+            arg_ty <- gen lim' (meta_add meta "pre") env arg_v
+            posTy <- genPost lim' (meta_add meta "post") (push xj env) mv
             p1 <- freshInt
-            return (unCallId j,RFunAssoc xj arg_ty (Formula p1 (push xj env)) posTy)
+            return (unCallId j,RFunAssoc xj arg_ty (Formula (meta_add meta "pre") p1 (push xj env)) posTy)
         return $ RFun $ IM.fromList as
-    genPost lim env mv = case mv of
+    genPost lim meta env mv = case mv of
         Just v -> do
-            pty <- gen lim env v
+            pty <- gen lim meta env v
             let rj = ML.Id (ML.getType v) "r"
             p0 <- freshInt
-            return $ RPostType rj pty (Formula p0 (push rj env))
+            return $ RPostType rj pty (Formula meta p0 (push rj env))
         Nothing -> return RPostTypeFailure
 
     isBase x = case ML.getType x of 
@@ -501,8 +510,9 @@ refineCGen prog trace = do
             letMap :: M.Map (CallId, Int) (Maybe SValue)
             letMap = M.fromList [ ((lCallId info,lLabel info),evalValue info) | info <- letexps ]
         genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,v) -> do
-            ty <- gen [] v
+            ty <- gen (ML.name f) [] v
             return (f,(ty,decompose f))
+        liftIO $ print genv'
 
         let check :: M.Map Id (RType,SValue) ->   {- environment -}
                      [Either SValue LFormula] ->  {- accumulator of constraints -}
@@ -534,13 +544,13 @@ refineCGen prog trace = do
                         env' = M.insert x (RInt,x') env
                     check env' cs callSite e tau
                 ML.Let _ f (ML.LFun fdef) e -> do
-                    theta <- checkFunDef env cs callSite fdef
+                    theta <- checkFunDef (ML.name f) env cs callSite fdef
                     let env' = M.insert f (theta,decompose f) env
                     addFuncBinding (ML.ident fdef) theta
                     check env' cs callSite e tau
                 ML.Let _ x (ML.LExp label e') e -> do
                     let letv = letMap M.! (callSite, label)
-                    tau' <- genP (M.keys env) letv
+                    tau' <- genP (ML.name x ++ "_" ++ show label) (M.keys env) letv
                     addExpBinding label tau'
                     check env cs callSite e' tau'
                     case tau' of
@@ -573,9 +583,9 @@ refineCGen prog trace = do
                     case tau of
                         RPostTypeFailure -> failClause cs
                         _ -> error $ "This failure term cannot have the refinement type" ++ show tau
-            checkFunDef env cs callSite fdef@(ML.FunDef label x e0) = do
+            checkFunDef fname env cs callSite fdef@(ML.FunDef label x e0) = do
                 let clsId = closureMap M.! (callSite,label)
-                theta@(RFun fassoc) <- gen (M.keys env) (C (Cls fdef clsId undefined))
+                theta@(RFun fassoc) <- gen (fname++ "_" ++ show label) (M.keys env) (C (Cls fdef clsId undefined))
                 forM_ (IM.assocs fassoc) $ \(j,ty_f) -> do
                     let xj = argName ty_f
                         ty_xj = argType ty_f
@@ -616,8 +626,8 @@ refineCGen prog trace = do
             subTypePost cs ty1 ty2 = error $ "subTypePost: unexpected subtyping:" ++ show (cs,ty1,ty2) 
             failClause cs = do
                 liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==> False" 
-                let dummy = Formula 0 []
                 {-
+                let dummy = Formula 0 []
                 (_,cs) <- deBooleanize dummy cs
                 liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==> False"
                 -}
@@ -627,7 +637,7 @@ refineCGen prog trace = do
                 addClause $ Horn.Clause Horn.Bot body
         forM_ (ML.functions prog) $ \(f,fdef) -> do
             i <- freshInt
-            theta <- checkFunDef genv' [] (CallId 0) fdef
+            theta <- checkFunDef (ML.name f) genv' [] (CallId 0) fdef
             subType [] theta (fst $ genv' M.! f)
             addFuncBinding (ML.ident fdef) (fst $ genv' M.! f)
         x <- freshId "main"
@@ -653,7 +663,7 @@ substRType x v = go where
 
 -- assume that x have a base type (int, bool)
 substLFormulaBase :: Id -> SValue -> LFormula -> LFormula
-substLFormulaBase x sv (Formula i ws) = Formula i ws' where
+substLFormulaBase x sv (Formula meta i ws) = Formula meta i ws' where
     ws' = map (substSValue x sv) ws
 
 substLFormula :: Id -> SValue -> LFormula -> LFormula
@@ -712,7 +722,7 @@ refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
 
 refineLFormula :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> LFormula -> PAbst.Formula
 refineLFormula penv env fml = phi' where
-    Formula i args = fml
+    Formula _ i args = fml
     (args_phi, phi) = penv IM.! i
     env' = M.union (M.fromList $ zip (map ML.name args_phi) (map recover args)) env
     recover (SVar x) = env M.! (ML.name x)
@@ -730,9 +740,9 @@ extendEnv x v env = case ML.getType x of
         v2 = ML.Op (ML.OpSnd t2 v)
     ML.TFun _ _ -> env
 
-refine :: IM.IntMap [Id] -> [(Int,RType)] -> [(Int,RPostType)] -> [(String,[Id],ML.Value)] -> PAbst.TypeMap -> PAbst.TypeMap
+refine :: IM.IntMap [Id] -> [(Int,RType)] -> [(Int,RPostType)] -> [(Int,[Id],ML.Value)] -> PAbst.TypeMap -> PAbst.TypeMap
 refine fvMap rtyAssoc rpostAssoc subst typeMap = typeMap'' where
-    penv = IM.fromList [ (read (drop 1 s),(xs,v)) | (s,xs,v) <- subst ]
+    penv = IM.fromList [ (s,(xs,v)) | (s,xs,v) <- subst ]
     typeMap' = foldl' (\acc (i, rty) -> 
                     let Left !pty = acc IM.! i
                         !fv   = fvMap IM.! i
@@ -748,6 +758,7 @@ refine fvMap rtyAssoc rpostAssoc subst typeMap = typeMap'' where
                     in IM.insert i (Right termty') acc
                 ) typeMap' rpostAssoc
 
+{-
 deBooleanizeF :: MonadId m => SValue -> LFormula -> m (LFormula, SValue)
 deBooleanizeF fml0 (Formula i vs) = do
     (fml,ws) <- foldM f (fml0, []) (reverse vs)
@@ -792,6 +803,7 @@ deBooleanize hd cs = do
         Right p -> do
             (p', fml') <- deBooleanizeF fml p
             return (fml', Right p' : ds)
+            -}
 
 {-
 substValue :: M.Map Id Value -> Value -> Value

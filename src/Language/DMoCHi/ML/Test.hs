@@ -88,8 +88,8 @@ doit = do
 
     (typeMap0, fvMap) <- PAbst.initTypeMap typedProgram
     let lim = 10 :: Int
-    let cegar _ k | k >= lim = return ()
-        cegar typeMap k = do
+    let cegar _ k hcs | k >= lim = return ()
+        cegar typeMap k hcs = do
             liftIO $ putStrLn "Predicate Abstracion"
             boolProgram' <- PAbst.abstProg typeMap typedProgram
             let file_boolean = printf "%s_%d.bool" path k
@@ -120,7 +120,7 @@ doit = do
                         Just (clauses, (rtyAssoc,rpostAssoc)) -> do
                             let file_hcs = printf "%s_%d.hcs" path k
                             liftIO $ putStr $ show (Horn.HCCS clauses)
-                            liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
+                            liftIO $ writeFile file_hcs $ show (Horn.HCCS (clauses++ hcs))
                             liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
                             parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
                             --liftIO $ print parseRes
@@ -128,12 +128,12 @@ doit = do
                                 Left err -> throwError $ ParseFailed err
                                 Right p  -> return p
                             let typeMap' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
-                            cegar typeMap' (k+1)
+                            cegar typeMap' (k+1) (clauses ++ hcs)
                 Nothing -> do
                     liftIO $ putStrLn "Safe!!"
                     return ()
             return ()
-    cegar typeMap0 0
+    cegar typeMap0 0 []
 
                 {-
     let t_input          = f $ diffUTCTime t_input_end t_input_begin

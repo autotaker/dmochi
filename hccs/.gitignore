@@ -1,5 +1,7 @@
-a.out
 main
+myLexer.ml
+myParser.ml
+myParser.mli
 *.cmi
 *.cmo
 *.cmx

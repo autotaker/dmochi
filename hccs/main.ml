@@ -13,7 +13,7 @@ let parse_hccs filename =
       Lexing.pos_lnum = 1;
       Lexing.pos_bol = 0;
       Lexing.pos_cnum = 0 };
-  lexbuf |> HCCSParser.parser_main HCCSLexer.token
+  lexbuf |> MyParser.parser_main MyLexer.token
 
 let parse_sexp filename =
   let lexbuf =
@@ -40,6 +40,8 @@ let infer_constructor hcs =
 let () =
     begin
       FPATConfig.set_default ();
+      HCCSSolver.link_solver (GenHCCSSolver.solve (CHGenInterpProver.interpolate
+      true));
       InterpProver.ext_interpolate := InterpProver.interpolate_csisat_dyn;
       Format.printf "@[<v>";
       begin
@@ -62,7 +64,8 @@ let () =
                  end
                  |> (fun hcs -> Format.printf "HCCS:@,  %a@," HCCS.pr_verbose hcs; hcs)
                  |> (fun hcs -> infer_constructor hcs, hcs)
-                 |> (fun (tenv, hcs) -> SimTypInfer.infer_hccs tenv hcs (* type inference *))
+(*                  |> (fun (tenv, hcs) -> SimTypInfer.infer_hccs tenv hcs (*
+ *                  type inference *)) *)
                  |> (fun (env, hcs) ->
                      Unwinding.ctenv0 := env;
                      Format.printf

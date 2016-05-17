@@ -1,0 +1,9 @@
+let f : j:int -> int = fun x -> x + 1;;
+let g : k : (j : int -> int) -> int = fun k -> let r = k 0 in r;;
+let n = * in
+let y = f 0 in
+let z = g f in
+assume not(y = z);
+Fail
+
+

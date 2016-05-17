@@ -8,7 +8,7 @@ import Control.Applicative hiding((<|>),many,optional)
 import Language.DMoCHi.ML.Syntax.Typed
 import qualified Data.Map as M
 
-parseSolution :: FilePath -> IO (Either ParseError [(String,[Id],Value)])
+parseSolution :: FilePath -> IO (Either ParseError [(Int,[Id],Value)])
 parseSolution = parseFromFile mainP
 
 reservedNames :: [String]
@@ -32,6 +32,8 @@ parens :: Parser a -> Parser a
 parens = P.parens lexer
 braces :: Parser a -> Parser a
 braces = P.braces lexer
+brackets :: Parser a -> Parser a
+brackets = P.brackets lexer
 whiteSpace :: Parser ()
 whiteSpace = P.whiteSpace lexer
 colon :: Parser String
@@ -49,12 +51,23 @@ semiSep = P.semiSep lexer
 commaSep :: Parser a -> Parser [a]
 commaSep = P.commaSep lexer
 
-mainP :: Parser [(String,[Id],Value)]
+mainP :: Parser [(Int,[Id],Value)]
 mainP = string "solution." >> whiteSpace >> many defP <* eof
 
-defP :: Parser (String,[Id],Value)
+predP :: Parser Int
+predP = do
+    char 'P'
+    braces $ many1 (noneOf "}")
+    brackets $ do
+        i <- natural
+        colon
+        natural
+        return (fromIntegral i)
+
+
+defP :: Parser (Int,[Id],Value)
 defP = do
-    pname <- identifier
+    pname <- predP
     xs <- parens (commaSep $ flip Id <$> identifier <*> (colon *> typeP))
     reserved "="
     v <- exprP (M.fromList [ (name x, getType x) | x <- xs ])
