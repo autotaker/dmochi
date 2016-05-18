@@ -23,7 +23,8 @@ pprintE (Let _ x' lv e) =
                 text (name f) <+> hsep (map (pprintV 9) [v]) <+> text "in" $+$
             pprintE e
         LExp i ev ->
-            text "let" <+> text x <+> text ("(*" ++ show i ++ "*)") <+> equals $+$
+            text "let" <+> text x <+> colon <+> pprintT 0 (getType ev) 
+                       <+> text ("(*" ++ show i ++ "*)") <+> equals $+$
             nest 4 (pprintE ev) <+> text "in" $+$
             pprintE e
         LFun f ->

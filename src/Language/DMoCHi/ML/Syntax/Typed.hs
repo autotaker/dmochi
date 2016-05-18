@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, BangPatterns #-}
 module Language.DMoCHi.ML.Syntax.Typed where
 import Text.PrettyPrint
 import Control.Monad
@@ -6,6 +6,7 @@ import Control.Monad
 import Control.Monad.State
 import Data.Function(on)
 import qualified Data.Map as M
+import qualified Data.Set as S
 
 data Id = Id { _type :: Type, name :: String } deriving(Show)
 
@@ -279,3 +280,35 @@ pprintT assoc (TFun t1 t2) =
 
 instance Show Type where
     show = render . pprintT 0
+
+freeVariables :: S.Set Id -> Exp -> S.Set Id
+freeVariables = goE S.empty where
+    goE :: S.Set Id -> S.Set Id -> Exp -> S.Set Id
+    goE !acc env (Value v) = goV acc env v
+    goE !acc env (Let _ x lv e) = goE (goLV acc env lv) (S.insert x env) e
+    goE !acc env (Assume _ v e) = goE (goV acc env v) env e
+    goE !acc _ (Fail _) = acc
+    goE !acc env (Branch _ _ e1 e2) = goE (goE acc env e1) env e2
+    goV :: S.Set Id -> S.Set Id -> Value -> S.Set Id
+    goV !acc env (Var x) = push acc env x
+    goV !acc _ (CInt _) = acc
+    goV !acc _ (CBool _) = acc
+    goV !acc env (Pair v1 v2) = goV (goV acc env v1) env v2
+    goV !acc env (Op (OpAdd v1 v2)) = goV (goV acc env v1) env v2
+    goV !acc env (Op (OpSub v1 v2)) = goV (goV acc env v1) env v2
+    goV !acc env (Op (OpEq v1 v2)) = goV (goV acc env v1) env v2
+    goV !acc env (Op (OpLt v1 v2)) = goV (goV acc env v1) env v2
+    goV !acc env (Op (OpLte v1 v2)) = goV (goV acc env v1) env v2
+    goV !acc env (Op (OpAnd v1 v2)) = goV (goV acc env v1) env v2
+    goV !acc env (Op (OpOr v1 v2)) = goV (goV acc env v1) env v2
+    goV !acc env (Op (OpFst _ v)) = goV acc env v
+    goV !acc env (Op (OpSnd _ v)) = goV acc env v
+    goV !acc env (Op (OpNot v)) = goV acc env v
+    goLV !acc env (LValue v) = goV acc env v
+    goLV !acc env (LApp _ _ f v) = goV (push acc env f) env v
+    goLV !acc env (LFun fdef) = goE acc (S.insert (arg fdef) env) (body fdef)
+    goLV !acc env (LExp _ e) = goE acc env e
+    goLV !acc env LRand = acc
+    push acc env x | S.member x env = acc
+                   | otherwise = S.insert x acc
+

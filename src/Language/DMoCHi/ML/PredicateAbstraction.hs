@@ -272,7 +272,7 @@ typeOfValue env = go where
 
 abstTerm :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
 abstTerm tbl env cs pv t (r,ty,qs) = doit where
-    doit = traceShow (ML.pprintE t,pprintPType 0 ty)$  case t of
+    doit = case t of
         ML.Value v -> do
             e1 <- abstValue env cs pv v ty
             e2 <- abstFormulae cs pv (map (substVFormula r v) qs)

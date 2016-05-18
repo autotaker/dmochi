@@ -544,7 +544,7 @@ refineCGen prog trace = do
                         env' = M.insert x (RInt,x') env
                     check env' cs callSite e tau
                 ML.Let _ f (ML.LFun fdef) e -> do
-                    theta <- checkFunDef (ML.name f) env cs callSite fdef
+                    theta <- checkFunDef (ML.name f) env cs callSite fdef Nothing
                     let env' = M.insert f (theta,decompose f) env
                     addFuncBinding (ML.ident fdef) theta
                     check env' cs callSite e tau
@@ -583,9 +583,13 @@ refineCGen prog trace = do
                     case tau of
                         RPostTypeFailure -> failClause cs
                         _ -> error $ "This failure term cannot have the refinement type" ++ show tau
-            checkFunDef fname env cs callSite fdef@(ML.FunDef label x e0) = do
-                let clsId = closureMap M.! (callSite,label)
-                theta@(RFun fassoc) <- gen (fname++ "_" ++ show label) (M.keys env) (C (Cls fdef clsId undefined))
+            checkFunDef fname env cs callSite fdef@(ML.FunDef label x e0) mtheta = do
+                theta@(RFun fassoc) <- case mtheta of 
+                    Just it -> return it
+                    Nothing -> 
+                        let clsId = closureMap M.! (callSite,label)
+                            meta  = fname++ "_" ++ show label in
+                        gen meta (M.keys env) (C (Cls fdef clsId undefined))
                 forM_ (IM.assocs fassoc) $ \(j,ty_f) -> do
                     let xj = argName ty_f
                         ty_xj = argType ty_f
@@ -636,12 +640,9 @@ refineCGen prog trace = do
                     f (Right v) = termOfFormula v
                 addClause $ Horn.Clause Horn.Bot body
         forM_ (ML.functions prog) $ \(f,fdef) -> do
-            i <- freshInt
-            theta <- checkFunDef (ML.name f) genv' [] (CallId 0) fdef
-            subType [] theta (fst $ genv' M.! f)
-            addFuncBinding (ML.ident fdef) (fst $ genv' M.! f)
+            theta <- checkFunDef (ML.name f) genv' [] (CallId 0) fdef (Just $ fst $ genv' M.! f)
+            addFuncBinding (ML.ident fdef) theta
         x <- freshId "main"
-        i <- freshInt
         check genv' [] (CallId 0) (ML.mainTerm prog) RPostTypeFailure
         return ()
 
