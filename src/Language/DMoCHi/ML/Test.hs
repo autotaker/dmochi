@@ -93,7 +93,7 @@ doit = do
     liftIO $ Typed.printProgram typedProgram
 
     (typeMap0, fvMap) <- PAbst.initTypeMap typedProgram
-    let lim = 10 :: Int
+    let lim = 20 :: Int
     let cegar _ k hcs | k >= lim = return ()
         cegar typeMap k hcs = do
             liftIO $ putStrLn "Predicate Abstracion"
@@ -126,7 +126,7 @@ doit = do
                         Just (clauses, (rtyAssoc,rpostAssoc)) -> do
                             let file_hcs = printf "%s_%d.hcs" path k
                             liftIO $ putStr $ show (Horn.HCCS clauses)
-                            liftIO $ writeFile file_hcs $ show (Horn.HCCS (clauses++ hcs))
+                            liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
                             liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
                             parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
                             --liftIO $ print parseRes

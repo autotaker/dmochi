@@ -1,0 +1,78 @@
+(*
+data Tree = Op OpName [Int] | C Int
+let mk_add a b  = Op Add [a,b]
+let mk_sub a b  = Op Sub [a,b]
+let mk_pair a b = Op Pair [a,b]
+let mk_fst a    = Op Fst [a]
+let mk_snd a    = Op Snd [a]
+let mk_cnst a   = C a
+
+let mk_tree n = 
+   mk_cnst n <>
+   mk_fst (mk_tree n) <>
+   mk_snd (mk_tree n) <>
+   mk_add (mk_tree n) (mk_tree n) <>
+   mk_sub (mk_tree n) (mk_tree n) <>
+   mk_pair (mk_tree n) (mk_tree n);;
+
+
+let chk_tree tree = 
+   match tree with
+     | Op op l -> 
+        for_each l chk_tree;
+        assert( op != Add  || length l == 2 )
+        assert( op != Sub  || length l == 2 );
+        assert( op != Pair || length l == 2 );
+        assert( op != Fst  || length l == 1 );
+        assert( op != Snd  || length l == 1
+     | C v -> ();;
+
+Tree = (Int, Int)
+[C x]     = (0,    x)
+[Op op l] = ([op], length l)
+[Add] = 1
+[Sub] = 2
+[Pair] = 3
+[Fst] = 4
+[Snd] = 5
+[Ite
+*)
+
+let mk_tree : n : int -> x : int * int =
+  fun n ->
+    let f = rand_gen n in
+    let t = f n in
+    t;;
+
+let rand_gen : n : int -> (n : int -> x : int * int) = 
+  fun n -> mk_cnst <> mk_fst <> mk_snd <> mk_add <> mk_sub <> mk_pair <> mk_ite <> let r = rand_gen n in r
+
+let mk_cnst : n : int -> x : int * int = fun n -> (0, n);;
+let mk_fst  : n : int -> x : int * int = fun n -> (4, 1);;
+let mk_snd  : n : int -> x : int * int = fun n -> (5, 1);;
+let mk_add  : n : int -> x : int * int = fun n -> (1, 2);;
+let mk_sub  : n : int -> x : int * int = fun n -> (2, 2);;
+let mk_pair : n : int -> x : int * int = fun n -> (3, 2);;
+let mk_ite  : n : int -> x : int * int = fun n -> (6, 3);;
+
+let chk_tree : t : (op : int * int) -> int =
+  fun tree ->
+    (assume tree.fst = 1; (* Add *)
+     assume not (tree.snd = 2); Fail) <>
+    (assume tree.fst = 2; (* Sub *)
+     assume not (tree.snd = 2); Fail) <>
+    (assume tree.fst = 3; (* Pair *)
+     assume not (tree.snd = 2); Fail) <>
+    (assume tree.fst = 4; (* Fst *)
+     assume not (tree.snd = 1); Fail) <>
+    (assume tree.fst = 5; (* Snd *)
+     assume not (tree.snd = 1); Fail) <>
+    (assume tree.fst = 6; (* Ite *)
+     assume not (tree.snd = 3); Fail) <>
+    (let r = chk_tree tree in r)
+
+let n = * in
+let tree = mk_tree n in
+let r = chk_tree tree in
+r
+

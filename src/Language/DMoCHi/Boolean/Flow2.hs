@@ -7,7 +7,6 @@ import Control.Monad.State
 import Control.Applicative
 import Data.STRef
 import Data.Maybe
-import qualified Language.DMoCHi.Boolean.Syntax.TypedSimple as B
 import Language.DMoCHi.Boolean.Syntax.Typed(Size,Index,Symbol,Sort(..),HasSort(..))
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as Typed
 import Data.Hashable
@@ -38,8 +37,9 @@ data FlowTerm = C      Id Bool
               | App    Id !Sort FlowTerm FlowTerm
               | Let    Id !Sort VarId FlowTerm FlowTerm
               | Assume Id !Sort FlowTerm FlowTerm
-              | Branch Id !Sort FlowTerm FlowTerm
+              | Branch Id !Sort Bool FlowTerm FlowTerm
               | Fail   VarId
+              | Omega  VarId
               | Proj   Id !Sort !Index !Size !FlowTerm
               | Dom    Id !Sort !FlowTerm 
               | Cod    Id !Sort !FlowTerm
@@ -55,8 +55,9 @@ data FlowKey = KC      !Bool
              | KApp    !Id !Id
              | KLet    !Id !Id !Id
              | KAssume !Id !Id
-             | KBranch !Id !Id
+             | KBranch !Bool !Id !Id
              | KFail   !Id
+             | KOmega  !Id
              | KProj   !Index !Size !Id
              | KDom    !Id
              | KCod    !Id
@@ -70,7 +71,7 @@ instance Hashable FlowKey where
     hashWithSalt s (KLam i1 i2) = s `hashWithSalt`(3::Int) 
                                      `hashWithSalt` i1
                                      `hashWithSalt` i2
-    hashWithSalt s (KBranch i1 i2) = s `hashWithSalt` (4::Int) `hashWithSalt` i1 `hashWithSalt` i2
+    hashWithSalt s (KBranch b i1 i2) = s `hashWithSalt` (4::Int) `hashWithSalt` b `hashWithSalt` i1 `hashWithSalt` i2
     hashWithSalt s (KT is) = s `hashWithSalt` (5::Int) `hashWithSalt` is
     hashWithSalt s (KProj n d i) = s `hashWithSalt` (6::Int) `hashWithSalt` n 
                                                              `hashWithSalt` d
@@ -87,6 +88,7 @@ instance Hashable FlowKey where
     hashWithSalt s (KNot i1) = s `hashWithSalt` (13::Int) `hashWithSalt` i1
     hashWithSalt s (KAssume i1 i2) = s `hashWithSalt` (14::Int) `hashWithSalt` i1 `hashWithSalt` i2
     hashWithSalt s (KFail i) = s `hashWithSalt` (15::Int) `hashWithSalt` i
+    hashWithSalt s (KOmega i) = s `hashWithSalt` (16::Int) `hashWithSalt` i
 
 
 instance Ord FlowTerm where
@@ -103,13 +105,14 @@ termId (Not i _) = i
 termId (Assume i _ _ _) = i
 termId (App i _ _ _) = i
 termId (Lam i _ _) = i
-termId (Branch i _ _ _) = i
+termId (Branch i _ _ _ _) = i
 termId (T i _) = i
 termId (Proj i _ _ _ _) = i
 termId (Let i _ _ _ _) = i
 termId (Dom i _ _) = i
 termId (Cod i _ _) = i
 termId (Fail i) = getId i
+termId (Omega i) = getId i
 
 key :: FlowTerm -> FlowKey
 key (C _ b) = KC b
@@ -117,7 +120,7 @@ key (V x) = KV $ getId x
 key (T _ ts) = KT $ map termId ts
 key (App _ _ t1 t2) = KApp (termId t1) (termId t2)
 key (Lam _ x t2) = KLam (getId x) (termId t2)
-key (Branch _ _ t1 t2) = KBranch (termId t1) (termId t2)
+key (Branch _ _ b t1 t2) = KBranch b (termId t1) (termId t2)
 key (Proj _ _ n d t) = KProj n d $ termId t
 key (Let _ _ x t1 t2) = KLet (getId x) (termId t1) (termId t2)
 key (Dom _ _ t) = KDom $ termId t
@@ -127,6 +130,7 @@ key (Or _ t1 t2) = KOr (termId t1) (termId t2)
 key (Not _ t1) = KNot (termId t1)
 key (Assume _ _ t1 t2) = KAssume (termId t1) (termId t2)
 key (Fail x) = KFail $ getId x
+key (Omega x) = KOmega $ getId x
 
 instance HasSort VarId where
     getSort = getSort . name
@@ -142,8 +146,9 @@ instance HasSort FlowTerm where
     getSort (App _ s _ _) = s
     getSort (Let _ s _ _ _) = s
     getSort (Assume _ s _ _) = s
-    getSort (Branch _ s _ _) = s
+    getSort (Branch _ s _ _ _) = s
     getSort (Fail x) = getSort x
+    getSort (Omega x) = getSort x
     getSort (Proj _ s _ _ _) = s
     getSort (Dom _ s _) = s
     getSort (Cod _ s _) = s
@@ -157,8 +162,8 @@ c_lam :: VarId -> FlowTerm -> Constructor
 c_lam x t i = Lam i x t
 c_let :: VarId -> FlowTerm -> FlowTerm -> Constructor
 c_let x t t' i = Let i (getSort t') x t t'
-c_branch :: FlowTerm -> FlowTerm -> Constructor
-c_branch t1 t2 i = Branch i (getSort t1) t1 t2
+c_branch :: Bool -> FlowTerm -> FlowTerm -> Constructor
+c_branch b t1 t2 i = Branch i (getSort t1) b t1 t2
 c_tuple :: [FlowTerm] ->  Constructor
 c_tuple ts i = T i ts
 c_assume :: FlowTerm -> FlowTerm -> Constructor
@@ -190,17 +195,17 @@ data Program = Program { definitions :: [(VarId, FlowTerm)]
                        , cfg         :: Array Id [Id] }
 
 
-buildGraph :: B.Program -> Program
-buildGraph (B.Program ds d0) = runST $ do
+buildGraph :: Typed.Program -> Program
+buildGraph (Typed.Program ds d0) = runST $ do
     ctx <- newContext
     env <- fmap M.fromList $ forM ds $ \(f, _) -> do
         var <- genVarNode ctx f
         return (f,var)
     ds' <- forM ds $ \(f,t) -> do
-        t' <- gatherVTermEdges ctx env t
+        t' <- gatherEdges ctx env t
         addEdge ctx (V (env M.! f)) t'
         return (env M.! f, t')
-    d0' <- gatherTermEdges ctx env d0
+    d0' <- gatherEdges ctx env d0
     calcClosure ctx
     lbls <- HT.toList (labelTable ctx)
     edges <- map fst <$> HT.toList (edgeTable ctx)
@@ -222,54 +227,47 @@ lookupVar env x = fst $ env M.! x
 varId :: FlowTerm -> VarId
 varId (V v) = v
 varId (Fail v) = v
+varId (Omega v) = v
 varId _ = undefined
 
 addEdge :: Context s -> FlowTerm -> FlowTerm -> ST s ()
 addEdge ctx t1 t2 = HT.insert (edgeTable ctx) (termId t1,termId t2) ()
 
-gatherVTermEdges :: Context s -> M.Map Symbol VarId -> B.VTerm -> ST s FlowTerm
-gatherVTermEdges ctx = go where
-    go env (B.V x) = return $ V (env M.! x)
-    go _ (B.C b) = genNode ctx (c_const b)
-    go env (B.T ts) = do
+gatherEdges :: Context s -> M.Map Symbol VarId -> Typed.Term -> ST s FlowTerm
+gatherEdges ctx = go where
+    go _   (Typed.C b) = genNode ctx (c_const b)
+    go env (Typed.V x) = return $ V (env M.! x)
+    go env (Typed.T ts) = do
         ts' <- mapM (go env) ts
         t0 <- genNode ctx $ c_tuple ts'
-        -- proj_i^n t -> ti
-        let n = length ts
+        let n = length ts 
+        -- proj_i^n t -> ti (for each i)
         forM_ (zip [0..n-1] ts') $ \(i,ti) -> do
             ti' <- genNode ctx $ c_proj i n t0
             addEdge ctx ti' ti
         return t0
-    go env (B.Lam x t) = do
+    go env (Typed.Lam x t) = do
         var <- genVarNode ctx x
-        t' <- gatherTermEdges ctx (M.insert x var env) t
+        t' <- go (M.insert x var env) t
         t0 <- genNode ctx $ c_lam var t'
-        -- x -> dom(\x.t)
-        -- cod(\x.t) -> t
         dom <- genNode ctx $ c_dom t0
         cod <- genNode ctx $ c_cod t0
+        -- x -> dom(\x.t)
+        -- cod(\x.t) -> t
         addEdge ctx (V var) dom
         addEdge ctx cod t'
         return t0
-    go env (B.Proj _ i s t) = 
+    go env (Typed.Proj _ i s t) =
         go env t >>= genNode ctx . c_proj i s
-    go env (B.And t1 t2) = do
-        t1' <- go env t1 
+    go env (Typed.And t1 t2) =
+        c_and <$> go env t1 <*> go env t2 >>= genNode ctx
+    go env (Typed.Or t1 t2) = 
+        c_or <$> go env t1 <*> go env t2 >>= genNode ctx
+    go env (Typed.Not t) =
+        c_not <$> go env t >>= genNode ctx
+    go env (Typed.App _ t1 t2) = do
+        t1' <- go env t1
         t2' <- go env t2
-        genNode ctx (c_and t1' t2')
-    go env (B.Or t1 t2) = do
-        t1' <- go env t1 
-        t2' <- go env t2
-        genNode ctx (c_or t1' t2')
-    go env (B.Not t) = 
-        go env t >>= genNode ctx . c_not
-
-gatherTermEdges :: Context s -> M.Map Symbol VarId -> B.Term -> ST s FlowTerm
-gatherTermEdges ctx = go where
-    go env (B.Pure t) = gatherVTermEdges ctx env t
-    go env (B.App _ t1 t2) = do
-        t1' <- gatherVTermEdges ctx env t1
-        t2' <- gatherVTermEdges ctx env t2
         t0 <- genNode ctx (c_app t1' t2')
         -- dom(t1) -> t2
         -- t1 t2 -> cod(t1)
@@ -278,7 +276,7 @@ gatherTermEdges ctx = go where
         addEdge ctx dom t2'
         addEdge ctx t0  cod
         return t0
-    go env (B.Let _ x t1 t2) = do
+    go env (Typed.Let _ x t1 t2) = do
         var <- genVarNode ctx x
         t1' <- go env t1
         t2' <- go (M.insert x var env) t2
@@ -287,45 +285,40 @@ gatherTermEdges ctx = go where
         t0 <- genNode ctx (c_let var t1' t2')
         addEdge ctx t0 t2'
         return t0
-    go env (B.Assume _ t1 t2) = do
-        t1' <- gatherVTermEdges ctx env t1
+    go env (Typed.Assume _ t1 t2) = do
+        t1' <- go env t1
         t2' <- go env t2
         t0 <- genNode ctx (c_assume t1' t2')
         -- assume t1; t2 -> t2
         addEdge ctx t0 t2'
         return t0
-    go env (B.Branch _ t1 t2) = do
+    go env (Typed.Branch _ b t1 t2) = do
         t1' <- go env t1
         t2' <- go env t2
-        t0 <- genNode ctx (c_branch t1' t2')
+        t0 <- genNode ctx (c_branch b t1' t2')
         -- t1 + t2 -> t1
         -- t1 + t2 -> t2
         addEdge ctx t0 t1'
         addEdge ctx t0 t2'
         return t0
-    go _ (B.Fail x) = do
-        var <- genFailNode ctx x
-        return (Fail var)
+    go _ (Typed.Fail x) = Fail <$> genFailNode ctx x 
+    go _ (Typed.Omega x) = Omega <$> genOmegaNode ctx x
 
-genVarNode :: Context s -> Symbol -> ST s VarId
-genVarNode ctx x = do
+genVarId :: (VarId -> FlowTerm) -> Context s -> Symbol -> ST s VarId
+genVarId cnstr ctx x = do
     i <- incr (counter ctx)
     let var = VarId i x
-        v   = V var
+        v   = cnstr var
         k   = key v
     HT.insert (nodeTable ctx) k v
     HT.insert (labelTable ctx) i v
     return var
 
-genFailNode :: Context s -> Symbol -> ST s VarId
-genFailNode ctx x = do
-    i <- incr (counter ctx)
-    let var = VarId i x
-        v   = Fail var
-        k   = key v
-    HT.insert (nodeTable ctx) k v
-    HT.insert (labelTable ctx) i v
-    return var
+
+genVarNode, genFailNode, genOmegaNode :: Context s -> Symbol -> ST s VarId
+genVarNode = genVarId V
+genOmegaNode = genVarId Omega
+genFailNode = genVarId Fail
 
 genNode :: Context s -> Constructor -> ST s FlowTerm
 genNode ctx constructor = fmap constructor $ mfix $ \i -> do

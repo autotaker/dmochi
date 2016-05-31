@@ -365,3 +365,7 @@ concatTypeList ts = go q0 where
 elem :: VType -> TTypeList -> Bool
 elem x (LCons _ y xs) = x == y || elem x xs
 elem _ _ = False
+
+isFail :: TTypeList -> Bool
+isFail (LFail _) = True
+isFail _ = False

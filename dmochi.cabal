@@ -23,6 +23,7 @@ library
                        Language.DMoCHi.ML.PrettyPrint.Typed,
                        Language.DMoCHi.ML.SMT,
                        Language.DMoCHi.Boolean.Flow,
+                       Language.DMoCHi.Boolean.Flow2,
                        Language.DMoCHi.Boolean.CPS,
                        Language.DMoCHi.Boolean.IType,
                        Language.DMoCHi.Boolean.SelectiveCPS,
@@ -40,7 +41,8 @@ library
                        Language.DMoCHi.Boolean.PrettyPrint.Typed,
                        Language.DMoCHi.Boolean.PrettyPrint.HORS,
                        Language.DMoCHi.Boolean.PrettyPrint.SelectiveCPS,
-                       Language.DMoCHi.Boolean.Type2
+                       Language.DMoCHi.Boolean.Type2,
+                       Language.DMoCHi.Boolean.Type3,
                        Language.DMoCHi.Boolean.Parser.Typed,
                        Language.DMoCHi.ML.PrettyPrint.UnTyped,
                        Language.DMoCHi.ML.Syntax.UnTyped,
@@ -50,9 +52,9 @@ library
                        Language.DMoCHi.ML.TypeCheck,
                        Language.DMoCHi.ML.Refine,
                        Language.DMoCHi.ML.Inline,
-                       Language.DMoCHi.ML.HornClause
-                       Language.DMoCHi.ML.HornClauseParser
-                       Language.DMoCHi.Boolean.HORS2
+                       Language.DMoCHi.ML.HornClause,
+                       Language.DMoCHi.ML.HornClauseParser,
+                       Language.DMoCHi.Boolean.HORS2,
                        Language.DMoCHi.Boolean.HORS
 
 executable dmochi

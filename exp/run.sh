@@ -37,7 +37,7 @@ do
     rm -f work/$testcase*
     cp ../sample/$testcase work/$testcase
     gtimeout $TIMEOUT $DMOCHI work/$testcase > log/$testcase.log
-    for bool in work/$testcase*.bool
+    for bool in `find work -name "$testcase*.bool"`
     do
         bool=${bool#work/}
         echo $bool
