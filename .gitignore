@@ -2,6 +2,9 @@
 *.o
 *.hi
 *.dot
+.cabal-sandbox/
+dist/
+cabal.sandbox.config
 tmp/
 ML/sample/*.log
 ML/sample/*.hrs

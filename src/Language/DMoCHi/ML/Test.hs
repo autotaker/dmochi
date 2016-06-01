@@ -29,6 +29,7 @@ import qualified Language.DMoCHi.ML.Refine as Refine
 
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import qualified Language.DMoCHi.ML.HornClauseParser as Horn
+import Paths_dmochi
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
@@ -43,8 +44,9 @@ instance Show MainError where
     show (IllTyped err)    = "IllTyped: " ++ show err
     show (BooleanError s) = "Boolean: " ++ s
 
-hccsSolver :: FilePath
-hccsSolver = "/Users/autotaker/Documents/cloud/Enshu3/Kobayashi/impl/cvb/hccs/main"
+getHCCSSolver :: IO FilePath
+getHCCSSolver = Paths_dmochi.getDataFileName "hcsolver"
+
 
 run :: IO ()
 run = do
@@ -64,6 +66,8 @@ doit = do
     args <- liftIO $ getArgs
     when (length args == 0) $ throwError NoInputSpecified
     t_input_end <- liftIO $ getCurrentTime
+
+    hccsSolver <- liftIO getHCCSSolver
     
     -- parsing
     t_parsing_begin <- liftIO $ getCurrentTime
@@ -91,6 +95,7 @@ doit = do
     liftIO $ putStrLn "Inlined Program"
     typedProgram <- Inline.inline 1000 _typedProgram
     liftIO $ Typed.printProgram typedProgram
+
 
     (typeMap0, fvMap) <- PAbst.initTypeMap typedProgram
     let lim = 20 :: Int
