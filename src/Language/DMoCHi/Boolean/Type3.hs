@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, LambdaCase #-}
 module Language.DMoCHi.Boolean.Type3 where
 import Language.DMoCHi.Boolean.IType
 import Language.DMoCHi.Boolean.Flow2 hiding(getId,varId,Context)
@@ -10,6 +10,7 @@ import Data.Array
 import Data.Array.IO
 import Data.IORef
 import Control.Monad.Reader
+import Control.Monad.Writer
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -92,7 +93,7 @@ saturateTerm :: IOArray Id TTypeList -> M.Map VarId TTypeList -> M.Map VarId VTy
 saturateTerm flowTbl flowEnv env0 t0 = do
     updateList <- liftIO $ newIORef []
     let go env t = do
-            tau <- calc env t
+            tau <- calcTermTypeAux flowEnv go env t
             unless (isFail tau) $ do
                 tau' <- liftIO $ readArray flowTbl (termId t)
                 tau'' <- mergeTypeList tau tau'
@@ -100,52 +101,55 @@ saturateTerm flowTbl flowEnv env0 t0 = do
                     writeArray flowTbl (termId t) tau'' 
                     modifyIORef updateList (termId t:)
             return tau
-
-        calc env _t = case _t of
-            C _ b -> buildType (bool b) >>= singleton
-            V   x -> singleton (env M.! x)
-            Fail _ -> buildTypeList lfail
-            Omega _ -> buildTypeList lnil
-            Lam _ x t -> do
-                let l = unfoldV $ flowEnv M.! x
-                as <- forM l $ \tyx -> (,) tyx <$> go (M.insert x tyx env) t
-                toFunType as >>= buildType . func >>= singleton
-            App _ _ t1 t2 -> binOp applyType (go env t1) (go env t2)
-            And _ t1 t2 -> binOp andType (go env t1) (go env t2)
-            Not _ t -> uniOp notType (go env t)
-            Let _ _ x t1 t2 -> do
-                ty1 <- go env t1
-                case ty1 of
-                    LFail _ -> buildTypeList lfail
-                    _ -> concatTypeList =<< forM (unfoldV ty1) (\tyx -> go (M.insert x tyx env) t2)
-            T _ ts -> do
-                tys <- mapM (go env) ts
-                let check = foldr (\tyi acc -> LFail undefined == tyi || (LNil undefined /= tyi && acc)) False
-                if check tys then
-                    buildTypeList lfail
-                else do
-                    let tys' = map unfoldV tys
-                    tys'' <- forM (sequence tys') $ buildType . tup
-                    let sorted = sortBy (compare `on` getId) tys''
-                    t0 <- buildTypeList lnil
-                    foldM (\acc t -> buildTypeList $ lcons t acc) t0 sorted
-            Proj _ _ n _ t -> uniOp (projType n) (go env t)
-            Assume _ _ t1 t2 -> do
-                ty1 <- go env t1
-                if isFail ty1 then
-                    buildTypeList lfail
-                else if VT undefined `elem` ty1 then
-                    go env t2
-                else
-                    buildTypeList lnil
-            Branch _ _ _ t1 t2 -> do
-                ty1 <- go env t1
-                ty2 <- go env t2
-                mergeTypeList ty1 ty2
     tau <- go env0 t0
     l <- liftIO $ readIORef updateList
     return (tau,l)
 
+calcTermType :: FEnv -> TEnv -> FlowTerm -> M TTypeList
+calcTermType flowEnv = fix (calcTermTypeAux flowEnv)
+
+calcTermTypeAux :: FEnv -> (TEnv -> FlowTerm -> M TTypeList) -> TEnv -> FlowTerm -> M TTypeList
+calcTermTypeAux flowEnv go env _t = case _t of
+    C _ b -> buildType (bool b) >>= singleton
+    V   x -> singleton (env M.! x)
+    Fail _ -> buildTypeList lfail
+    Omega _ -> buildTypeList lnil
+    Lam _ x t -> do
+        let l = unfoldV $ flowEnv M.! x
+        as <- forM l $ \tyx -> (,) tyx <$> go (M.insert x tyx env) t
+        toFunType as >>= buildType . func >>= singleton
+    App _ _ t1 t2 -> binOp applyType (go env t1) (go env t2)
+    And _ t1 t2 -> binOp andType (go env t1) (go env t2)
+    Not _ t -> uniOp notType (go env t)
+    Let _ _ x t1 t2 -> do
+        ty1 <- go env t1
+        case ty1 of
+            LFail _ -> buildTypeList lfail
+            _ -> concatTypeList =<< forM (unfoldV ty1) (\tyx -> go (M.insert x tyx env) t2)
+    T _ ts -> do
+        tys <- mapM (go env) ts
+        let check = foldr (\tyi acc -> LFail undefined == tyi || (LNil undefined /= tyi && acc)) False
+        if check tys then
+            buildTypeList lfail
+        else do
+            let tys' = map unfoldV tys
+            tys'' <- forM (sequence tys') $ buildType . tup
+            let sorted = sortBy (compare `on` getId) tys''
+            t0 <- buildTypeList lnil
+            foldM (\acc t -> buildTypeList $ lcons t acc) t0 sorted
+    Proj _ _ n _ t -> uniOp (projType n) (go env t)
+    Assume _ _ t1 t2 -> do
+        ty1 <- go env t1
+        if isFail ty1 then
+            buildTypeList lfail
+        else if VT undefined `elem` ty1 then
+            go env t2
+        else
+            buildTypeList lnil
+    Branch _ _ _ t1 t2 -> do
+        ty1 <- go env t1
+        ty2 <- go env t2
+        mergeTypeList ty1 ty2
 
 propagateFlow :: Array Id [Id] -> Array Id FlowTerm -> IOArray Id TTypeList -> [Id] -> M [VarId]
 propagateFlow cfg_inv termTbl flowTbl = go [] . S.fromList
@@ -165,12 +169,12 @@ propagateFlow cfg_inv termTbl flowTbl = go [] . S.fromList
                                else return $ S.insert w acc) s' (cfg_inv ! v)
          go updateList' s''
 
-data Context = Context { flowEnv  :: M.Map VarId TTypeList
-                       , symEnv   :: M.Map VarId VType
+data Context = Context { symEnv   :: M.Map VarId VType
                        , cfg_inv  :: G.Graph
                        , depGraph :: G.Graph
                        , symbols  :: M.Map VarId SymbolInfo
-                       , flowTbl  :: IOArray Id TTypeList }
+                       , flowTbl  :: IOArray Id TTypeList
+                       , envHist  :: [(M.Map VarId TTypeList, M.Map VarId VType)] }
 
 data SymbolType = Global | Arg | Local
 data SymbolInfo = SymbolInfo { symType :: SymbolType
@@ -226,14 +230,197 @@ initContext prog = do
         depG = G.buildG (bounds (termTable prog)) $ 
                (definitions prog >>= \(_,t_body) -> depend t_body t_body) 
                <|> (depend (mainTerm prog) (mainTerm prog))
-    return $ Context { flowEnv = fmap (const nil) symbols
-                     , symEnv  = M.fromList $ [ (x,ty) | (x,_) <- definitions prog ]
+    return $ Context { symEnv  = M.fromList $ [ (x,ty) | (x,_) <- definitions prog ]
                      , cfg_inv = G.transposeG (cfg prog)
                      , symbols = symbols
                      , depGraph = depG
-                     , flowTbl = arr }
+                     , flowTbl = arr
+                     , envHist = [] }
 
-saturate :: Program -> IO Bool
+data Value = VB Bool | Cls VarId FlowTerm VEnv FEnv TEnv | Tup [Value]
+
+type VEnv = M.Map VarId Value
+type TEnv = M.Map VarId VType
+type FEnv = M.Map VarId TTypeList
+
+eval :: VEnv -> FEnv -> TEnv -> FlowTerm -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
+eval env fenv tenv _e ety = case _e of
+    V x -> return $ env M.! x
+    C s b -> return $ VB b
+    T s es ->
+        let VTup _ tys = ety in
+        Tup <$> zipWithM (eval env fenv tenv) es tys
+    Lam _ x e1 -> return $ Cls x e1 env fenv tenv
+    Let _ _ x e1 e2 ->
+        lift (calcTermType fenv tenv e1) >>= 
+        fix (\sub (LCons _ ty1 ts) -> do
+            let tenv' = M.insert x ty1 tenv
+            ty2 <- lift $ calcTermType fenv tenv' e2
+            if ety `elem` ty2 then do
+                ex <- eval env fenv tenv e1 ty1
+                eval (M.insert x ex env) fenv tenv' e2 ety
+            else
+                sub ts)
+    Proj _ _ n d e ->
+        lift (calcTermType fenv tenv e) >>=
+        fix (\sub (LCons _ ty1@(VTup _ tys) ty') ->
+            if ety === (tys !! n) then do
+                Tup vs <- eval env fenv tenv e ty1
+                return $ vs !! n
+            else 
+                sub ty')
+    App _ _ e1 e2 -> do
+        ty1 <- lift $ calcTermType fenv tenv e1
+        ty2 <- lift $ calcTermType fenv tenv e2
+        let (ty1', ty2') = head $ do
+                vf@(VFun _ vs) <- unfoldV ty1
+                (a,b) <- unfoldFun vs
+                guard $ b === TPrim ety
+                guard $ a `elem` ty2
+                return (vf,a)
+        (Cls x e0 env' fenv' tenv') <- eval env fenv tenv e1 ty1'
+        v2 <- eval env fenv tenv e2 ty2'
+        eval (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0 ety
+    Branch _ _ b e1 e2 -> do
+        ty1 <- lift $ calcTermType fenv tenv e1
+        ty2 <- lift $ calcTermType fenv tenv e2
+        if ety `elem` ty1 then do
+            when b $ tell [True]
+            eval env fenv tenv e1 ety
+        else do
+            when b $ tell [False]
+            eval env fenv tenv e2 ety
+    Assume _ _ e1 e2 -> do
+        eval env fenv tenv e1 =<< buildType (bool True)
+        eval env fenv tenv e2 ety
+    And _ e1 e2 -> 
+        case ety of
+            VT _ -> do
+                vtrue <- buildType (bool True)
+                eval env fenv tenv e1 vtrue
+                eval env fenv tenv e2 vtrue
+            VF _ -> do
+                ty1 <- lift $ calcTermType fenv tenv e1
+                ty2 <- lift $ calcTermType fenv tenv e2
+                vtrue <- buildType (bool True)
+                vfalse <- buildType (bool False)
+                if vfalse `elem` ty1 then do
+                    eval env fenv tenv e1 vfalse
+                    eval env fenv tenv e2 (head $ unfoldV ty2)
+                    return $ VB False
+                else do
+                    eval env fenv tenv e1 vtrue
+                    eval env fenv tenv e2 vfalse
+    Or _ e1 e2 ->
+        case ety of
+            VT _ -> do
+                ty1 <- lift $ calcTermType fenv tenv e1
+                ty2 <- lift $ calcTermType fenv tenv e2
+                vtrue <- buildType (bool True)
+                vfalse <- buildType (bool False)
+                if vtrue `elem` ty1 then do
+                    eval env fenv tenv e1 vtrue
+                    eval env fenv tenv e2 (head $ unfoldV ty2)
+                    return $ VB True
+                else do
+                    eval env fenv tenv e1 vfalse
+                    eval env fenv tenv e2 vtrue
+            VF _ -> do
+                vfalse <- buildType (bool False)
+                eval env fenv tenv e1 vfalse
+                eval env fenv tenv e2 vfalse
+    Not _ e ->
+        case ety of
+            VT _ -> do
+                eval env fenv tenv e =<< buildType (bool False)
+                return $ VB True
+            VF _ -> do
+                eval env fenv tenv e =<< buildType (bool True)
+                return $ VB False
+
+evalFail :: VEnv -> FEnv -> TEnv -> FlowTerm -> WriterT [Bool] (ReaderT Factory IO) ()
+evalFail env fenv tenv _e = case _e of
+    T _ es -> 
+        fix (\sub l -> case l of
+            [] -> error "extractCE: tuple: there must be a term that fails"
+            ei:es' -> do
+                tyi <- lift $ calcTermType fenv tenv ei
+                case tyi of
+                    LNil _ -> error "extractCE: Tuple: this term may not diverge"
+                    LFail _ -> evalFail env fenv tenv ei
+                    LCons _ etyi _ -> eval env fenv tenv ei etyi >> sub es') es
+    Let _ _ x e1 e2 ->
+        lift (calcTermType fenv tenv e1) >>=
+        fix (\sub l -> case l of
+            (LFail _) -> evalFail env fenv tenv e1
+            (LCons _ ty1 ts) -> do
+                let tenv' = M.insert x ty1 tenv
+                ty2 <- lift $ calcTermType fenv tenv' e2
+                if isFail ty2 then do
+                    ex <- eval env fenv tenv e1 ty1
+                    evalFail (M.insert x ex env) fenv tenv' e2
+                else
+                    sub ts)
+    Proj _ _ _ _ e -> evalFail env fenv tenv e
+    Branch _ _ b e1 e2 -> do
+        ty1 <- lift $ calcTermType fenv tenv e1
+        if isFail ty1 then
+            when b (tell [True]) >> 
+            evalFail env fenv tenv e1
+        else
+            when b (tell [False]) >> 
+            evalFail env fenv tenv e2
+    Assume _ _ e1 e2 -> do
+        ty1 <- lift $ calcTermType fenv tenv e1
+        if isFail ty1 then
+            evalFail env fenv tenv e1
+        else do
+            buildType (bool True) >>= eval env fenv tenv e1
+            evalFail env fenv tenv e2
+    App _ _ e1 e2 -> do
+        ty1 <- lift (calcTermType fenv tenv e1)
+        if isFail ty1 then
+            evalFail env fenv tenv e1
+        else do
+            ty2 <- lift $ calcTermType fenv tenv e2
+            if isFail ty2 then do
+                eval env fenv tenv e1 (head $ unfoldV ty1)
+                evalFail env fenv tenv e2
+            else do
+                let (ty1', ty2') = head $ do
+                        vf@(VFun _ vs) <- unfoldV ty1
+                        (a,b) <- unfoldFun vs
+                        guard $ b === TFail
+                        guard $ a `elem` ty2
+                        return (vf,a)
+                Cls x e0 env' fenv' tenv' <- eval env fenv tenv e1 ty1'
+                v2 <- eval env fenv tenv e2 ty2'
+                evalFail (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0
+    Fail _ -> return ()
+    And _ e1 e2 -> do
+        ty1 <- lift $ calcTermType fenv tenv e1
+        if isFail ty1 then
+            evalFail env fenv tenv e1
+        else do
+            eval env fenv tenv e1 (head $ unfoldV ty1)
+            evalFail env fenv tenv e2
+    Or _ e1 e2 -> do
+        ty1 <- lift $ calcTermType fenv tenv e1
+        if isFail ty1 then
+            evalFail env fenv tenv e1
+        else do
+            eval env fenv tenv e1 (head $ unfoldV ty1)
+            evalFail env fenv tenv e2
+    Not _ e -> evalFail env fenv tenv e
+
+extractCE :: Program -> FEnv -> TEnv -> [(FEnv,TEnv)] -> M [Bool]
+extractCE prog flowEnv genv hist = execWriterT $ evalFail env flowEnv genv (mainTerm prog)
+    where
+    env0 = M.fromList [ (f, Cls x (Omega undefined) M.empty M.empty M.empty) | (f,Lam _ x _) <- definitions prog]
+    env = foldr (\(fenv, genv) env -> 
+            M.fromList [ (f, Cls x e0 env fenv genv) | (f, Lam _ x e0) <- definitions prog ]) env0 hist
+
+saturate :: Program -> IO (Maybe [Bool])
 saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where
     q0 = S.singleton (termId (mainTerm prog))
     termTbl = termTable prog
@@ -241,21 +428,24 @@ saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where
     termNameMap = M.fromList $ (Flow.termId (mainTerm prog), Nothing) : 
                                [ (Flow.termId t, Just f) | (f,t) <- definitions prog ]
     doit ctx = do
-        loop 0 q0 (flowEnv ctx) M.empty ctx
-    loop :: Int -> S.Set Int -> M.Map VarId TTypeList -> M.Map VarId VType -> Context -> M Bool
+        nil <- buildTypeList lnil
+        let curFlowEnv = fmap (const nil) (symbols ctx)
+        loop 0 q0 curFlowEnv M.empty ctx
+    loop :: Int -> S.Set Int -> M.Map VarId TTypeList -> M.Map VarId VType -> Context -> M (Maybe [Bool])
     loop round queue curFlowEnv env_acc ctx 
         | S.null queue = 
             if M.null env_acc then
                 -- saturated
-                return False
+                return Nothing
             else do
-                flowEnv' <- mapM (liftIO . readArray (flowTbl ctx) . Flow.getId . varId) (symbols ctx)
                 let symEnv' = M.union env_acc (symEnv ctx)
                 let queue' = S.fromList $ do 
                         f <- M.keys env_acc
                         let f_id = Flow.getId $ varId $ symbols ctx M.! f
                         depGraph ctx ! f_id
-                loop (round+1) queue' flowEnv' M.empty (ctx { flowEnv = flowEnv', symEnv = symEnv' })
+                    ctx' = ctx { symEnv  = symEnv'
+                               , envHist = (curFlowEnv, symEnv ctx) : envHist ctx }
+                loop (round+1) queue' curFlowEnv M.empty ctx'
         | otherwise = do
             let (v,queue') = S.deleteFindMin queue
             let t = termTbl ! v
@@ -298,7 +488,15 @@ saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where
                         liftIO $ print $ ppF 0 ty'
                         buildType (func ty') >>= k . flip (M.insert f) env_acc
                 Nothing -> do -- main term
-                    if isFail tau then return True else k env_acc
+                    if isFail tau then do
+                        liftIO $ putStrLn "Unsafe! extracting a counterexample...\n"
+                        ws <- extractCE prog curFlowEnv (symEnv ctx) (envHist ctx)
+                        let toi :: Bool -> Int
+                            toi True  = 1
+                            toi False = 0
+                        liftIO $ printf "counterexample is %s\n" (show (map toi ws))
+                        return $ Just ws
+                    else k env_acc
 
 mergeFun :: VFunType -> VFunType -> M VFunType
 mergeFun (VNil _) t2 = return t2

@@ -5,14 +5,14 @@ TEST1="example1.txt example2.txt example3.txt example4.txt example5.txt example6
 TEST2="ack.txt copy-1.txt isnil.txt sum.txt fold.txt mc91.txt reverse.txt"
 TEST3="length.txt sum-e.txt copy.txt fold_div.txt fold_fun_list.txt fold_left.txt for_all_eq_pair.txt search.txt zip.txt"
 TESTS="$TEST1 $TEST2 $TEST3"
-TESTS="fold_div.txt fold_div1.txt fold_fun_list.txt fold_left.txt for_all_eq_pair.txt search.txt zip.txt"
+TESTS="$TEST3"
 
 if [ $# -gt 0 ]; then
     TESTS="$@"
 fi
 
 DMOCHI=../dist/build/dmochi/dmochi
-HIBOCH=../dist/build/hiboch/hiboch
+HIBOCH=hiboch
 TOHORS=../dist/build/tohors/tohors
 
 HORSAT=../../horsat-1.01/horsat
@@ -34,9 +34,9 @@ set -x
 for testcase in $TESTS
 do
     echo "Running testcase" $testcase
-    rm -f work/$testcase*
-    cp ../sample/$testcase work/$testcase
-    gtimeout $TIMEOUT $DMOCHI work/$testcase > log/$testcase.log
+#    rm -f work/$testcase*
+#    cp ../sample/$testcase work/$testcase
+#    gtimeout $TIMEOUT $DMOCHI work/$testcase > log/$testcase.log
     for bool in `find work -name "$testcase*.bool"`
     do
         bool=${bool#work/}
@@ -44,8 +44,11 @@ do
         $TOHORS work/$bool > /dev/null
         gtimeout $TIMEOUT $HIBOCH work/$bool > log/$bool.log
 #        set +e
-        gtimeout $TIMEOUT $HORSAT  work/$bool.selective.horsat.hrs > log/$bool.horsat.log
+#        gtimeout $TIMEOUT $HORSAT  work/$bool.selective.horsat.hrs > log/$bool.horsat.log
         gtimeout $TIMEOUT $HORSAT2 work/$bool.selective.horsat.hrs > log/$bool.horsat2.log
+        head log/$bool.horsat2.log
+        tail log/$bool.log
+        sleep 5
 #        set -e
     done
 done

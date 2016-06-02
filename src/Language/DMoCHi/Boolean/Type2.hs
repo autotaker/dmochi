@@ -377,7 +377,6 @@ extractCE prog flowEnv genv hist =
                     guard $ b === TPrim ety
                     guard $ a `elem` ty2
                     return (vf,a)
-            tmp <- eval env fenv tenv e1 ty1'
             (Cls x e0 env' fenv' tenv') <- eval env fenv tenv e1 ty1'
             v2 <- eval env fenv tenv e2 ty2'
             eval (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0 ety
