@@ -34,21 +34,19 @@ set -x
 for testcase in $TESTS
 do
     echo "Running testcase" $testcase
-#    rm -f work/$testcase*
-#    cp ../sample/$testcase work/$testcase
-#    gtimeout $TIMEOUT $DMOCHI work/$testcase > log/$testcase.log
+    rm -f work/$testcase*
+    cp ../sample/$testcase work/$testcase
+    gtimeout $TIMEOUT $DMOCHI work/$testcase > log/$testcase.log
     for bool in `find work -name "$testcase*.bool"`
     do
         bool=${bool#work/}
         echo $bool
         $TOHORS work/$bool > /dev/null
         gtimeout $TIMEOUT $HIBOCH work/$bool > log/$bool.log
+        gtimeout $TIMEOUT $HIBOCH -t work/$bool > log/$bool.typed.log
 #        set +e
-#        gtimeout $TIMEOUT $HORSAT  work/$bool.selective.horsat.hrs > log/$bool.horsat.log
+        gtimeout $TIMEOUT $HORSAT  work/$bool.selective.horsat.hrs > log/$bool.horsat.log
         gtimeout $TIMEOUT $HORSAT2 work/$bool.selective.horsat.hrs > log/$bool.horsat2.log
-        head log/$bool.horsat2.log
-        tail log/$bool.log
-        sleep 5
 #        set -e
     done
 done

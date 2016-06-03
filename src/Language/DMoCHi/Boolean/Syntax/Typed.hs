@@ -19,6 +19,7 @@ module Language.DMoCHi.Boolean.Syntax.Typed ( Symbol(..)
                             , f_not
                             , f_and
                             , f_or
+                            , size
                             ) where
 
 import qualified Language.DMoCHi.Boolean.Syntax as B
@@ -209,4 +210,25 @@ tCheck (Program ds t0) = doit where
             check Bool (getSort t) "not" (t:ctx')
         Fail _ -> return ()
         Omega _ -> return ()
+
+size :: Program -> Int
+size (Program ds t0) = sum [ sizeT ti + 1 | (_,ti) <- ds] + sizeT t0
+
+sizeT :: Term -> Int
+sizeT (C _) = 1
+sizeT (V _) = 1
+sizeT (T ts) = 1 + sum (map sizeT ts)
+sizeT (Lam _ t) = 1 + sizeT t
+sizeT (Let _ _ t1 t2) = 1 + sizeT t1 + sizeT t2
+sizeT (App _ t1 t2) = 1 + sizeT t1 + sizeT t2
+sizeT (Proj _ _ _ t) = 1 + sizeT t
+sizeT (Assume _ t1 t2) = 1 + sizeT t1 + sizeT t2
+sizeT (Branch _ _ t1 t2) = 1 + sizeT t1 + sizeT t2
+sizeT (And t1 t2) = 1 + sizeT t1 + sizeT t2
+sizeT (Or  t1 t2) = 1 + sizeT t1 + sizeT t2
+sizeT (Not t) = 1 + sizeT t
+sizeT (Fail _) = 1
+sizeT (Omega _) = 1
+
+
 

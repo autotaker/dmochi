@@ -100,9 +100,9 @@ doit = do
     (typeMap0, fvMap) <- PAbst.initTypeMap typedProgram
     let lim = 20 :: Int
     let cegar _ k hcs | k >= lim = return ()
-        cegar typeMap k hcs = do
+        cegar typeMap k hcs = measure (printf "CEGAR-%d" k) $ do
             liftIO $ putStrLn "Predicate Abstracion"
-            boolProgram' <- PAbst.abstProg typeMap typedProgram
+            boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg typeMap typedProgram
             let file_boolean = printf "%s_%d.bool" path k
             liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
             liftIO $ putStrLn "Converted program"
@@ -117,12 +117,9 @@ doit = do
                 Right _ -> return ()
             let boolProgram = B.toUnTyped boolProgram'
             liftIO $ B.printProgram boolProgram
-            
-            t_model_checking_begin <- liftIO $ getCurrentTime
-            r <- withExceptT BooleanError $ test file_boolean boolProgram
-            liftIO $ print r
-            t_model_checking_end <- liftIO $ getCurrentTime
 
+            
+            r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
             case r of
                 Just trace -> do
                     refine <- Refine.refineCGen typedProgram trace
