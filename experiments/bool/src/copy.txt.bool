@@ -1,0 +1,30 @@
+let copy_0 : [] -> [Bool] =
+    fun (x_4 : []) ->
+        (assume true <>
+                false;
+         let int_11 : Bool =
+             true in
+         (1 int_11)) <>
+        (assume true <>
+                false;
+         let y_5 : [Bool] =
+             copy_0 (0) in
+         let int_12 : Bool =
+             (assume y_5.(0/1);
+              true) <>
+             (assume not y_5.(0/1);
+              false) in
+         (1 int_12));;
+let rand_int_1 : [] -> [] =
+    fun (x_7 : []) ->
+        (0);;
+let n_8 : [] =
+    rand_int_1 (0) in
+let n1_9 : [Bool] =
+    copy_0 (0) in
+let n2_10 : [Bool] =
+    copy_0 (0) in
+assume (assume not (n1_9.(0/1) && n2_10.(0/1));
+        true) <>
+       false;
+fail([])

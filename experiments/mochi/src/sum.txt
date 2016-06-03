@@ -1,0 +1,12 @@
+let sum : x:int -> int[r.r >= x] = 
+  fun x -> 
+    (assume (not (x > 0)); 0) <>
+    (assume (x > 0); let y = sum (x - 1) in x + y);;
+let rand_int : x:int -> int = fun x -> 0;;
+
+let x = rand_int 0 in
+let r = sum x in
+assume (r < x); Fail
+
+
+

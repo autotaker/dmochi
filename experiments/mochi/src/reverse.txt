@@ -1,0 +1,104 @@
+(*
+let rec reverse acc xs =
+  match xs with
+      [] -> acc
+    | x::xs' -> reverse (x::acc) xs'
+let reverse xs = reverse [] xs
+
+let rec make_list n =
+  if n = 0
+  then []
+  else n :: make_list (n-1)
+
+let hd xs =
+  match xs with
+      [] -> assert false
+    | x::xs' -> x
+
+let main len =
+  let xs = make_list len in
+    if len > 0
+    then hd (reverse xs)
+    else 0
+*)
+
+let head : p: (n:int[n. n > 0] * (i:int[] -> int[])) -> int[] =
+	fun p -> 
+    (assume p.fst = 0;Fail) <>
+    (assume p.fst > 0;
+		 let f = p.snd in
+		 let z = f 0 in
+		 z);;
+		
+let tail : p: (n:int[] * (i:int[] -> int[])) -> (m:int[m. m = p.fst - 1] * (j:int[] -> int[])) =
+	fun p ->
+		let n = p.fst in
+		let f = p.snd in
+		let g : j:int -> int = fun j -> let v = f (j + 1) in v in
+		(n-1,g)
+		
+let nil : n:int -> (m:int[m. m = 0] * (j:int -> int)) =
+	fun n -> 
+		let f : j:int -> int = fun j -> 0 in
+		(0,f)
+
+let cons : x:int -> p:(n:int * (i:int -> int)) -> (m:int[m. m = p.fst + 1] * (j:int -> int)) =
+	fun x -> fun p ->
+		let n = p.fst in
+		let f = p.snd in
+		let g : j:int -> int = fun j ->
+			(assume (j = 0); x) <>
+			(assume (j > 0); 
+			 let z = f (j - 1) in z) in
+		(n+1,g)
+			   
+let length : p:(n:int * (i:int -> int)) -> int[r.r = p.fst] = fun p -> 
+	(assume p.fst = 0;0) <>
+	(assume p.fst > 0;
+	 let p1 = tail p in
+	 let r = length p1 in
+	 r + 1);;
+
+let make_list : n:int -> (m:int[m. n <= 0; m. m >= 0; m. m >= 1] * (i:int -> int)) = 
+	fun n ->
+		(assume n = 0;
+		 let p = nil 0 in
+		 p) <>
+		(assume n > 0;
+		 let p1 = make_list (n-1) in
+		 let m = p1.fst in
+		 let f = p1.snd in
+		 let g : j:int -> int = fun j ->
+			 (assume (j = 0); n) <>
+			 (assume (not (j = 0)); 
+			  let z = f (j - 1) in z) in
+		 (m+1,g))
+		 
+let rand_int : x : int[] -> int[] =
+    fun x -> 0;;
+
+let reverse : acc : (l : int * (k : int -> int)) -> 
+              xs  : (n : int[n. n >= 1; n. acc.fst >= 1] * (i : int -> int[r. acc.fst >= 0])) -> 
+              (m : int[m. m >= 1] * (j : int -> int)) =
+  fun acc -> fun xs ->
+    (assume xs.fst = 0; acc) <>
+    (assume not (xs.fst = 0);
+     let n = xs.fst in
+     let f = xs.snd in
+     let x = f 0 in
+     let g : j:int -> int = fun j -> let v = f (j + 1) in v in
+     let m = acc.fst in
+     let f1 = acc.snd in
+     let g1 : j:int -> int = fun j ->
+       (assume (j = 0); x) <>
+       (assume (j > 0); let z = f1 (j - 1) in z) in
+     let r = reverse (m+1,g1) (n-1,g) in r);;
+
+let len = rand_int 0 in
+let xs = make_list len in
+assume len > 0;
+let acc = nil 0 in
+let xs1 = reverse acc xs in
+let x = head xs1 in
+x;;
+

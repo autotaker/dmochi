@@ -1,0 +1,46 @@
+let bnot : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] -> [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] =
+  fun (x : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] ) -> 
+    (17 (not x.(0/17)) (not x.(1/17)) (not x.(2/17)) (not x.(3/17)) (not x.(4/17)) (not x.(5/17)) (not x.(6/17)) (not x.(7/17)) (not x.(8/17)) (not x.(9/17)) (not x.(10/17)) (not x.(11/17)) (not x.(12/17)) (not x.(13/17)) (not x.(14/17)) (not x.(15/17)) (not x.(16/17)));;
+let eq : Bool -> Bool -> Bool = 
+  fun (x : Bool) -> fun (y : Bool) -> 
+    x && y || (not x && not y) in
+
+let x : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] = 
+    (17 (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false)) in
+let y : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] = bnot x in
+
+assume x.(0/17) || not x.(0/17);
+assume x.(1/17) || not x.(1/17);
+assume x.(2/17) || not x.(2/17);
+assume x.(3/17) || not x.(3/17);
+assume x.(4/17) || not x.(4/17);
+assume x.(5/17) || not x.(5/17);
+assume x.(6/17) || not x.(6/17);
+assume x.(7/17) || not x.(7/17);
+assume x.(8/17) || not x.(8/17);
+assume x.(9/17) || not x.(9/17);
+assume x.(10/17) || not x.(10/17);
+assume x.(11/17) || not x.(11/17);
+assume x.(12/17) || not x.(12/17);
+assume x.(13/17) || not x.(13/17);
+assume x.(14/17) || not x.(14/17);
+assume x.(15/17) || not x.(15/17);
+assume x.(16/17) || not x.(16/17);
+assume eq x.(0/17) y.(0/17) || 
+       eq x.(1/17) y.(1/17) || 
+       eq x.(2/17) y.(2/17) || 
+       eq x.(3/17) y.(3/17) || 
+       eq x.(4/17) y.(4/17) || 
+       eq x.(5/17) y.(5/17) || 
+       eq x.(6/17) y.(6/17) || 
+       eq x.(7/17) y.(7/17) || 
+       eq x.(8/17) y.(8/17) || 
+       eq x.(9/17) y.(9/17) || 
+       eq x.(10/17) y.(10/17) || 
+       eq x.(11/17) y.(11/17) || 
+       eq x.(12/17) y.(12/17) || 
+       eq x.(13/17) y.(13/17) || 
+       eq x.(14/17) y.(14/17) || 
+       eq x.(15/17) y.(15/17) || 
+       eq x.(16/17) y.(16/17);
+fail([]);;

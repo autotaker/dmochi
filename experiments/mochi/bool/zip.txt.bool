@@ -1,0 +1,392 @@
+let head_pair_0 : [[], [] -> [[], []]] -> [[], []] =
+    fun (p_14 : [[], [] -> [[], []]]) ->
+        let f_15 : [] -> [[], []] =
+            p_14.(1/2) in
+        let z_16 : [[], []] =
+            f_15 (0) in
+        let x_122 : [] =
+            (0) in
+        let y_123 : [] =
+            (0) in
+        (2 x_122 y_123);;
+let head_int_1 : [[], [] -> []] -> [] =
+    fun (p_20 : [[], [] -> []]) ->
+        let f_21 : [] -> [] =
+            p_20.(1/2) in
+        let z_22 : [] =
+            f_21 (0) in
+        (0);;
+let tail_pair_2 : [[], [] -> [[], []]] -> [[Bool], [] -> [[], []]] =
+    fun (p_31 : [[], [] -> [[], []]]) ->
+        let f_33 : [] -> [[], []] =
+            p_31.(1/2) in
+        let g_38 : [] -> [[], []] =
+            fun (j_36 : []) ->
+                let v_37 : [[], []] =
+                    f_33 (0) in
+                let x_124 : [] =
+                    (0) in
+                let y_125 : [] =
+                    (0) in
+                (2 x_124 y_125) in
+        let x_126 : [Bool] =
+            let int_127 : Bool =
+                true in
+            (1 int_127) in
+        let y_128 : [] -> [[], []] =
+            fun (x_129 : []) ->
+                let y_130 : [] =
+                    (0) in
+                let z_131 : [[], []] =
+                    g_38 y_130 in
+                let x_132 : [] =
+                    (0) in
+                let y_133 : [] =
+                    (0) in
+                (2 x_132 y_133) in
+        (2 x_126 y_128);;
+let tail_int_3 : [[], [] -> []] -> [[Bool, Bool], [] -> []] =
+    fun (p_46 : [[], [] -> []]) ->
+        let f_48 : [] -> [] =
+            p_46.(1/2) in
+        let g_52 : [] -> [] =
+            fun (j_50 : []) ->
+                let v_51 : [] =
+                    f_48 (0) in
+                (0) in
+        let x_134 : [Bool, Bool] =
+            let int_135 : Bool =
+                true in
+            let int_136 : Bool =
+                (assume int_135;
+                 true) <>
+                (assume int_135;
+                 false) in
+            (2 int_135 int_136) in
+        let y_137 : [] -> [] =
+            fun (x_138 : []) ->
+                let y_139 : [] =
+                    (0) in
+                let z_140 : [] =
+                    g_52 y_139 in
+                (0) in
+        (2 x_134 y_137);;
+let nil_pair_4 : [] -> [[], [] -> [[], []]] =
+    fun (n_57 : []) ->
+        let f_61 : [] -> [[], []] =
+            fun (j_60 : []) ->
+                let x_141 : [] =
+                    (0) in
+                let y_142 : [] =
+                    (0) in
+                (2 x_141 y_142) in
+        let x_143 : [] =
+            (0) in
+        let y_144 : [] -> [[], []] =
+            fun (x_145 : []) ->
+                let y_146 : [] =
+                    (0) in
+                let z_147 : [[], []] =
+                    f_61 y_146 in
+                let x_148 : [] =
+                    (0) in
+                let y_149 : [] =
+                    (0) in
+                (2 x_148 y_149) in
+        (2 x_143 y_144);;
+let cons_pair_5 : [[], []] -> [[], [] -> [[], []]] -> [[], [] -> [[], []]] =
+    fun (x_71 : [[], []]) ->
+        fun (p_72 : [[], [] -> [[], []]]) ->
+            let f_74 : [] -> [[], []] =
+                p_72.(1/2) in
+            let g_79 : [] -> [[], []] =
+                fun (j_77 : []) ->
+                    (assume true <>
+                            false;
+                     let x_150 : [] =
+                         (0) in
+                     let y_151 : [] =
+                         (0) in
+                     (2 x_150 y_151)) <>
+                    (assume true <>
+                            false;
+                     let z_78 : [[], []] =
+                         f_74 (0) in
+                     let x_152 : [] =
+                         (0) in
+                     let y_153 : [] =
+                         (0) in
+                     (2 x_152 y_153)) in
+            let x_154 : [] =
+                (0) in
+            let y_155 : [] -> [[], []] =
+                fun (x_156 : []) ->
+                    let y_157 : [] =
+                        (0) in
+                    let z_158 : [[], []] =
+                        g_79 y_157 in
+                    let x_159 : [] =
+                        (0) in
+                    let y_160 : [] =
+                        (0) in
+                    (2 x_159 y_160) in
+            (2 x_154 y_155);;
+let zip_6 : [[], [] -> []] -> [[Bool, Bool, Bool], [] -> []] -> [[], [] -> [[], []]] =
+    fun (xs_92 : [[], [] -> []]) ->
+        fun (ys_93 : [[Bool, Bool, Bool], [] -> []]) ->
+            (assume (assume ys_93.(0/2).(0/3) && not ys_93.(0/2).(1/3);
+                     true) <>
+                    (assume not ys_93.(0/2).(0/3);
+                     false);
+             (assume (assume ys_93.(0/2).(0/3) && not ys_93.(0/2).(1/3) && ys_93.(0/2).(2/3);
+                      true) <>
+                     (assume ys_93.(0/2).(0/3) && not ys_93.(0/2).(1/3) && not ys_93.(0/2).(2/3);
+                      false);
+              let r_94 : [[], [] -> [[], []]] =
+                  nil_pair_4 (0) in
+              let x_161 : [] =
+                  (0) in
+              let y_162 : [] -> [[], []] =
+                  fun (x_163 : []) ->
+                      let y_164 : [] =
+                          (0) in
+                      let z_165 : [[], []] =
+                          r_94.(1/2) y_164 in
+                      let x_166 : [] =
+                          (0) in
+                      let y_167 : [] =
+                          (0) in
+                      (2 x_166 y_167) in
+              (2 x_161 y_162)) <>
+             (assume (assume ys_93.(0/2).(0/3) && not ys_93.(0/2).(1/3) && not ys_93.(0/2).(2/3);
+                      true) <>
+                     (assume ys_93.(0/2).(0/3) && not ys_93.(0/2).(1/3) && ys_93.(0/2).(2/3);
+                      false);
+              fail([[], [] -> [[], []]]))) <>
+            (assume (assume not ys_93.(0/2).(0/3);
+                     true) <>
+                    (assume ys_93.(0/2).(0/3) && not ys_93.(0/2).(1/3);
+                     false);
+             let x_95 : [] =
+                 head_int_1 (let x_168 : [] =
+                                 (0) in
+                             let y_169 : [] -> [] =
+                                 fun (x_170 : []) ->
+                                     let y_171 : [] =
+                                         (0) in
+                                     let z_172 : [] =
+                                         xs_92.(1/2) y_171 in
+                                     (0) in
+                             (2 x_168 y_169)) in
+             let xs1_96 : [[Bool, Bool], [] -> []] =
+                 tail_int_3 (let x_173 : [] =
+                                 (0) in
+                             let y_174 : [] -> [] =
+                                 fun (x_175 : []) ->
+                                     let y_176 : [] =
+                                         (0) in
+                                     let z_177 : [] =
+                                         xs_92.(1/2) y_176 in
+                                     (0) in
+                             (2 x_173 y_174)) in
+             (assume (assume not ys_93.(0/2).(0/3) && not ys_93.(0/2).(2/3);
+                      true) <>
+                     (assume not ys_93.(0/2).(0/3);
+                      false);
+              fail([[], [] -> [[], []]])) <>
+             (assume (assume not ys_93.(0/2).(0/3);
+                      true) <>
+                     (assume not ys_93.(0/2).(0/3) && not ys_93.(0/2).(2/3);
+                      false);
+              let y_97 : [] =
+                  head_int_1 (let x_178 : [] =
+                                  (0) in
+                              let y_179 : [] -> [] =
+                                  fun (x_180 : []) ->
+                                      let y_181 : [] =
+                                          (0) in
+                                      let z_182 : [] =
+                                          ys_93.(1/2) y_181 in
+                                      (0) in
+                              (2 x_178 y_179)) in
+              let ys1_98 : [[Bool, Bool], [] -> []] =
+                  tail_int_3 (let x_183 : [] =
+                                  (0) in
+                              let y_184 : [] -> [] =
+                                  fun (x_185 : []) ->
+                                      let y_186 : [] =
+                                          (0) in
+                                      let z_187 : [] =
+                                          ys_93.(1/2) y_186 in
+                                      (0) in
+                              (2 x_183 y_184)) in
+              let rs1_99 : [[], [] -> [[], []]] =
+                  zip_6 (let x_188 : [] =
+                             (0) in
+                         let y_189 : [] -> [] =
+                             fun (x_190 : []) ->
+                                 let y_191 : [] =
+                                     (0) in
+                                 let z_192 : [] =
+                                     xs1_96.(1/2) y_191 in
+                                 (0) in
+                         (2 x_188 y_189)) (let x_193 : [Bool, Bool, Bool] =
+                                               let int_194 : Bool =
+                                                   (assume xs1_96.(0/2).(1/2) && not ys_93.(0/2).(0/3);
+                                                    true) <>
+                                                   (assume not xs1_96.(0/2).(1/2) && not ys_93.(0/2).(0/3) && not (xs1_96.(0/2).(0/2) && ys_93.(0/2).(1/3));
+                                                    false) in
+                                               let int_195 : Bool =
+                                                   (assume not int_194 && not xs1_96.(0/2).(1/2) && not ys_93.(0/2).(0/3) && not (xs1_96.(0/2).(0/2) && ys_93.(0/2).(1/3));
+                                                    true) <>
+                                                   (assume not ys_93.(0/2).(0/3);
+                                                    false) in
+                                               let int_196 : Bool =
+                                                   (assume not ys_93.(0/2).(0/3) && not (int_194 && int_195) && not (int_195 && xs1_96.(0/2).(1/2)) && not (int_195 && ys1_98.(0/2).(1/2)) && not (int_195 && (xs1_96.(0/2).(0/2) && ys_93.(0/2).(1/3)));
+                                                    true) <>
+                                                   (assume not ys_93.(0/2).(0/3) && not (int_194 && int_195) && not (int_194 && ys1_98.(0/2).(1/2)) && not (int_195 && xs1_96.(0/2).(1/2)) && not (xs1_96.(0/2).(1/2) && ys1_98.(0/2).(1/2)) && not (int_195 && (xs1_96.(0/2).(0/2) && ys_93.(0/2).(1/3))) && not (xs1_96.(0/2).(0/2) && (ys1_98.(0/2).(0/2) && ys_93.(0/2).(2/3))) && not (xs1_96.(0/2).(0/2) && (ys1_98.(0/2).(1/2) && ys_93.(0/2).(1/3)));
+                                                    false) in
+                                               (3 int_194 int_195 int_196) in
+                                           let y_197 : [] -> [] =
+                                               fun (x_198 : []) ->
+                                                   let y_199 : [] =
+                                                       (0) in
+                                                   let z_200 : [] =
+                                                       ys1_98.(1/2) y_199 in
+                                                   (0) in
+                                           (2 x_193 y_197)) in
+              let rs_100 : [[], [] -> [[], []]] =
+                  cons_pair_5 (let x_201 : [] =
+                                   (0) in
+                               let y_202 : [] =
+                                   (0) in
+                               (2 x_201 y_202)) (let x_203 : [] =
+                                                     (0) in
+                                                 let y_204 : [] -> [[], []] =
+                                                     fun (x_205 : []) ->
+                                                         let y_206 : [] =
+                                                             (0) in
+                                                         let z_207 : [[], []] =
+                                                             rs1_99.(1/2) y_206 in
+                                                         let x_208 : [] =
+                                                             (0) in
+                                                         let y_209 : [] =
+                                                             (0) in
+                                                         (2 x_208 y_209) in
+                                                 (2 x_203 y_204)) in
+              let x_210 : [] =
+                  (0) in
+              let y_211 : [] -> [[], []] =
+                  fun (x_212 : []) ->
+                      let y_213 : [] =
+                          (0) in
+                      let z_214 : [[], []] =
+                          rs_100.(1/2) y_213 in
+                      let x_215 : [] =
+                          (0) in
+                      let y_216 : [] =
+                          (0) in
+                      (2 x_215 y_216) in
+              (2 x_210 y_211)));;
+let make_list_7 : [] -> [[Bool, Bool], [] -> []] =
+    fun (n_106 : []) ->
+        (assume true <>
+                false;
+         let f_109 : [] -> [] =
+             fun (j_108 : []) ->
+                 (0) in
+         let x_217 : [Bool, Bool] =
+             let int_218 : Bool =
+                 true in
+             let int_219 : Bool =
+                 false in
+             (2 int_218 int_219) in
+         let y_220 : [] -> [] =
+             fun (x_221 : []) ->
+                 let y_222 : [] =
+                     (0) in
+                 let z_223 : [] =
+                     f_109 y_222 in
+                 (0) in
+         (2 x_217 y_220)) <>
+        (assume true <>
+                false;
+         let r_110 : [[Bool, Bool], [] -> []] =
+             make_list_7 (0) in
+         let f_112 : [] -> [] =
+             r_110.(1/2) in
+         let g_116 : [] -> [] =
+             fun (j_114 : []) ->
+                 (assume (assume not (r_110.(0/2).(0/2) && r_110.(0/2).(1/2));
+                          true) <>
+                         (assume not (r_110.(0/2).(0/2) && r_110.(0/2).(1/2));
+                          false);
+                  (0)) <>
+                 (assume (assume not (r_110.(0/2).(0/2) && r_110.(0/2).(1/2));
+                          true) <>
+                         (assume not (r_110.(0/2).(0/2) && r_110.(0/2).(1/2));
+                          false);
+                  let z_115 : [] =
+                      f_112 (0) in
+                  (0)) in
+         let x_224 : [Bool, Bool] =
+             let int_225 : Bool =
+                 (assume not r_110.(0/2).(0/2) && not r_110.(0/2).(1/2);
+                  true) <>
+                 (assume not (r_110.(0/2).(0/2) && r_110.(0/2).(1/2));
+                  false) in
+             let int_226 : Bool =
+                 (assume not int_225 && r_110.(0/2).(0/2) && not r_110.(0/2).(1/2);
+                  true) <>
+                 (assume not r_110.(0/2).(0/2) && not (int_225 && r_110.(0/2).(1/2));
+                  false) in
+             (2 int_225 int_226) in
+         let y_227 : [] -> [] =
+             fun (x_228 : []) ->
+                 let y_229 : [] =
+                     (0) in
+                 let z_230 : [] =
+                     g_116 y_229 in
+                 (0) in
+         (2 x_224 y_227));;
+let rand_int_8 : [] -> [] =
+    fun (x_118 : []) ->
+        (0);;
+let n_119 : [] =
+    rand_int_8 (0) in
+let xs_120 : [[Bool, Bool], [] -> []] =
+    make_list_7 (0) in
+let ps_121 : [[], [] -> [[], []]] =
+    zip_6 (let x_231 : [] =
+               (0) in
+           let y_232 : [] -> [] =
+               fun (x_233 : []) ->
+                   let y_234 : [] =
+                       (0) in
+                   let z_235 : [] =
+                       xs_120.(1/2) y_234 in
+                   (0) in
+           (2 x_231 y_232)) (let x_236 : [Bool, Bool, Bool] =
+                                 let int_237 : Bool =
+                                     (assume xs_120.(0/2).(0/2) && not xs_120.(0/2).(1/2);
+                                      true) <>
+                                     (assume not xs_120.(0/2).(0/2);
+                                      false) in
+                                 let int_238 : Bool =
+                                     (assume not int_237 && not xs_120.(0/2).(0/2) && xs_120.(0/2).(1/2);
+                                      true) <>
+                                     (assume not xs_120.(0/2).(1/2);
+                                      false) in
+                                 let int_239 : Bool =
+                                     assume not (int_237 && int_238) && not (int_237 && xs_120.(0/2).(1/2)) && not (int_238 && xs_120.(0/2).(0/2)) && not (xs_120.(0/2).(0/2) && xs_120.(0/2).(1/2));
+                                     true in
+                                 (3 int_237 int_238 int_239) in
+                             let y_240 : [] -> [] =
+                                 fun (x_241 : []) ->
+                                     let y_242 : [] =
+                                         (0) in
+                                     let z_243 : [] =
+                                         xs_120.(1/2) y_242 in
+                                     (0) in
+                             (2 x_236 y_240)) in
+(0)

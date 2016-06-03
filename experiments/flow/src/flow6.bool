@@ -1,0 +1,24 @@
+let bnot : [Bool,Bool,Bool,Bool,Bool,Bool] -> [Bool,Bool,Bool,Bool,Bool,Bool] =
+  fun (x : [Bool,Bool,Bool,Bool,Bool,Bool] ) -> 
+    (6 (not x.(0/6)) (not x.(1/6)) (not x.(2/6)) (not x.(3/6)) (not x.(4/6)) (not x.(5/6)));;
+let eq : Bool -> Bool -> Bool = 
+  fun (x : Bool) -> fun (y : Bool) -> 
+    x && y || (not x && not y) in
+
+let x : [Bool,Bool,Bool,Bool,Bool,Bool] = 
+    (6 (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false)) in
+let y : [Bool,Bool,Bool,Bool,Bool,Bool] = bnot x in
+
+assume x.(0/6) || not x.(0/6);
+assume x.(1/6) || not x.(1/6);
+assume x.(2/6) || not x.(2/6);
+assume x.(3/6) || not x.(3/6);
+assume x.(4/6) || not x.(4/6);
+assume x.(5/6) || not x.(5/6);
+assume eq x.(0/6) y.(0/6) || 
+       eq x.(1/6) y.(1/6) || 
+       eq x.(2/6) y.(2/6) || 
+       eq x.(3/6) y.(3/6) || 
+       eq x.(4/6) y.(4/6) || 
+       eq x.(5/6) y.(5/6);
+fail([]);;
