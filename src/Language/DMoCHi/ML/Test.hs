@@ -116,7 +116,7 @@ doit = do
                     throwError $ BooleanError "Abstracted Program is ill-typed"
                 Right _ -> return ()
             let boolProgram = B.toUnTyped boolProgram'
-            liftIO $ B.printProgram boolProgram
+            -- liftIO $ B.printProgram boolProgram
 
             
             r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
@@ -140,6 +140,7 @@ doit = do
                 Nothing -> do
                     liftIO $ putStrLn "Safe!!"
                     return ()
+
             return ()
     cegar typeMap0 0 []
 
