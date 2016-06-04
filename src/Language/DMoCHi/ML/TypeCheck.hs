@@ -91,8 +91,12 @@ convertE env ty _e = case _e of
         Assume ty v' <$> convertE env ty e
     U.Lambda x e -> do
         fdef <- convertLambda env x e ty
+        return $ Fun fdef
+        {-
         f <- Id ty <$> freshId "f"
         return $ Let ty f (LFun fdef) (Value (Var f))
+        -}
+                    
     U.Fail -> pure $ Fail ty
     U.Branch e1 e2 -> do
         i <- freshInt

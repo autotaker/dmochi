@@ -89,6 +89,7 @@ inlineE env (Let ty x lv e) = Let ty x <$> lv' <*> inlineE env e
         LFun fdef -> LFun <$> inlineF env fdef
         LExp l e0 -> LExp l <$> inlineE env e0
         LRand -> return LRand
+inlineE env (Fun fdef) = Fun <$> inlineF env fdef
 inlineE env (Assume ty v e) = Assume ty v <$> inlineE env e
 inlineE env (Fail ty) = return (Fail ty)
 inlineE env (Branch ty l e1 e2) = Branch ty l <$> inlineE env e1 <*> inlineE env e2
@@ -98,7 +99,6 @@ alphaId x = Id (getType x) <$> freshId (elim $ name x)
     where
     elim x = reverse $ dropWhile (=='_') $ dropWhile isDigit $ reverse x
 
--- 本来は変数名もリネームすべき！
 alphaLabel :: MonadId m => M.Map Id Id -> Exp -> m Exp
 alphaLabel = goE
     where
@@ -119,6 +119,9 @@ alphaLabel = goE
         Let ty x' lv' <$> goE (M.insert x x' env) e
     goE env (Assume ty v e) = Assume ty <$> goV env v <*> goE env e
     goE env (Fail ty) = pure $ Fail ty
+    goE env (Fun (FunDef _ y e0)) = do
+        y' <- alphaId y
+        Fun <$> (FunDef <$> freshInt <*> pure y' <*> goE (M.insert y y' env) e0)
     goE env (Branch ty _ e1 e2) =
         Branch ty <$> freshInt <*> goE env e1 <*> goE env e2
     goV env (Var x) = Var <$> rename env x
@@ -137,12 +140,13 @@ alphaLabel = goE
         OpSnd ty v  -> OpSnd ty <$> goV env v
         OpNot v -> OpNot <$> goV env v
 
+-- Let ty x (LExp l e0) でe0がstraight-line programの時にletのネストを潰す。
 simplify :: Exp -> Exp
 simplify (Value v) = Value v
 simplify (Let ty x (LExp l e0) e) = 
     let e0' = simplify e0
         e'  = simplify e
-    in case straight e0' (\v -> Let ty x (LValue v) e') of
+    in case straight e0' (\lv -> Let ty x lv e') of
         Just e'' -> e''
         Nothing  -> Let ty x (LExp l e0') e'
 simplify (Let ty x (LFun fdef) e) =
@@ -151,11 +155,13 @@ simplify (Let ty x (LFun fdef) e) =
 simplify (Let ty x lv e) = Let ty x lv (simplify e)
 simplify (Assume ty v e) = Assume ty v (simplify e)
 simplify (Fail ty) = Fail ty
+simplify (Fun fdef) = Fun fdef{ body = simplify $ body fdef }
 simplify (Branch ty l e1 e2) = Branch ty l (simplify e1) (simplify e2)
 
-straight :: Exp -> (Value -> Exp) -> Maybe Exp
-straight (Value v) cont = Just (cont v)
+straight :: Exp -> (LetValue -> Exp) -> Maybe Exp
+straight (Value v) cont = Just (cont (LValue v))
 straight (Let ty x lv e) cont = Let ty x lv <$> straight e cont
 straight (Assume ty v e) cont = Assume ty v <$> straight e cont
 straight (Fail ty) cont = Nothing
+straight (Fun fdef) cont = Just (cont (LFun fdef))
 straight (Branch _ _ _ _) cont = Nothing

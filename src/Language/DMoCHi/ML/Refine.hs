@@ -183,18 +183,17 @@ symbolicExec prog trace =
             c <- genClosure (CallId 0) fdef genv
             return (f,C c)
         return $ M.fromList es
-    -- n = length (functions prog)
     eval :: CallId -> Env -> ML.Exp -> M m (Maybe SValue)
     eval callSite env _e = case _e of
         ML.Value v -> do
             let sv = evalV env v 
-            -- when isTail (retval (ReturnInfo callSite arg sv))
             return $ Just sv
         ML.Let _ x lv e -> do
             r <- evalLV callSite env lv
             case r of
                 Just sv -> eval callSite (M.insert x sv env) e
                 Nothing -> return Nothing
+        ML.Fun fdef -> Just . C <$> genClosure callSite fdef env
         ML.Assume _ v e -> do
             constrain (evalV env v)
             eval callSite env e
@@ -560,6 +559,14 @@ refineCGen prog trace = do
                                 cs'  = Right (substLFormula (posName tau') x' (posCond tau')) : cs
                             check env' cs' callSite e tau
                         RPostTypeFailure -> return ()
+                ML.Fun fdef -> do
+                    case tau of
+                        RPostType _ rty cond -> do
+                            checkFunDef "fun" env cs callSite fdef (Just rty)
+                            clause cs cond
+                        RPostTypeFailure -> do
+                            let s = render $ ML.pprintF fdef
+                            error $ "This function " ++ s ++ " cannot have the refinement type" ++ show tau
                 ML.Assume _ v e -> do
                     let (_,sv) = evalRType env v
                     let cs' = Left sv : cs
@@ -740,6 +747,7 @@ extendEnv x v env = case ML.getType x of
         v1 = ML.Op (ML.OpFst t1 v)
         v2 = ML.Op (ML.OpSnd t2 v)
     ML.TFun _ _ -> env
+
 
 refine :: IM.IntMap [Id] -> [(Int,RType)] -> [(Int,RPostType)] -> [(Int,[Id],ML.Value)] -> PAbst.TypeMap -> PAbst.TypeMap
 refine fvMap rtyAssoc rpostAssoc subst typeMap = typeMap'' where
