@@ -73,6 +73,9 @@ let () =
                        TypEnv.pr env
                        HCCS.pr_verbose hcs;
                      hcs)
+                 |> List.map (HornClause.simplify_full [])
+                 |> List.map HornClause.normalize
+                 |> (fun hcs -> Format.printf "Simplified HCCS:@,  %a@," HCCS.pr_verbose hcs; hcs)
                  |> HCCSSolver.solve_dyn
                  |> PredSubst.normalize
                  |> (fun ans -> Format.printf "solution:@,  %a@," PredSubst.pr ans;ans)
