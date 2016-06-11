@@ -93,10 +93,11 @@ saturateTerm :: IOArray Id TTypeList -> M.Map VarId TTypeList -> M.Map VarId VTy
 saturateTerm flowTbl flowEnv env0 t0 = do
     updateList <- liftIO $ newIORef []
     let go env t = do
+            -- liftIO $ printf "go %s\n" (take 30 $ show t)
             tau <- calcTermTypeAux flowEnv go env t
             unless (isFail tau) $ do
                 tau' <- liftIO $ readArray flowTbl (termId t)
-                tau'' <- mergeTypeList tau tau'
+                tau'' <- {-# SCC "updateList/mergeTypeList" #-} mergeTypeList tau tau'
                 unless (tau'' === tau') $ liftIO $ do
                     writeArray flowTbl (termId t) tau'' 
                     modifyIORef updateList (termId t:)
@@ -120,6 +121,7 @@ calcTermTypeAux flowEnv go env _t = case _t of
         toFunType as >>= buildType . func >>= singleton
     App _ _ t1 t2 -> binOp applyType (go env t1) (go env t2)
     And _ t1 t2 -> binOp andType (go env t1) (go env t2)
+    Or  _ t1 t2 -> binOp orType  (go env t1) (go env t2)
     Not _ t -> uniOp notType (go env t)
     Let _ _ x t1 t2 -> do
         ty1 <- go env t1

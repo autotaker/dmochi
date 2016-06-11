@@ -2,6 +2,7 @@
 module Language.DMoCHi.Boolean.Flow2 where
 
 import qualified Data.Map as M
+import qualified Data.Set as S
 --import Control.Monad
 import Control.Monad.State
 import Control.Applicative
@@ -210,10 +211,17 @@ buildGraph (Typed.Program ds d0) = runST $ do
     lbls <- HT.toList (labelTable ctx)
     edges <- map fst <$> HT.toList (edgeTable ctx)
     n <- readSTRef (counter ctx) 
+    let globals = S.fromList $ map fst ds'
     let termTbl :: Array Id FlowTerm
         termTbl = array (0,n-1) lbls
         edgeTbl :: Array Id [Id]
-        edgeTbl = accumArray (flip (:)) [] (0,n-1) edges
+        edgeTbl = accumArray (flip (:)) [] (0,n-1) edges'
+        edges' = filter (\(s,t) -> 
+                            case termTbl ! s of
+                                V x | not (S.member x globals) -> True
+                                Dom _ _ _ -> True
+                                Cod _ _ _ -> True
+                                _ -> False) edges
 --        symMap :: M.Map Symbol Id
 --        symMap = M.fromList $ [ (name x,getId x)   | (_,V x) <- lbls ]
     return $ Program ds' d0' termTbl edgeTbl 
