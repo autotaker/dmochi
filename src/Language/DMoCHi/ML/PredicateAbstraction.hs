@@ -278,6 +278,11 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
             e2 <- abstFormulae cs pv (map (substVFormula r v) qs)
             return $ B.T [e1,e2]
 
+        ML.Fun fdef -> do
+            (e1,_) <- abstFunDef tbl env cs pv fdef (Just ty)
+            e2 <- abstFormulae cs pv qs
+            return $ B.T [e1,e2]
+
         ML.Let _ x (ML.LValue v) t' -> do
             let ty_x = typeOfValue env v
             ex <- abstValue env cs pv v ty_x
@@ -302,7 +307,7 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
                 abstTerm tbl (M.insert x ty_r'' env) cs pv' t' (r,ty,qs)
 
         ML.Let _ f (ML.LFun func) t' -> do
-            (e_f,ty_f) <- abstFunDef tbl env cs pv func
+            (e_f,ty_f) <- abstFunDef tbl env cs pv func Nothing
             B.f_let (toSymbol f ty_f) e_f <$> 
                 abstTerm tbl (M.insert f ty_f env) cs pv t' (r,ty,qs)
 
@@ -336,10 +341,13 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
 addEq :: ML.Id -> ML.Value -> Constraints -> Constraints
 addEq y v cs = ML.Op (ML.OpEq (ML.Var y) v):cs
 
-abstFunDef :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.FunDef -> m (B.Term, PType)
-abstFunDef tbl env cs pv func = do
+abstFunDef :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.FunDef -> Maybe PType -> m (B.Term, PType)
+abstFunDef tbl env cs pv func mpty = do
     let ML.FunDef ident x t1 = func
-    let Left ty_f@(PFun _ (y,ty_y,ps) rty) = tbl IM.! ident
+    let ty_f@(PFun _ (y,ty_y,ps) rty) = 
+            case mpty of
+                Just pty -> pty
+                Nothing -> let Left pty = tbl IM.! ident in pty
     x_pair <- B.freshSym (ML.name x ++ "_pair") (toSort' (y,ty_y,ps))
     e <- B.Lam x_pair <$> do
         let x_body  = B.f_proj 0 2 (B.V x_pair)
@@ -363,7 +371,7 @@ abstProg tbl (ML.Program fs t0) = do
     let env = M.fromList [ (f,ty)  | (f,func) <- fs, let Left ty = tbl IM.! ML.ident func ]
     ds <- forM fs $ \(f,func) -> do
         let f' = toSymbol f (env M.! f)
-        (e_f,_) <- abstFunDef tbl env [] [] func
+        (e_f,_) <- abstFunDef tbl env [] [] func (Just $ env M.! f)
         return (f',e_f)
     e0 <- do
         r <- ML.Id ML.TInt <$> freshId "main"
@@ -387,6 +395,10 @@ initTypeMap (ML.Program fs t0) = do
                 gather (x : fv) e
             gather fv (ML.Assume _ _ e) = gather fv e
             gather _ (ML.Fail _) = return ()
+            gather fv (ML.Fun fdef) = 
+                -- DO NOT count tail functions,
+                -- because their type are determined elsewhere
+                gather (ML.arg fdef : fv) (ML.body fdef)
             gather fv (ML.Branch _ _ e1 e2) = gather fv e1 >> gather fv e2
             gatherF fv f = do
                 gather (ML.arg f : fv) (ML.body f)

@@ -11,9 +11,9 @@ if [ $# -gt 0 ]; then
     TESTS="$@"
 fi
 
-DMOCHI=../dist/build/dmochi/dmochi
+DMOCHI=dmochi
 HIBOCH=hiboch
-TOHORS=../dist/build/tohors/tohors
+TOHORS=tohors
 
 HORSAT=../../horsat-1.01/horsat
 HORSAT2=../../horsat2-0.92/horsat2
@@ -37,16 +37,16 @@ do
     rm -f work/$testcase*
     cp ../sample/$testcase work/$testcase
     gtimeout $TIMEOUT $DMOCHI work/$testcase > log/$testcase.log
-    for bool in `find work -name "$testcase*.bool"`
-    do
-        bool=${bool#work/}
-        echo $bool
-        $TOHORS work/$bool > /dev/null
-        gtimeout $TIMEOUT $HIBOCH work/$bool > log/$bool.log
-        gtimeout $TIMEOUT $HIBOCH -t work/$bool > log/$bool.typed.log
-#        set +e
-        gtimeout $TIMEOUT $HORSAT  work/$bool.selective.horsat.hrs > log/$bool.horsat.log
-        gtimeout $TIMEOUT $HORSAT2 work/$bool.selective.horsat.hrs > log/$bool.horsat2.log
-#        set -e
-    done
+#    for bool in `find work -name "$testcase*.bool"`
+#    do
+#        bool=${bool#work/}
+#        echo $bool
+#        $TOHORS work/$bool > /dev/null
+#        gtimeout $TIMEOUT $HIBOCH work/$bool > log/$bool.log
+#        gtimeout $TIMEOUT $HIBOCH -t work/$bool > log/$bool.typed.log
+##        set +e
+##        gtimeout $TIMEOUT $HORSAT  work/$bool.selective.horsat.hrs > log/$bool.horsat.log
+##        gtimeout $TIMEOUT $HORSAT2 work/$bool.selective.horsat.hrs > log/$bool.horsat2.log
+##        set -e
+#    done
 done

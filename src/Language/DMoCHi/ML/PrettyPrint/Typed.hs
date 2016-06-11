@@ -2,6 +2,7 @@ module Language.DMoCHi.ML.PrettyPrint.Typed(pprintE
                            ,pprintT
                            ,pprintV
                            ,pprintP
+                           ,pprintF
                            ,pprintProgram
                            ,printProgram) where
 import Text.PrettyPrint
@@ -41,6 +42,7 @@ pprintE (Assume _ v e) =
 pprintE (Fail _) = text "Fail"
 pprintE (Branch _ i e1 e2) =
     parens (pprintE e1) $+$ text "<>" <+> text ("(*" ++ show i ++ "*)") $+$ parens (pprintE e2)
+pprintE (Fun fdef) = pprintF fdef
 
 pprintF :: FunDef -> Doc
 pprintF (FunDef i x e) = 

@@ -23,7 +23,8 @@ data Program = Program { functions :: [(Id,FunDef)]
 data Type = TInt | TBool | TPair Type Type | TFun Type Type deriving(Eq)
 
 data Exp = Value Value
-         | Let Type Id LetValue Exp
+         | Fun   FunDef
+         | Let Type Id LetValue Exp -- associated type is that of body exp
          | Assume Type Value Exp
          | Fail Type
          | Branch Type !Int Exp Exp
@@ -74,7 +75,7 @@ instance HasType Exp where
     getType (Value v) = getType v
     getType (Let a _ _ _) = a
     getType (Assume a _ _) = a
---    getType (Lambda a _ _ _) = a
+    getType (Fun fdef) = getType fdef
     getType (Fail a) = a
     getType (Branch a _ _ _) = a
 
@@ -198,7 +199,7 @@ size (Program fs t) = sum [ sizeE (body e) + 1 | (_,e) <- fs ] + sizeE t
 sizeE :: Exp -> Int
 sizeE (Value v)      = sizeV v
 sizeE (Let _ _ lv e)  = 1 + sizeLV lv + sizeE e
---sizeE (Lambda _ _ _ e) = 1 + sizeE e
+sizeE (Fun fdef) = 1 + sizeE (body fdef)
 sizeE (Assume _ v e) = 1 + sizeV v + sizeE e
 sizeE (Fail _)       = 1
 sizeE (Branch _ _ e1 e2) = 1 + sizeE e1 + sizeE e2
@@ -285,6 +286,7 @@ freeVariables :: S.Set Id -> Exp -> S.Set Id
 freeVariables = goE S.empty where
     goE :: S.Set Id -> S.Set Id -> Exp -> S.Set Id
     goE !acc env (Value v) = goV acc env v
+    goE !acc env (Fun fdef) = goE acc (S.insert (arg fdef) env) (body fdef)
     goE !acc env (Let _ x lv e) = goE (goLV acc env lv) (S.insert x env) e
     goE !acc env (Assume _ v e) = goE (goV acc env v) env e
     goE !acc _ (Fail _) = acc
