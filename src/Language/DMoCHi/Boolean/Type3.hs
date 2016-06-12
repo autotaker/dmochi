@@ -89,18 +89,13 @@ projType n tys = do
     t0 <- buildTypeList lnil
     foldM (\acc _t -> buildTypeList $ lcons _t acc) t0 sorted
 
-saturateTerm :: IOArray Id TTypeList -> M.Map VarId TTypeList -> M.Map VarId VType -> FlowTerm -> M (TTypeList,[Id])
+saturateTerm :: IOArray Id TTypeList -> M.Map VarId TTypeList -> M.Map VarId VType -> FlowTerm -> M (TTypeList,S.Set (Id,TTypeList))
 saturateTerm flowTbl flowEnv env0 t0 = do
-    updateList <- liftIO $ newIORef []
+    updateList <- liftIO $ newIORef $ S.empty
     let go env t = do
             -- liftIO $ printf "go %s\n" (take 30 $ show t)
             tau <- calcTermTypeAux flowEnv go env t
-            unless (isFail tau) $ do
-                tau' <- liftIO $ readArray flowTbl (termId t)
-                tau'' <- {-# SCC "updateList/mergeTypeList" #-} mergeTypeList tau tau'
-                unless (tau'' === tau') $ liftIO $ do
-                    writeArray flowTbl (termId t) tau'' 
-                    modifyIORef updateList (termId t:)
+            unless (isFail tau) $ liftIO $ modifyIORef updateList (S.insert (termId t, tau))
             return tau
     tau <- go env0 t0
     l <- liftIO $ readIORef updateList
@@ -153,9 +148,21 @@ calcTermTypeAux flowEnv go env _t = case _t of
         ty2 <- go env t2
         mergeTypeList ty1 ty2
 
-propagateFlow :: Array Id [Id] -> Array Id FlowTerm -> IOArray Id TTypeList -> [Id] -> M [VarId]
-propagateFlow cfg_inv termTbl flowTbl = go [] . S.fromList
+propagateFlow :: Array Id [Id] -> Array Id FlowTerm -> IOArray Id TTypeList -> S.Set (Id,TTypeList) -> M [VarId]
+propagateFlow cfg_inv termTbl flowTbl = init >=> go []
     where
+    init l = do
+        let l' = groupBy ((==) `on` fst) $ S.toList l
+        nodes <- forM l' $ \vs -> do
+            let v = fst $ head vs
+            tau <- liftIO $ readArray flowTbl v
+            tau' <- concatTypeList $ tau : map snd vs
+            if tau === tau' then
+                return []
+            else do
+                liftIO $ writeArray flowTbl v tau'
+                return [v]
+        return $ S.fromList $ concat nodes
     go updateList s | S.null s = return updateList
                     | otherwise = do
          let (v,s') = S.deleteFindMin s
@@ -459,7 +466,7 @@ saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where
                     printf "Updating the main term..."
             (tau,updateNodes) <- saturateTerm (flowTbl ctx) curFlowEnv (symEnv ctx) t
             let k env_acc' = do
-                    liftIO $ printf "Propagating flows for nodes %s..." (show updateNodes)
+                    liftIO $ printf "Propagating flows for nodes ... %d\n" $ S.size updateNodes
                     updateVars <- propagateFlow (cfg_inv ctx) termTbl (flowTbl ctx) updateNodes
                     liftIO $ printf "done.\n"
                     liftIO $ printf "Updated Variables are:\n" -- $ unwords $ map (show . pprintSym . name) updateVars

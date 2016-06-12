@@ -112,6 +112,10 @@ instance Eq TTypeList where
 --        tx1 === tx2 && ts1 === ts2
     _ == _ = False
 
+instance Ord TTypeList where
+    compare = compare `on` getId
+
+
 instance HasId TType where
     getId TFail = 0
     getId (TPrim x) = 1 + getId x
