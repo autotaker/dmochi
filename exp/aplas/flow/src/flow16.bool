@@ -1,0 +1,44 @@
+let bnot : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] -> [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] =
+  fun (x : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] ) -> 
+    (16 (not x.(0/16)) (not x.(1/16)) (not x.(2/16)) (not x.(3/16)) (not x.(4/16)) (not x.(5/16)) (not x.(6/16)) (not x.(7/16)) (not x.(8/16)) (not x.(9/16)) (not x.(10/16)) (not x.(11/16)) (not x.(12/16)) (not x.(13/16)) (not x.(14/16)) (not x.(15/16)));;
+let eq : Bool -> Bool -> Bool = 
+  fun (x : Bool) -> fun (y : Bool) -> 
+    x && y || (not x && not y) in
+
+let x : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] = 
+    (16 (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false)) in
+let y : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] = bnot x in
+
+assume x.(0/16) || not x.(0/16);
+assume x.(1/16) || not x.(1/16);
+assume x.(2/16) || not x.(2/16);
+assume x.(3/16) || not x.(3/16);
+assume x.(4/16) || not x.(4/16);
+assume x.(5/16) || not x.(5/16);
+assume x.(6/16) || not x.(6/16);
+assume x.(7/16) || not x.(7/16);
+assume x.(8/16) || not x.(8/16);
+assume x.(9/16) || not x.(9/16);
+assume x.(10/16) || not x.(10/16);
+assume x.(11/16) || not x.(11/16);
+assume x.(12/16) || not x.(12/16);
+assume x.(13/16) || not x.(13/16);
+assume x.(14/16) || not x.(14/16);
+assume x.(15/16) || not x.(15/16);
+assume eq x.(0/16) y.(0/16) || 
+       eq x.(1/16) y.(1/16) || 
+       eq x.(2/16) y.(2/16) || 
+       eq x.(3/16) y.(3/16) || 
+       eq x.(4/16) y.(4/16) || 
+       eq x.(5/16) y.(5/16) || 
+       eq x.(6/16) y.(6/16) || 
+       eq x.(7/16) y.(7/16) || 
+       eq x.(8/16) y.(8/16) || 
+       eq x.(9/16) y.(9/16) || 
+       eq x.(10/16) y.(10/16) || 
+       eq x.(11/16) y.(11/16) || 
+       eq x.(12/16) y.(12/16) || 
+       eq x.(13/16) y.(13/16) || 
+       eq x.(14/16) y.(14/16) || 
+       eq x.(15/16) y.(15/16);
+fail([]);;

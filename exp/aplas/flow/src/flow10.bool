@@ -1,0 +1,32 @@
+let bnot : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] -> [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] =
+  fun (x : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] ) -> 
+    (10 (not x.(0/10)) (not x.(1/10)) (not x.(2/10)) (not x.(3/10)) (not x.(4/10)) (not x.(5/10)) (not x.(6/10)) (not x.(7/10)) (not x.(8/10)) (not x.(9/10)));;
+let eq : Bool -> Bool -> Bool = 
+  fun (x : Bool) -> fun (y : Bool) -> 
+    x && y || (not x && not y) in
+
+let x : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] = 
+    (10 (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false) (true <> false)) in
+let y : [Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool,Bool] = bnot x in
+
+assume x.(0/10) || not x.(0/10);
+assume x.(1/10) || not x.(1/10);
+assume x.(2/10) || not x.(2/10);
+assume x.(3/10) || not x.(3/10);
+assume x.(4/10) || not x.(4/10);
+assume x.(5/10) || not x.(5/10);
+assume x.(6/10) || not x.(6/10);
+assume x.(7/10) || not x.(7/10);
+assume x.(8/10) || not x.(8/10);
+assume x.(9/10) || not x.(9/10);
+assume eq x.(0/10) y.(0/10) || 
+       eq x.(1/10) y.(1/10) || 
+       eq x.(2/10) y.(2/10) || 
+       eq x.(3/10) y.(3/10) || 
+       eq x.(4/10) y.(4/10) || 
+       eq x.(5/10) y.(5/10) || 
+       eq x.(6/10) y.(6/10) || 
+       eq x.(7/10) y.(7/10) || 
+       eq x.(8/10) y.(8/10) || 
+       eq x.(9/10) y.(9/10);
+fail([]);;
