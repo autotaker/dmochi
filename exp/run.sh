@@ -29,7 +29,6 @@ if [ ! -e log ]; then
 fi
 
 set -x
-# set -e
 
 for testcase in $TESTS
 do
@@ -37,16 +36,16 @@ do
     rm -f work/$testcase*
     cp ../sample/$testcase work/$testcase
     gtimeout $TIMEOUT $DMOCHI work/$testcase > log/$testcase.log
-#    for bool in `find work -name "$testcase*.bool"`
-#    do
-#        bool=${bool#work/}
-#        echo $bool
-#        $TOHORS work/$bool > /dev/null
-#        gtimeout $TIMEOUT $HIBOCH work/$bool > log/$bool.log
-#        gtimeout $TIMEOUT $HIBOCH -t work/$bool > log/$bool.typed.log
-##        set +e
-##        gtimeout $TIMEOUT $HORSAT  work/$bool.selective.horsat.hrs > log/$bool.horsat.log
-##        gtimeout $TIMEOUT $HORSAT2 work/$bool.selective.horsat.hrs > log/$bool.horsat2.log
-##        set -e
-#    done
+    if [ $BENCHMARK_BOOL ]; then
+        for bool in `find work -name "$testcase*.bool"`
+        do
+            bool=${bool#work/}
+            echo $bool
+            $TOHORS work/$bool > /dev/null
+            gtimeout $TIMEOUT $HIBOCH work/$bool > log/$bool.log
+            gtimeout $TIMEOUT $HIBOCH -t work/$bool > log/$bool.typed.log
+            gtimeout $TIMEOUT $HORSAT  work/$bool.selective.horsat.hrs > log/$bool.horsat.log
+            gtimeout $TIMEOUT $HORSAT2 work/$bool.selective.horsat.hrs > log/$bool.horsat2.log 
+        done
+    fi
 done
