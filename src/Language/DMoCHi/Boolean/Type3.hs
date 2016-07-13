@@ -21,6 +21,7 @@ import qualified Data.Graph as G
 import Control.Applicative
 import Text.Printf
 import Text.PrettyPrint hiding(empty)
+import qualified Data.Monoid
 
 
 type M a = ReaderT Factory IO a
@@ -246,11 +247,36 @@ initContext prog = do
                      , flowTbl = arr
                      , envHist = [] }
 
-data Value = VB Bool | Cls VarId FlowTerm VEnv FEnv TEnv | Tup [Value]
-
+data Value = VB Bool | Cls VarId FlowTerm VEnv FEnv TEnv | RFun VarId FlowTerm AEnv | Tup [Value]
 type VEnv = M.Map VarId Value
-type TEnv = M.Map VarId VType
+type TEnv = M.Map VarId VType 
+type AEnv = M.Map FunAssoc (VEnv,TEnv,FEnv)
 type FEnv = M.Map VarId TTypeList
+
+newtype FunAssoc = FunAssoc (VType,TType)
+
+instance Eq FunAssoc where
+    FunAssoc (a,c) == FunAssoc (b,d) = 
+        a === b && c === d
+
+instance Ord FunAssoc where
+    compare (FunAssoc (a,c)) (FunAssoc (b,d)) =
+        (compare `on` getId) a b Data.Monoid.<> (compare `on` getId) c d
+
+-- (fenv,tenv) \in hist <==> fenv is saturated for tenv
+extractCE :: Program -> FEnv -> TEnv -> [(FEnv,TEnv)] -> M [Bool]
+extractCE prog flowEnv genv hist = execWriterT $ evalFail env flowEnv genv (mainTerm prog)
+    where
+    env0 = M.fromList [ (f, RFun f t M.empty) | (f,t) <- definitions prog]
+    env = foldr (\((fenv, genv),genv') env -> 
+            fmap (\(RFun f t phi) ->
+                let tys = case genv' M.! f of VFun _ vf -> unfoldFun vf 
+                    phi' = foldl' (\acc ty -> 
+                                if M.member (FunAssoc ty) acc 
+                                    then acc 
+                                    else M.insert (FunAssoc ty) (env,genv,fenv) acc) phi tys
+                in RFun f t phi') env
+          ) env0 (zip hist (genv:map snd hist))
 
 eval :: VEnv -> FEnv -> TEnv -> FlowTerm -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
 eval env fenv tenv _e ety = case _e of
@@ -287,9 +313,14 @@ eval env fenv tenv _e ety = case _e of
                 guard $ b === TPrim ety
                 guard $ a `elem` ty2
                 return (vf,a)
-        (Cls x e0 env' fenv' tenv') <- eval env fenv tenv e1 ty1'
+        v1 <- eval env fenv tenv e1 ty1'
         v2 <- eval env fenv tenv e2 ty2'
-        eval (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0 ety
+        case v1 of
+            Cls x e0 env' fenv' tenv'  -> 
+                eval (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0 ety
+            RFun f (Lam _ x e0) phi -> do
+                let (env',tenv',fenv') = phi M.! (FunAssoc (ty2',TPrim ety))
+                eval (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0 ety
     Branch _ _ b e1 e2 -> do
         ty1 <- lift $ calcTermType fenv tenv e1
         ty2 <- lift $ calcTermType fenv tenv e2
@@ -402,9 +433,14 @@ evalFail env fenv tenv _e = case _e of
                         guard $ b === TFail
                         guard $ a `elem` ty2
                         return (vf,a)
-                Cls x e0 env' fenv' tenv' <- eval env fenv tenv e1 ty1'
+                v1 <- eval env fenv tenv e1 ty1'
                 v2 <- eval env fenv tenv e2 ty2'
-                evalFail (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0
+                case v1 of
+                    Cls x e0 env' fenv' tenv' ->
+                        evalFail (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0
+                    RFun f (Lam _ x e0) phi -> do
+                        let (env',tenv',fenv') = phi M.! (FunAssoc (ty2',TFail))
+                        evalFail (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0
     Fail _ -> return ()
     And _ e1 e2 -> do
         ty1 <- lift $ calcTermType fenv tenv e1
@@ -421,13 +457,6 @@ evalFail env fenv tenv _e = case _e of
             eval env fenv tenv e1 (head $ unfoldV ty1)
             evalFail env fenv tenv e2
     Not _ e -> evalFail env fenv tenv e
-
-extractCE :: Program -> FEnv -> TEnv -> [(FEnv,TEnv)] -> M [Bool]
-extractCE prog flowEnv genv hist = execWriterT $ evalFail env flowEnv genv (mainTerm prog)
-    where
-    env0 = M.fromList [ (f, Cls x (Omega undefined) M.empty M.empty M.empty) | (f,Lam _ x _) <- definitions prog]
-    env = foldr (\(fenv, genv) env -> 
-            M.fromList [ (f, Cls x e0 env fenv genv) | (f, Lam _ x e0) <- definitions prog ]) env0 hist
 
 saturate :: Program -> IO (Maybe [Bool])
 saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where

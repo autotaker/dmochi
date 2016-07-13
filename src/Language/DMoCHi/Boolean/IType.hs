@@ -19,6 +19,7 @@ data VType = VT Id
            | VTup Id ![VType]
            | VFun Id !VFunType
 
+-- sorted by descending order on Id
 data VFunType = VNil Id | VAnd Id !VType !TType !VFunType
 data TType = TPrim !VType | TFail
 data TTypeList = LNil Id | LFail Id 
