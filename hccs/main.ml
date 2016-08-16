@@ -40,9 +40,9 @@ let infer_constructor hcs =
 let () =
     begin
       FPATConfig.set_default ();
-      HCCSSolver.link_solver (GenHCCSSolver.solve (CHGenInterpProver.interpolate
+      HCCSSolver.link_dyn (GenHCCSSolver.solve (CHGenInterpProver.interpolate
       true));
-      InterpProver.ext_interpolate := InterpProver.interpolate_csisat_dyn;
+      InterpProver.link_dyn (InterpProver.interpolate_csisat_dyn);
       Format.printf "@[<v>";
       begin
         try
@@ -50,7 +50,7 @@ let () =
             (Arg.align FPATConfig.arg_spec)
             (fun filename ->
              Global.target_filename := filename;
-             SMTProver.open_ ();
+             SMTProver.initialize ();
              begin
                try
                  begin
@@ -97,7 +97,7 @@ let () =
                   Format.fprintf f "unknown.@\n!";
                   close_out channel
              end;
-             SMTProver.close ())
+             SMTProver.finalize ())
             FPATConfig.usage
         with
         | Not_found -> Arg.usage (Arg.align FPATConfig.arg_spec) FPATConfig.usage
