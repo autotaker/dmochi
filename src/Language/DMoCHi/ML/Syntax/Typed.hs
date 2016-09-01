@@ -27,13 +27,13 @@ data Exp = Value Value
          | Let Type Id LetValue Exp -- associated type is that of body exp
          | Assume Type Value Exp
          | Fail Type
-         | Branch Type !Int Exp Exp
+         | Branch Type !Int Exp Exp deriving(Eq,Show)
 
 data Value = Var Id
            | CInt  Integer
            | CBool Bool
            | Pair Value Value
-           | Op Op deriving(Eq)
+           | Op Op deriving(Eq,Show)
 
 data Op = OpAdd Value Value
         | OpSub Value Value
@@ -44,17 +44,19 @@ data Op = OpAdd Value Value
         | OpOr  Value Value
         | OpFst Type Value
         | OpSnd Type Value
-        | OpNot Value  deriving(Eq)
+        | OpNot Value  deriving(Eq,Show)
 
 data LetValue = LValue Value
               | LApp Type !Int Id Value
               | LFun FunDef
               | LExp !Int Exp 
               | LRand
+              deriving(Eq,Show)
 
 data FunDef = FunDef { ident :: !Int,
                        arg   :: Id,
                        body  :: Exp }
+                       deriving(Show, Eq)
 
 data PType = PInt  [Predicate]
            | PBool [Predicate]

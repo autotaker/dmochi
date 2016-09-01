@@ -1,4 +1,4 @@
-{-# Language BangPatterns #-} 
+{-# Language BangPatterns, TupleSections #-} 
 module Language.DMoCHi.ML.Inline where
 
 import Language.DMoCHi.ML.Syntax.Typed
@@ -12,8 +12,14 @@ import Data.Array
 import Text.Printf
 import Control.Monad.IO.Class
 import Data.Char(isDigit)
+import Debug.Trace
+import Language.DMoCHi.ML.PrettyPrint.Typed
+import Data.Function(fix)
 
 type InlineLimit = Int
+
+data IValue = IPair IValue IValue | INil | IFun FunDef deriving(Show)
+
 inline :: (MonadId m, MonadIO m) => InlineLimit -> Program -> m Program
 inline limit prog = doit
     where
@@ -62,37 +68,57 @@ inline limit prog = doit
         return $ Program fs' (simplify e0')
 
     go ((f,fdef):fs) !inlineEnv = do
-        fdef' <- inlineF inlineEnv fdef
+        fdef' <- fix (\loop fdef -> do
+            fdef' <- inlineF inlineEnv fdef
+            if fdef == fdef' then
+                return fdef
+            else loop fdef') fdef
         inlineEnv1 <- 
             if not (recursive f) && small fdef' then do
                 liftIO $ printf "Select %s as an inline function...\n" (name f)
-                return $ M.insert f fdef' inlineEnv
+                return $ M.insert f (IFun fdef') inlineEnv
             else return $ inlineEnv
         (fs',inlineEnv') <- go fs inlineEnv1
         return ((f, fdef') : fs', inlineEnv')
     go [] inlineEnv = return ([], inlineEnv)
 
+inlineF :: MonadId m => M.Map Id IValue -> FunDef -> m FunDef
 inlineF env (FunDef l x e) = FunDef l x . simplify <$> inlineE env e
 inlineE env (Value v) = return (Value v)
-inlineE env (Let ty x lv e) = Let ty x <$> lv' <*> inlineE env e
-    where
-    lv' = case lv of
-        LValue v -> return lv
+inlineE env (Let ty x lv e) = do
+    (lv',iv) <- case lv of
+        LValue v -> return (lv, eval env v)
         LApp ty0 l f v -> 
             case M.lookup f env of
-                Just (FunDef _ y e0) -> do
+                Just (IFun (FunDef _ y e0)) -> do
                     y'  <- alphaId y
                     e0' <- alphaLabel (M.singleton y y') e0
                     i   <- freshInt
-                    return $ LExp i $ Let ty0 y' (LValue v) e0'
-                Nothing -> return lv
-        LFun fdef -> LFun <$> inlineF env fdef
-        LExp l e0 -> LExp l <$> inlineE env e0
-        LRand -> return LRand
+                    return (LExp i $ Let ty0 y' (LValue v) e0', INil)
+                Just INil -> return (lv, INil)
+                Nothing -> return (lv, INil)
+        LFun fdef -> do
+            fdef' <- inlineF env fdef
+            return (LFun fdef', IFun fdef')
+        LExp l e0 -> (, INil) . LExp l <$> inlineE env e0
+        LRand -> return (LRand, INil)
+    Let ty x lv' <$> inlineE (M.insert x iv env) e
 inlineE env (Fun fdef) = Fun <$> inlineF env fdef
 inlineE env (Assume ty v e) = Assume ty v <$> inlineE env e
 inlineE env (Fail ty) = return (Fail ty)
 inlineE env (Branch ty l e1 e2) = Branch ty l <$> inlineE env e1 <*> inlineE env e2
+
+eval :: M.Map Id IValue -> Value -> IValue
+eval env (Var x) = case M.lookup x env of Just v -> v
+                                          Nothing -> INil
+eval env (Pair v1 v2) = IPair (eval env v1) (eval env v2)
+eval env (Op (OpFst _ v)) = case eval env v of IPair v1 _ -> v1
+                                               _ -> INil
+eval env (Op (OpSnd _ v)) = case eval env v of IPair _ v2 -> v2 
+                                               _ -> INil
+eval env (Op _) = INil
+eval env (CInt _) = INil
+eval env (CBool _) = INil
 
 alphaId :: MonadId m => Id -> m Id
 alphaId x = Id (getType x) <$> freshId (elim $ name x)
