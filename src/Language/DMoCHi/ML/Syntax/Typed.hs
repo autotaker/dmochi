@@ -4,7 +4,7 @@ import Text.PrettyPrint
 import Control.Monad
 --import Control.Applicative
 import Control.Monad.State
-import Data.Function(on)
+import Language.DMoCHi.Common.Util
 import qualified Data.Map as M
 import qualified Data.Set as S
 

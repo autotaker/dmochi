@@ -17,6 +17,7 @@ import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import Language.DMoCHi.ML.PrettyPrint.UnTyped
 import Language.DMoCHi.ML.Alpha
 import qualified Language.DMoCHi.ML.Inline  as Inline
+import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.PrettyPrint.Typed as Typed
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import Language.DMoCHi.Boolean.Test 
@@ -93,9 +94,12 @@ doit = do
 
     -- inlining
     liftIO $ putStrLn "Inlined Program"
-    typedProgram <- Inline.inline 1000 _typedProgram
-    liftIO $ Typed.printProgram typedProgram
+    typedProgram' <- Inline.inline 1000 _typedProgram
+    liftIO $ Typed.printProgram typedProgram'
 
+    liftIO $ putStrLn "Unreachable Code Elimination"
+    typedProgram <- return $ Unreachable.elimUnreachable typedProgram'
+    liftIO $ Typed.printProgram typedProgram
 
     (typeMap0, fvMap) <- PAbst.initTypeMap typedProgram
     let lim = 20 :: Int

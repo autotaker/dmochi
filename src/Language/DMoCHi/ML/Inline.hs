@@ -3,6 +3,7 @@ module Language.DMoCHi.ML.Inline where
 
 import Language.DMoCHi.ML.Syntax.Typed
 import Language.DMoCHi.Common.Id
+import Language.DMoCHi.Common.Util
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.Graph
@@ -14,7 +15,6 @@ import Control.Monad.IO.Class
 import Data.Char(isDigit)
 import Debug.Trace
 import Language.DMoCHi.ML.PrettyPrint.Typed
-import Data.Function(fix)
 
 type InlineLimit = Int
 
@@ -64,15 +64,20 @@ inline limit prog = doit
     doit = do
         let fs = [ funcTbl ! v | v <- reverse $ topSort depG' ]
         (fs', inlineEnv) <- go fs M.empty
-        e0' <- inlineE inlineEnv (mainTerm prog)
+        e0' <- rec (mainTerm prog) $ \loop e0 -> do
+            e0' <- inlineE inlineEnv e0 >>= return . elimIndirection M.empty . elimRedundantE
+            if e0 == e0' then
+                return e0
+            else loop e0'
         return $ Program fs' (simplify e0')
 
+
     go ((f,fdef):fs) !inlineEnv = do
-        fdef' <- fix (\loop fdef -> do
-            fdef' <- inlineF inlineEnv fdef >>= return . elimRedundantF
+        fdef' <- rec fdef $ \loop fdef -> do
+            fdef' <- inlineF inlineEnv fdef >>= return . elimIndirectionF M.empty . elimRedundantF
             if fdef == fdef' then
                 return fdef
-            else loop fdef') fdef
+            else loop fdef'
         inlineEnv1 <- 
             if not (recursive f) && small fdef' then do
                 liftIO $ printf "Select %s as an inline function...\n" (name f)
@@ -82,30 +87,7 @@ inline limit prog = doit
         return ((f, fdef') : fs', inlineEnv')
     go [] inlineEnv = return ([], inlineEnv)
 
--- redundant let-expression elimination
-elimRedundantF :: FunDef -> FunDef
-elimRedundantF (FunDef l x e) = FunDef l x (elimRedundantE e)
-
-elimRedundantE (Value v) = Value v
-elimRedundantE (Fun fdef) = Fun (elimRedundantF fdef)
-elimRedundantE (Let ty x lv e) | redundant = e'
-                               | otherwise = Let ty x lv' e'
-    where
-    e' = elimRedundantE e
-    fv = freeVariables S.empty e'
-    redundant = atomic && S.notMember x fv
-    (lv', atomic) = case lv of
-        LValue v -> (LValue v, True)
-        LFun fdef -> (LFun (elimRedundantF fdef), True)
-        LExp l e1 -> (LExp l (elimRedundantE e1), False)
-        LApp _ _ _ _ -> (lv, False)
-        LRand -> (lv, False)
-elimRedundantE (Assume ty v e) = Assume ty v (elimRedundantE e)
-elimRedundantE (Fail ty) = Fail ty
-elimRedundantE (Branch ty l e1 e2) = Branch ty l (elimRedundantE e1) (elimRedundantE e2)
     
-    
-
 inlineF :: MonadId m => M.Map Id IValue -> FunDef -> m FunDef
 inlineF env (FunDef l x e) = FunDef l x . simplify <$> inlineE env e
 inlineE env (Value v) = return (Value v)
@@ -215,3 +197,69 @@ straight (Assume ty v e) cont = Assume ty v <$> straight e cont
 straight (Fail ty) cont = Nothing
 straight (Fun fdef) cont = Just (cont (LFun fdef))
 straight (Branch _ _ _ _) cont = Nothing
+
+-- redundant let-expression elimination
+elimRedundantF :: FunDef -> FunDef
+elimRedundantF (FunDef l x e) = FunDef l x (elimRedundantE e)
+
+elimRedundantE (Value v) = Value v
+elimRedundantE (Fun fdef) = Fun (elimRedundantF fdef)
+elimRedundantE (Let ty x lv e) | redundant = e'
+                               | otherwise = Let ty x lv' e'
+    where
+    e' = elimRedundantE e
+    fv = freeVariables S.empty e'
+    redundant = atomic && S.notMember x fv
+    (lv', atomic) = case lv of
+        LValue v -> (LValue v, True)
+        LFun fdef -> (LFun (elimRedundantF fdef), True)
+        LExp l e1 -> (LExp l (elimRedundantE e1), False)
+        LApp _ _ _ _ -> (lv, False)
+        LRand -> (lv, False)
+elimRedundantE (Assume ty v e) = Assume ty v (elimRedundantE e)
+elimRedundantE (Fail ty) = Fail ty
+elimRedundantE (Branch ty l e1 e2) = Branch ty l (elimRedundantE e1) (elimRedundantE e2)
+
+elimIndirectionF :: M.Map Id Id -> FunDef -> FunDef
+elimIndirectionF env (FunDef l x e) = FunDef l x (elimIndirection env e)
+elimIndirection :: M.Map Id Id -> Exp -> Exp
+elimIndirection env (Value v) = Value $ renameV env v
+elimIndirection env (Fun fdef) = Fun (elimIndirectionF env fdef)
+elimIndirection env (Let ty x (LValue (Var y)) e) = elimIndirection (M.insert x y env) e
+elimIndirection env (Let ty x lv e) = Let ty x lv' e' where
+    lv' = case lv of
+        LValue v -> LValue (renameV env v)
+        LApp ty l f v -> LApp ty l (rename env f) (renameV env v)
+        LFun fdef -> LFun (elimIndirectionF env fdef)
+        LExp l e -> LExp l (elimIndirection env e)
+        LRand -> LRand
+    e' = elimIndirection env e
+elimIndirection env (Assume ty v e) = Assume ty (renameV env v) (elimIndirection env e)
+elimIndirection env (Fail ty) = Fail ty
+elimIndirection env (Branch ty l e1 e2) = 
+    Branch ty l (elimIndirection env e1) (elimIndirection env e2)
+
+rename :: M.Map Id Id -> Id -> Id
+rename env f = 
+    case M.lookup f env of 
+        Just g -> g 
+        Nothing -> f
+
+renameV :: M.Map Id Id -> Value -> Value
+renameV env = go
+    where 
+    go (Var x) = Var (rename env x)
+    go (CInt i) = CInt i
+    go (CBool b) = CBool b
+    go (Pair v1 v2) = Pair (go v1) (go v2)
+    go (Op op) = Op $ goOp op
+    goOp (OpAdd v1 v2) = OpAdd (go v1) (go v2)
+    goOp (OpSub v1 v2) = OpSub (go v1) (go v2)
+    goOp (OpEq v1 v2) = OpEq (go v1) (go v2)
+    goOp (OpLt v1 v2) = OpLt (go v1) (go v2)
+    goOp (OpLte v1 v2) = OpLte (go v1) (go v2)
+    goOp (OpAnd v1 v2) = OpAnd (go v1) (go v2)
+    goOp (OpOr v1 v2) = OpOr (go v1) (go v2)
+    goOp (OpFst ty v) = OpFst ty (go v)
+    goOp (OpSnd ty v) = OpSnd ty (go v)
+    goOp (OpNot v) = OpNot (go v)

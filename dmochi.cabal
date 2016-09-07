@@ -43,6 +43,7 @@ library
                        Language.DMoCHi.ML.Test
   other-modules:       Language.DMoCHi.Common.Heap,
                        Language.DMoCHi.Common.Id,
+                       Language.DMoCHi.Common.Util,
                        Language.DMoCHi.Boolean.Alpha,
                        Language.DMoCHi.Boolean.PrettyPrint.Typed,
                        Language.DMoCHi.Boolean.PrettyPrint.HORS,
@@ -58,6 +59,7 @@ library
                        Language.DMoCHi.ML.TypeCheck,
                        Language.DMoCHi.ML.Refine,
                        Language.DMoCHi.ML.Inline,
+                       Language.DMoCHi.ML.ElimUnreachable,
                        Language.DMoCHi.ML.HornClause,
                        Language.DMoCHi.ML.HornClauseParser,
                        Language.DMoCHi.Boolean.HORS2,
