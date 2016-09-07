@@ -19,6 +19,8 @@ data PType = PInt | PBool
            | PFun ML.Type (ML.Id,PType,[Formula]) (ML.Id,PType,[Formula])
            | PPair ML.Type PType PType
 
+type InlinedPType = Either PType ML.FunDef
+
 instance Eq PType where
     PInt == PInt = True
     PBool == PBool = True
@@ -33,7 +35,7 @@ instance Eq PType where
     _ == _ = False
 
 
-type Env = M.Map ML.Id PType
+type Env = M.Map ML.Id PType --InlinedPType
 type Constraints = [Formula]
 type PVar = [(B.Term, Formula)]
 type Formula = ML.Value

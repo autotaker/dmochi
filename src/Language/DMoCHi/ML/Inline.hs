@@ -69,7 +69,7 @@ inline limit prog = doit
 
     go ((f,fdef):fs) !inlineEnv = do
         fdef' <- fix (\loop fdef -> do
-            fdef' <- inlineF inlineEnv fdef
+            fdef' <- inlineF inlineEnv fdef >>= return . elimRedundantF
             if fdef == fdef' then
                 return fdef
             else loop fdef') fdef
@@ -81,6 +81,30 @@ inline limit prog = doit
         (fs',inlineEnv') <- go fs inlineEnv1
         return ((f, fdef') : fs', inlineEnv')
     go [] inlineEnv = return ([], inlineEnv)
+
+-- redundant let-expression elimination
+elimRedundantF :: FunDef -> FunDef
+elimRedundantF (FunDef l x e) = FunDef l x (elimRedundantE e)
+
+elimRedundantE (Value v) = Value v
+elimRedundantE (Fun fdef) = Fun (elimRedundantF fdef)
+elimRedundantE (Let ty x lv e) | redundant = e'
+                               | otherwise = Let ty x lv' e'
+    where
+    e' = elimRedundantE e
+    fv = freeVariables S.empty e'
+    redundant = atomic && S.notMember x fv
+    (lv', atomic) = case lv of
+        LValue v -> (LValue v, True)
+        LFun fdef -> (LFun (elimRedundantF fdef), True)
+        LExp l e1 -> (LExp l (elimRedundantE e1), False)
+        LApp _ _ _ _ -> (lv, False)
+        LRand -> (lv, False)
+elimRedundantE (Assume ty v e) = Assume ty v (elimRedundantE e)
+elimRedundantE (Fail ty) = Fail ty
+elimRedundantE (Branch ty l e1 e2) = Branch ty l (elimRedundantE e1) (elimRedundantE e2)
+    
+    
 
 inlineF :: MonadId m => M.Map Id IValue -> FunDef -> m FunDef
 inlineF env (FunDef l x e) = FunDef l x . simplify <$> inlineE env e
