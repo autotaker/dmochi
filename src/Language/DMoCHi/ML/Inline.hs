@@ -65,11 +65,11 @@ inline limit prog = doit
         let fs = [ funcTbl ! v | v <- reverse $ topSort depG' ]
         (fs', inlineEnv) <- go fs M.empty
         e0' <- rec (mainTerm prog) $ \loop e0 -> do
-            e0' <- inlineE inlineEnv e0 >>= return . elimIndirection M.empty . elimRedundantE
+            e0' <- inlineE inlineEnv e0 >>= return . elimIndirection M.empty . elimRedundantE . simplify
             if e0 == e0' then
                 return e0
             else loop e0'
-        return $ Program fs' (simplify e0')
+        return $ Program fs' e0'
 
 
     go ((f,fdef):fs) !inlineEnv = do

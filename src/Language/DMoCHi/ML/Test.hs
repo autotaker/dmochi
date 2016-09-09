@@ -20,6 +20,8 @@ import qualified Language.DMoCHi.ML.Inline  as Inline
 import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.PrettyPrint.Typed as Typed
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
+import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
+import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as PNormal
 import Language.DMoCHi.Boolean.Test 
 import Control.Monad.Except
 import Text.Parsec(ParseError)
@@ -36,6 +38,7 @@ data MainError = NoInputSpecified
                | ParseFailed ParseError
                | AlphaFailed AlphaError
                | IllTyped Typed.TypeError 
+               | Debugging
                | BooleanError String
 
 instance Show MainError where
@@ -44,6 +47,7 @@ instance Show MainError where
     show (AlphaFailed err) = "AlphaFailed: " ++ show err
     show (IllTyped err)    = "IllTyped: " ++ show err
     show (BooleanError s) = "Boolean: " ++ s
+    show Debugging = "Debugging"
 
 getHCCSSolver :: IO FilePath
 getHCCSSolver = Paths_dmochi.getDataFileName "hcsolver"
@@ -97,9 +101,18 @@ doit = do
     typedProgram' <- Inline.inline 1000 _typedProgram
     liftIO $ Typed.printProgram typedProgram'
 
+    -- unreachable code elimination
     liftIO $ putStrLn "Unreachable Code Elimination"
     typedProgram <- return $ Unreachable.elimUnreachable typedProgram'
     liftIO $ Typed.printProgram typedProgram
+
+    -- normalizing
+    liftIO $ putStrLn "Normalizing"
+    normalizedProgram<- PNormal.normalize typedProgram
+    liftIO $ PNormal.printProgram normalizedProgram
+
+    throwError Debugging
+
 
     (typeMap0, fvMap) <- PAbst.initTypeMap typedProgram
     let lim = 20 :: Int

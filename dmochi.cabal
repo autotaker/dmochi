@@ -29,6 +29,7 @@ library
                        Language.DMoCHi.ML.Syntax.Type,
                        Language.DMoCHi.ML.Syntax.PNormal,
                        Language.DMoCHi.ML.PrettyPrint.Typed,
+                       Language.DMoCHi.ML.PrettyPrint.PNormal,
                        Language.DMoCHi.ML.SMT,
                        Language.DMoCHi.Boolean.Flow,
                        Language.DMoCHi.Boolean.Flow2,

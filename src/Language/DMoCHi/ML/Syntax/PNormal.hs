@@ -2,6 +2,7 @@
 module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , Exp(..)
                                         , Value(..)
+                                        , AValue(..)
                                         , Op(..)
                                         , LetValue(..)
                                         , FunDef(..)
@@ -278,15 +279,27 @@ normalize prog = do
     where
     convertE :: MonadId m => M.Map Id Value -> Typed.Exp -> m Exp
     convertE env (Typed.Value v) = Value <$> convertV env v
+    convertE env (Typed.Fun fdef) = Value . Fun <$> convertF env fdef
     convertE env (Typed.Let ty x lv e) = case lv of
         Typed.LValue v -> do
             v' <- convertV env v
             case v' of
+                Atomic (Var y) -> convertE (M.insert x v' env) e
                 Atomic av -> Let ty x (LValue av) <$> convertE env e
                 _ -> convertE (M.insert x v' env) e
         Typed.LApp ty' l f v -> do
             v' <- convertV env v
+            case M.lookup f env of
+                Just (Atomic (Var g)) ->
+                    Let ty x (LApp ty' l f v') <$> convertE env e
+                Just v -> error $ "Unexpected function value for function call: " ++ show v
+                Nothing -> 
+                    Let ty x (LApp ty' l f v') <$> convertE env e
+
             Let ty x (LApp ty' l f v') <$> convertE env e
+        Typed.LFun fdef -> do
+            fdef' <- convertF env fdef
+            convertE (M.insert x (Fun fdef') env) e
         Typed.LExp l e1 -> do
             e1' <- convertE env e1
             Let ty x (LExp l e1') <$> convertE env e
