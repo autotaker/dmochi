@@ -1,23 +1,28 @@
 {-# LANGUAGE FlexibleContexts, BangPatterns #-}
-module Language.DMoCHi.ML.Syntax.Typed where
-import Text.PrettyPrint
+module Language.DMoCHi.ML.Syntax.Typed( Program(..)
+                                      , Exp(..)
+                                      , Value(..)
+                                      , Op(..)
+                                      , LetValue(..)
+                                      , FunDef(..)
+                                      , substV
+                                      , evalV
+                                      , size
+                                      , sizeE
+                                      , sizeV
+                                      , sizeLV
+                                      , freeVariables
+                                      , module Language.DMoCHi.ML.Syntax.Type
+                                      ) where
 import Control.Monad
 import Control.Monad.State
 import Language.DMoCHi.Common.Util
 import qualified Data.Map as M
 import qualified Data.Set as S
-
-data Id = Id { _type :: Type, name :: String } deriving(Show)
-
-instance Eq Id where
-    (==) = (==) `on` name
-
-instance Ord Id where
-    compare = compare `on` name
+import Language.DMoCHi.ML.Syntax.Type
 
 data Program = Program { functions :: [(Id,FunDef)] 
                        , mainTerm  :: Exp }
-data Type = TInt | TBool | TPair Type Type | TFun Type Type deriving(Eq)
 
 data Exp = Value Value
          | Fun   FunDef
@@ -55,11 +60,6 @@ data FunDef = FunDef { ident :: !Int,
                        body  :: Exp }
                        deriving(Show, Eq)
 
-class HasType m where
-    getType :: m -> Type
-
-instance HasType Id where
-    getType = _type
 
 instance HasType Exp where
     getType (Value v) = getType v
@@ -94,8 +94,6 @@ instance HasType Op where
     getType (OpNot _)   = TBool
     getType (OpFst a _)   = a
     getType (OpSnd a _)   = a
-
-
 
 instance HasType FunDef where
     getType e = TFun (getType (arg e)) (getType (body e))
@@ -175,28 +173,7 @@ sizeLV (LFun e) = sizeE (body e) + 1
 sizeLV LRand = 1
 
 
-orderT :: Type -> Int
-orderT TInt = 0
-orderT TBool = 0
-orderT (TPair t1 t2) = max (orderT t1) (orderT t2)
-orderT (TFun t1 t2)  = max (orderT t1+1) (orderT t2)
 
-pprintT :: Int -> Type -> Doc
-pprintT _ TInt = text "int"
-pprintT _ TBool = text "bool"
-pprintT assoc (TPair t1 t2) =
-    let d1 = pprintT 1 t1
-        d2 = pprintT 1 t2
-        d  = d1 <+> text "*" <+> d2
-    in if assoc <= 0 then d else parens d
-pprintT assoc (TFun t1 t2) =
-    let d1 = pprintT 1 t1
-        d2 = pprintT 0 t2
-        d  = d1 <+> text "->" <+> d2
-    in if assoc == 0 then d else parens d
-
-instance Show Type where
-    show = render . pprintT 0
 
 freeVariables :: S.Set Id -> Exp -> S.Set Id
 freeVariables = goE S.empty where
