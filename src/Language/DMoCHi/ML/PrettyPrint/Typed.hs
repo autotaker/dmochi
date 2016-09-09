@@ -1,7 +1,6 @@
 module Language.DMoCHi.ML.PrettyPrint.Typed(pprintE
                            ,pprintT
                            ,pprintV
-                           ,pprintP
                            ,pprintF
                            ,pprintProgram
                            ,printProgram) where
@@ -73,24 +72,7 @@ pprintV assoc (Op op) | assoc <= assoc' =  op'
         OpSnd _ v1 -> f v1 <> text ".snd"
     
 
-pprintPSub :: String -> [Predicate] -> Doc
-pprintPSub tname ps = 
-    let f (x,v) = text (name x) <> text "." <> pprintV 0 v in
-    text tname <> (brackets $ hsep $ punctuate semi $ map f ps)
         
-pprintP :: Int -> PType -> Doc
-pprintP _ (PInt ps) = pprintPSub "int" ps
-pprintP _ (PBool ps) = pprintPSub "bool" ps
-pprintP assoc (PPair _ p (x,f)) = 
-    let dp = pprintP 1 p in
-    let df = pprintP 1 f in
-    let d = text (name x) <+> colon <+> dp <+> text "*" <+> df in
-    if assoc == 0 then d else parens d
-pprintP assoc (PFun _ p (x,f)) = 
-    let dp = pprintP 1 p in
-    let df = pprintP 0 f in
-    let d = text (name x) <+> colon <+> dp <+> text "->" <+> df in
-    if assoc == 0 then d else parens d
 
 pprintProgram :: Program -> Doc
 pprintProgram (Program fs t) =

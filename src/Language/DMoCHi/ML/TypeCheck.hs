@@ -24,10 +24,9 @@ data TypeError = UndefinedVariable String
 fromUnTyped :: (Applicative m,MonadError TypeError m, MonadId m) => U.Program -> m Program
 fromUnTyped (U.Program fs t) = do
     fs' <- mapM (\(x,p,e) -> (,,) x <$> convertP p <*> pure e) fs
-    let tenv = M.fromList [ (x,getType p) | (x,p,_) <- fs' ]
-    fs'' <- forM fs' $ \(x,p,U.Lambda y e) -> do
-        let x' = Id (getType p) x
-            ty = getType p
+    let tenv = M.fromList [ (x,ty) | (x,ty,_) <- fs' ]
+    fs'' <- forM fs' $ \(x,ty,U.Lambda y e) -> do
+        let x' = Id ty x
         fdef <- convertLambda tenv y e ty
         return (x',fdef) 
     Program fs'' <$> convertE tenv TInt t
@@ -54,25 +53,23 @@ shouldBePair :: MonadError TypeError m => String -> Type -> m (Type,Type)
 shouldBePair _ (TPair t1 t2) = return (t1,t2)
 shouldBePair s _ = throwError (OtherError $ "expecting pair :" ++ s)
 
-convertP :: (Applicative m,MonadError TypeError m) => U.PType -> m PType
+convertP :: (Applicative m,MonadError TypeError m) => U.PType -> m Type
 convertP = go M.empty where
     base f env ty ps = 
         f <$> mapM (\(x,p) -> do
             p' <- convertV (M.insert x ty env) p
             shouldBeValue p' TBool
             return (Id ty x,p')) ps
-    go env (U.PInt ps) = base PInt env TInt ps
-    go env (U.PBool ps) = base PBool env TBool ps
+    go env (U.PInt ps) = base (const TInt) env TInt ps
+    go env (U.PBool ps) = base (const TBool) env TBool ps
     go env (U.PPair p (x,f)) =  do
-        p' <- go env p
-        let ty = getType p'
-        f' <- go (M.insert x ty env) f
-        return $ PPair (TPair ty (getType f')) p' (Id ty x,f')
+        ty1 <- go env p
+        ty2 <- go (M.insert x ty1 env) f
+        return (TPair ty1 ty2)
     go env (U.PFun p (x,f)) = do
-        p' <- go env p
-        let ty = getType p'
-        f' <- go (M.insert x ty env) f
-        return $ PFun (TFun ty (getType f')) p' (Id ty x,f')
+        ty1 <- go env p
+        ty2 <- go (M.insert x ty1 env) f
+        return (TFun ty1 ty2)
 
 convertE :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> Type -> U.Exp -> m Exp
 convertE env ty _e = case _e of
@@ -138,13 +135,13 @@ convertLV env lv = case lv of
                 return $ (LApp ty' (last is) yn vn,l)
             Nothing -> throwError $ UndefinedVariable f
     U.LExp ptyp (U.Lambda x e) -> do
-        ptyp' <- convertP ptyp
-        fdef <- convertLambda env x e (getType ptyp')
+        ty <- convertP ptyp
+        fdef <- convertLambda env x e ty
         return (LFun fdef,[])
     U.LExp ptyp e -> do
-        ptyp' <- convertP ptyp
+        ty <- convertP ptyp
         i <- freshInt
-        lv <- LExp i <$> convertE env (getType ptyp') e
+        lv <- LExp i <$> convertE env ty e
         return (lv,[])
                 
 

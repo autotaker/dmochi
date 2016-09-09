@@ -2,7 +2,6 @@
 module Language.DMoCHi.ML.Syntax.Typed where
 import Text.PrettyPrint
 import Control.Monad
---import Control.Applicative
 import Control.Monad.State
 import Language.DMoCHi.Common.Util
 import qualified Data.Map as M
@@ -16,8 +15,6 @@ instance Eq Id where
 instance Ord Id where
     compare = compare `on` name
 
-
-type Predicate = (Id,Value)
 data Program = Program { functions :: [(Id,FunDef)] 
                        , mainTerm  :: Exp }
 data Type = TInt | TBool | TPair Type Type | TFun Type Type deriving(Eq)
@@ -57,15 +54,6 @@ data FunDef = FunDef { ident :: !Int,
                        arg   :: Id,
                        body  :: Exp }
                        deriving(Show, Eq)
-
-data PType = PInt  [Predicate]
-           | PBool [Predicate]
-           | PPair Type PType (Id,PType) 
-           | PFun  Type PType (Id,PType) deriving(Eq)
-
-data PType' = PInt' | PBool'
-            | PFun' Type (Id,PType',[Predicate]) (PType',[Predicate])
-            | PPair' Type PType' PType'
 
 class HasType m where
     getType :: m -> Type
@@ -107,17 +95,7 @@ instance HasType Op where
     getType (OpFst a _)   = a
     getType (OpSnd a _)   = a
 
-instance HasType PType where
-    getType (PInt _) = TInt
-    getType (PBool _) = TBool
-    getType (PPair t _ _) = t
-    getType (PFun t _ _) = t
 
-instance HasType PType' where
-    getType (PInt') = TInt
-    getType (PBool') = TBool
-    getType (PPair' t _ _) = t
-    getType (PFun' t _ _) = t
 
 instance HasType FunDef where
     getType e = TFun (getType (arg e)) (getType (body e))
@@ -158,42 +136,6 @@ evalV env = go where
     go (CBool b) = CBool b
     go (Pair v1 v2) = Pair (go v1) (go v2)
 
-substPType :: Id -> Value -> PType -> PType
-substPType x v = go where
-    go (PInt  ps) = PInt (map (\(y,w) -> (y,substV x v w)) ps)
-    go (PBool ps) = PBool (map (\(y,w) -> (y,substV x v w)) ps)
-    go (PPair ty p1 (y,p2)) = PPair ty (go p1) (y,go p2)
-    go (PFun  ty p1 (y,p2)) = PFun ty (go p1) (y,go p2)
-
-fromPType :: PType -> PType'
-fromPType (PInt _) = PInt'
-fromPType (PBool _) = PBool'
-fromPType (PFun ty pty (x,rty)) = PFun' ty (x,pty',ps) (rty',qs)
-    where
-        pty' = fromPType pty
-        rty' = fromPType rty
-        ps = case pty of
-            PInt ps -> ps
-            PBool ps -> ps
-            _ -> []
-        qs = case rty of
-            PInt ps -> ps
-            PBool ps -> ps
-            _ -> []
-
-toPType :: PType' -> PType
-toPType PInt' = PInt []
-toPType PBool' = PBool []
-toPType (PFun' ty (x,pty,ps) (rty,qs)) = PFun ty pty' (x,rty') 
-    where
-    pty' = case pty of
-        PInt' -> PInt ps
-        PBool' -> PBool ps
-        _ -> toPType pty
-    rty' = case rty of
-        PInt' -> PInt qs
-        PBool' -> PBool qs
-        _ -> toPType rty
 
 size :: Program -> Int
 size (Program fs t) = sum [ sizeE (body e) + 1 | (_,e) <- fs ] + sizeE t
@@ -232,34 +174,6 @@ sizeLV (LExp _ e) = sizeE e
 sizeLV (LFun e) = sizeE (body e) + 1
 sizeLV LRand = 1
 
-pushType :: PType -> State [PType] ()
-pushType = modify . (:)
-
-{-
-gatherPTypes :: Program -> [PType]
-gatherPTypes (Program fs t) = execState doit [] where
-    doit = do
-        forM_ fs $ \(_,ty,e) -> pushType ty >> gatherTypesE e
-        gatherTypesE t
-
-gatherTypesE :: Exp -> State [PType] ()
-gatherTypesE (Value _) = return ()
-gatherTypesE (Let _ _ lv e) = do
-    case lv of 
-        LExp ty e' -> pushType ty >> gatherTypesE e'
-        _ -> return ()
-    gatherTypesE e
-gatherTypesE (Assume _ _ e) = gatherTypesE e
-gatherTypesE (Lambda _ _ _ e) = gatherTypesE e
-gatherTypesE (Fail _) = return ()
-gatherTypesE (Branch _ _ e1 e2) = gatherTypesE e1 >> gatherTypesE e2
--}
-
-sizeP :: PType -> Int
-sizeP (PInt xs)     = length xs
-sizeP (PBool xs)    = length xs
-sizeP (PPair _ x1 (_,x2)) = sizeP x1 + sizeP x2
-sizeP (PFun  _ x1 (_,x2)) = sizeP x1 + sizeP x2
 
 orderT :: Type -> Int
 orderT TInt = 0
