@@ -5,10 +5,10 @@ import Text.Parsec.Expr
 import Text.Parsec.Language(emptyDef)
 import Text.Parsec.String
 import Control.Applicative hiding((<|>),many,optional)
-import Language.DMoCHi.ML.Syntax.Typed
+import Language.DMoCHi.ML.Syntax.PNormal
 import qualified Data.Map as M
 
-parseSolution :: FilePath -> IO (Either ParseError [(Int,[Id],Value)])
+parseSolution :: FilePath -> IO (Either ParseError [(Int,[Id],AValue)])
 parseSolution = parseFromFile mainP
 
 reservedNames :: [String]
@@ -51,7 +51,7 @@ semiSep = P.semiSep lexer
 commaSep :: Parser a -> Parser [a]
 commaSep = P.commaSep lexer
 
-mainP :: Parser [(Int,[Id],Value)]
+mainP :: Parser [(Int,[Id],AValue)]
 mainP = string "solution." >> whiteSpace >> many defP <* eof
 
 predP :: Parser Int
@@ -65,7 +65,7 @@ predP = do
         return (fromIntegral i)
 
 
-defP :: Parser (Int,[Id],Value)
+defP :: Parser (Int,[Id],AValue)
 defP = do
     pname <- predP
     xs <- parens (commaSep $ flip Id <$> identifier <*> (colon *> typeP))
@@ -77,7 +77,7 @@ typeP :: Parser Type
 typeP = (TInt <$ reserved "int") <|> (TBool <$ reserved "bool")
       <|> (TInt <$ identifier)
 
-exprP :: M.Map String Type -> Parser Value
+exprP :: M.Map String Type -> Parser AValue
 exprP env = it where
     it = buildExpressionParser opTable termP <?> "value"
     opTable = [ [prefix "-" (after Op neg), prefix "+" id, prefix' "not" (after Op OpNot)]

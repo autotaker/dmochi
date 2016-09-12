@@ -340,7 +340,7 @@ normalize prog = do
         Typed.OpSnd ty v -> do
             v' <- convertV env v
             case v' of
-                Atomic av -> return $ Atomic $ Op $ OpFst ty av
+                Atomic av -> return $ Atomic $ Op $ OpSnd ty av
                 Pair _ v2 -> pure v2
         Typed.OpNot v -> do
             Atomic av <- convertV env v

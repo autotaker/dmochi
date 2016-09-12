@@ -111,15 +111,14 @@ doit = do
     normalizedProgram<- PNormal.normalize typedProgram
     liftIO $ PNormal.printProgram normalizedProgram
 
-    throwError Debugging
 
 
-    (typeMap0, fvMap) <- PAbst.initTypeMap typedProgram
+    (typeMap0, fvMap) <- PAbst.initTypeMap normalizedProgram
     let lim = 20 :: Int
     let cegar _ k hcs | k >= lim = return ()
         cegar typeMap k hcs = measure (printf "CEGAR-%d" k) $ do
             liftIO $ putStrLn "Predicate Abstracion"
-            boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg typeMap typedProgram
+            boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg typeMap normalizedProgram
             let file_boolean = printf "%s_%d.bool" path k
             liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
             liftIO $ putStrLn "Converted program"
@@ -139,7 +138,7 @@ doit = do
             r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
             case r of
                 Just trace -> do
-                    refine <- Refine.refineCGen typedProgram trace
+                    refine <- Refine.refineCGen normalizedProgram trace
                     case refine of
                         Nothing -> liftIO $ putStrLn "UnSafe!!"
                         Just (clauses, (rtyAssoc,rpostAssoc)) -> do

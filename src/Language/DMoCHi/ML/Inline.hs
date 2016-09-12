@@ -225,7 +225,7 @@ elimIndirectionF env (FunDef l x e) = FunDef l x (elimIndirection env e)
 elimIndirection :: M.Map Id Id -> Exp -> Exp
 elimIndirection env (Value v) = Value $ renameV env v
 elimIndirection env (Fun fdef) = Fun (elimIndirectionF env fdef)
-elimIndirection env (Let ty x (LValue (Var y)) e) = elimIndirection (M.insert x y env) e
+elimIndirection env (Let ty x (LValue (Var y)) e) = elimIndirection (M.insert x (rename env y) env) e
 elimIndirection env (Let ty x lv e) = Let ty x lv' e' where
     lv' = case lv of
         LValue v -> LValue (renameV env v)

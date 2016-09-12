@@ -22,7 +22,7 @@ elimUnreachable prog = prog' where
     go vis (S.minView -> Just (f, queue)) 
         | S.notMember f vis = 
             let vis' = S.insert f vis 
-                fdef = funMap M.! f
+                fdef = funMap M.! f 
                 fs = freeVariables (S.singleton (arg fdef)) (body fdef)
             in go vis' (S.union queue fs)
         | otherwise = go vis queue

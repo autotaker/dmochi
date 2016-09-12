@@ -5,11 +5,12 @@ import qualified Data.Map as M
 import qualified Data.IntMap as IM
 import qualified Data.DList as DL
 
-import qualified Language.DMoCHi.ML.Syntax.Typed as ML
-import qualified Language.DMoCHi.ML.PrettyPrint.Typed as ML
+import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
+import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
 import qualified Language.DMoCHi.Boolean.PrettyPrint.Typed as B
 import qualified Language.DMoCHi.ML.SMT as SMT
+import Language.DMoCHi.Common.Util
 import Language.DMoCHi.Common.Id
 import Control.Monad.Writer
 import Text.PrettyPrint
@@ -35,10 +36,10 @@ instance Eq PType where
     _ == _ = False
 
 
-type Env = M.Map ML.Id PType --InlinedPType
+type Env = M.Map ML.Id PType
 type Constraints = [Formula]
 type PVar = [(B.Term, Formula)]
-type Formula = ML.Value
+type Formula = ML.AValue
 
 type TermType = (ML.Id, PType, [Formula])
 
@@ -48,7 +49,7 @@ type ScopeMap = IM.IntMap [ML.Id]
 pprintTermType :: TermType -> Doc
 pprintTermType (x,pty_x,fml) = braces $ 
     text (ML.name x) <+> colon <+> (pprintPType 0 pty_x) <+>
-    text "|" <+> (hsep $ punctuate comma $ map (ML.pprintV 0) fml)
+    text "|" <+> (hsep $ punctuate comma $ map (ML.pprintA 0) fml)
 
 pprintPType :: Int -> PType -> Doc
 pprintPType _ PInt = text "int"
@@ -95,9 +96,9 @@ abstFormulae cs pvs fml = do
 
     term <- go pvs bdd
     liftIO $ putStrLn $ render (
-        let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintV 0) cs)
-            doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintV 0 . snd) pvs)
-            doc_fml = brackets $ hsep $ punctuate comma (map (ML.pprintV 0) fml)
+        let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintA 0) cs)
+            doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintA 0 . snd) pvs)
+            doc_fml = brackets $ hsep $ punctuate comma (map (ML.pprintA 0) fml)
             doc_term = B.pprintTerm 0 term
         in braces (
            text "constraints:" <+> doc_cs $+$ 
@@ -159,8 +160,8 @@ cast' cs pv e curTy newTy = case (curTy,newTy) of
 cast cs pv e curTy newTy = do
     r <- cast' cs pv e curTy newTy
     liftIO $ putStrLn $ render $
-        let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintV 0) cs)
-            doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintV 0 . snd) pv)
+        let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintA 0) cs)
+            doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintA 0 . snd) pv)
             doc_e = B.pprintTerm 0 e
             doc_curTy = pprintPType 0 curTy
             doc_newTy = pprintPType 0 newTy
@@ -188,7 +189,7 @@ substTermType :: ML.Id -> ML.Id -> TermType -> TermType
 substTermType a b (x,pty,ps) = (x, substPType a b pty, map (substFormula a b) ps)
 
 substPType :: ML.Id -> ML.Id -> PType -> PType
-substPType a b = substVPType a (ML.Var b)
+substPType a b = substVPType a (ML.Atomic $ ML.Var b)
 
 substVPType :: ML.Id -> ML.Value -> PType -> PType
 substVPType a b = go where
@@ -200,41 +201,47 @@ substVPType a b = go where
         PFun ty (x,go ty_x,map f ps) (r,go ty_r, map f qs)
 
 substFormula :: ML.Id -> ML.Id -> Formula -> Formula
-substFormula a b = substVFormula a (ML.Var b)
+substFormula a b = substVFormula a (ML.Atomic $ ML.Var b)
 
 substVFormula :: ML.Id -> ML.Value -> Formula -> Formula
-substVFormula a b = go where
+substVFormula a b = atomic . go where
+    atomic (ML.Atomic v) = v
+    atomic _ = error "substVFormula: type error"
     go e = case e of
         ML.Var x | x == a -> b
-                 | otherwise -> e
-        ML.CInt _ -> e
-        ML.CBool _ -> e
-        ML.Pair v1 v2 -> ML.Pair (go v1) (go v2)
-        ML.Op op -> ML.Op $ case op of
-            ML.OpAdd v1 v2 -> ML.OpAdd (go v1) (go v2)
-            ML.OpSub v1 v2 -> ML.OpSub (go v1) (go v2)
-            ML.OpEq  v1 v2 -> ML.OpEq  (go v1) (go v2)
-            ML.OpLt  v1 v2 -> ML.OpLt  (go v1) (go v2)
-            ML.OpLte v1 v2 -> ML.OpLte (go v1) (go v2)
-            ML.OpAnd v1 v2 -> ML.OpAnd (go v1) (go v2)
-            ML.OpOr  v1 v2 -> ML.OpOr  (go v1) (go v2)
-            ML.OpFst ty v  -> ML.OpFst ty (go v)
-            ML.OpSnd ty v  -> ML.OpSnd ty (go v)
-            ML.OpNot v     -> ML.OpNot (go v)
+                 | otherwise -> ML.Atomic e
+        ML.CInt _ -> ML.Atomic e
+        ML.CBool _ -> ML.Atomic e
+        -- ML.Pair v1 v2 -> ML.Pair (go v1) (go v2)
+        ML.Op op ->  case op of
+            ML.OpAdd v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpAdd `on` atomic) (go v1) (go v2)
+            ML.OpSub v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpSub `on` atomic) (go v1) (go v2)
+            ML.OpEq  v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpEq `on` atomic) (go v1) (go v2)
+            ML.OpLt  v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpLt `on` atomic) (go v1) (go v2)
+            ML.OpLte v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpLte `on` atomic) (go v1) (go v2)
+            ML.OpAnd v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpAnd `on` atomic) (go v1) (go v2)
+            ML.OpOr  v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpOr  `on` atomic) (go v1) (go v2)
+            ML.OpFst ty v  -> case go v of 
+                ML.Atomic av -> ML.Atomic $ ML.Op $ ML.OpFst ty av
+                ML.Pair v1 _ -> v1
+            ML.OpSnd ty v  -> case go v of
+                ML.Atomic av -> ML.Atomic $ ML.Op $ ML.OpSnd ty av
+                ML.Pair _ v2 -> v2
+            ML.OpNot v     -> ML.Atomic $ ML.Op $ (ML.OpNot . atomic) (go v)
 
 toSymbol :: ML.Id -> PType -> B.Symbol
 toSymbol x ty = B.Symbol (toSort ty) (ML.name x)
 
-abstValue :: (MonadIO m, MonadId m) => Env -> Constraints -> PVar -> ML.Value -> PType -> m B.Term
-abstValue env cs pv = go 
+abstAValue :: (MonadIO m, MonadId m) => Env -> Constraints -> PVar -> ML.AValue -> PType -> m B.Term
+abstAValue env cs pv = go 
     where 
     go v ty = case v of
         ML.Var x -> cast cs pv (B.V (toSymbol x (env M.! x))) (env M.! x) ty
         ML.CInt i -> return $ B.T []
         ML.CBool b -> return $ B.C b
-        ML.Pair v1 v2 -> 
-            let PPair _ ty1 ty2 = ty in
-            (\x y -> B.T [x,y]) <$> go v1 ty1 <*> go v2 ty2
+--        ML.Pair v1 v2 -> 
+--            let PPair _ ty1 ty2 = ty in
+--            (\x y -> B.T [x,y]) <$> go v1 ty1 <*> go v2 ty2
         ML.Op op -> case op of
             ML.OpAdd v1 v2 -> return $ B.T []
             ML.OpSub v1 v2 -> return $ B.T []
@@ -244,20 +251,27 @@ abstValue env cs pv = go
             ML.OpAnd v1 v2 -> abstFormula cs pv v
             ML.OpOr  v1 v2 -> abstFormula cs pv v
             ML.OpFst _ v   -> 
-                let PPair _ _ ty2 = typeOfValue env v in
+                let PPair _ _ ty2 = typeOfAValue env v in
                 B.f_proj 0 2 <$> go v (PPair (ML.getType v) ty ty2)
             ML.OpSnd _ v   -> 
-                let PPair _ ty1 _ = typeOfValue env v in
+                let PPair _ ty1 _ = typeOfAValue env v in
                 B.f_proj 1 2 <$> go v (PPair (ML.getType v) ty1 ty)
             ML.OpNot v -> B.Not <$> go v PBool
+abstValue :: (MonadIO m, MonadId m) => TypeMap -> Env -> Constraints -> PVar -> ML.Value -> PType -> m B.Term
+abstValue _ env cs pv (ML.Atomic av) ty = abstAValue env cs pv av ty
+abstValue tbl env cs pv (ML.Fun fdef) ty = fst <$> abstFunDef tbl env cs pv fdef (Just ty)
+abstValue tbl env cs pv (ML.Pair v1 v2) ty = 
+    let PPair _ ty1 ty2 = ty in
+    (\x y -> B.T [x,y]) <$> abstValue tbl env cs pv v1 ty1 <*> abstValue tbl env cs pv v2 ty2
 
-typeOfValue :: Env -> ML.Value -> PType
-typeOfValue env = go where
+
+typeOfAValue :: Env -> ML.AValue -> PType
+typeOfAValue env = go where
     go v = case v of
         ML.Var x -> env M.! x
         ML.CInt i -> PInt
         ML.CBool b -> PBool
-        ML.Pair v1 v2 -> PPair (ML.getType v) (go v1) (go v2)
+--        ML.Pair v1 v2 -> PPair (ML.getType v) (go v1) (go v2)
         ML.Op op -> case op of
             ML.OpAdd v1 v2 -> PInt
             ML.OpSub v1 v2 -> PInt
@@ -276,25 +290,26 @@ abstTerm :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> M
 abstTerm tbl env cs pv t (r,ty,qs) = doit where
     doit = case t of
         ML.Value v -> do
-            e1 <- abstValue env cs pv v ty
+            e1 <- abstValue tbl env cs pv v ty
             e2 <- abstFormulae cs pv (map (substVFormula r v) qs)
             return $ B.T [e1,e2]
 
+{-
         ML.Fun fdef -> do
             (e1,_) <- abstFunDef tbl env cs pv fdef (Just ty)
             e2 <- abstFormulae cs pv qs
             return $ B.T [e1,e2]
+-}
 
         ML.Let _ x (ML.LValue v) t' -> do
-            let ty_x = typeOfValue env v
-            ex <- abstValue env cs pv v ty_x
+            let ty_x = typeOfAValue env v
+            ex <- abstValue tbl env cs pv (ML.Atomic v) ty_x
             e' <- abstTerm tbl (M.insert x ty_x env) (addEq x v cs) pv t' (r,ty,qs)
             return $ B.f_let (toSymbol x ty_x) ex e'
 
         ML.Let _ x (ML.LApp _ _ f v) t' -> do
-            let ty_v = typeOfValue env v 
             let PFun _ (y,ty_y,ps) (r',ty_r',qs') = env M.! f
-            arg_body  <- abstValue env cs pv v ty_y
+            arg_body  <- abstValue tbl env cs pv v ty_y
             arg_preds <- abstFormulae cs pv (map (substVFormula y v) ps)
             let f' = toSymbol f (env M.! f)
             x' <- B.freshSym (ML.name x ++ "_pair") (toSort' (r',ty_r',qs'))
@@ -308,10 +323,12 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
               B.f_let (toSymbol x ty_r') x_body <$>
                 abstTerm tbl (M.insert x ty_r'' env) cs pv' t' (r,ty,qs)
 
+{-
         ML.Let _ f (ML.LFun func) t' -> do
             (e_f,ty_f) <- abstFunDef tbl env cs pv func Nothing
             B.f_let (toSymbol f ty_f) e_f <$> 
                 abstTerm tbl (M.insert f ty_f env) cs pv t' (r,ty,qs)
+-}
 
         ML.Let _ x (ML.LExp ident t_x) t' -> do
             let Right (y,ty_y,ps) = tbl IM.! ident
@@ -329,7 +346,7 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
                 abstTerm tbl (M.insert x PInt env) cs pv t' (r,ty,qs)
 
         ML.Assume _ v t' -> do
-            e_v <- abstValue env cs pv v PBool
+            e_v <- abstValue tbl env cs pv (ML.Atomic v) PBool
             B.f_assume e_v <$> abstTerm tbl env (v : cs) pv t' (r,ty,qs)
 
         ML.Fail _ -> do
@@ -340,7 +357,7 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
             B.f_branch_label <$> abstTerm tbl env cs pv t1 (r,ty,qs)
                              <*> abstTerm tbl env cs pv t2 (r,ty,qs)
 
-addEq :: ML.Id -> ML.Value -> Constraints -> Constraints
+addEq :: ML.Id -> ML.AValue -> Constraints -> Constraints
 addEq y v cs = ML.Op (ML.OpEq (ML.Var y) v):cs
 
 abstFunDef :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.FunDef -> Maybe PType -> m (B.Term, PType)
@@ -369,7 +386,10 @@ printTypeMap tbl = forM_ (IM.assocs tbl) $ \(i,pty') ->
 
 abstProg :: (MonadId m, MonadIO m) => TypeMap -> ML.Program -> m B.Program
 abstProg tbl (ML.Program fs t0) = do
-    liftIO $ printTypeMap tbl
+    liftIO $ putStrLn "current abstraction type environment {"
+    liftIO $ printTypeMap tbl 
+    liftIO $ putStrLn "}"
+    
     let env = M.fromList [ (f,ty)  | (f,func) <- fs, let Left ty = tbl IM.! ML.ident func ]
     ds <- forM fs $ \(f,func) -> do
         let f' = toSymbol f (env M.! f)
@@ -383,12 +403,14 @@ abstProg tbl (ML.Program fs t0) = do
 initTypeMap :: MonadId m => ML.Program -> m (TypeMap,ScopeMap)
 initTypeMap (ML.Program fs t0) = do
     es <- execWriterT $ do
-        let gather _ (ML.Value _) = return ()
+        let gather fv (ML.Value v) = case v of
+                ML.Fun fdef -> gather (ML.arg fdef : fv) (ML.body fdef)
+                ML.Pair v1 v2 -> gather fv (ML.Value v1) >> gather fv (ML.Value v2)
+                ML.Atomic _ -> return ()
             gather fv (ML.Let s x lv e) = do
                 case lv of
                     ML.LValue _ -> return ()
                     ML.LApp _ _ _ _ -> return ()
-                    ML.LFun f -> gatherF fv f
                     ML.LExp i e' -> do
                         gather fv e'
                         ty <- genTermType (ML.getType e')
@@ -397,10 +419,12 @@ initTypeMap (ML.Program fs t0) = do
                 gather (x : fv) e
             gather fv (ML.Assume _ _ e) = gather fv e
             gather _ (ML.Fail _) = return ()
+            {-
             gather fv (ML.Fun fdef) = 
                 -- DO NOT count tail functions,
-                -- because their type are determined elsewhere
+                -- because their types are determined elsewhere
                 gather (ML.arg fdef : fv) (ML.body fdef)
+            -}
             gather fv (ML.Branch _ _ e1 e2) = gather fv e1 >> gather fv e2
             gatherF fv f = do
                 gather (ML.arg f : fv) (ML.body f)

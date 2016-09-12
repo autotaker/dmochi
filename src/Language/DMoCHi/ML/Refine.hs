@@ -1,8 +1,8 @@
 {-# LANGUAGE ScopedTypeVariables, LambdaCase, FlexibleContexts, BangPatterns #-}
 module Language.DMoCHi.ML.Refine where
 
-import qualified Language.DMoCHi.ML.Syntax.Typed as ML
-import qualified Language.DMoCHi.ML.PrettyPrint.Typed as ML
+import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
+import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Data.Map as M
 import qualified Language.DMoCHi.ML.SMT as SMT
@@ -12,6 +12,7 @@ import Control.Monad.Writer
 import Control.Monad.State.Strict
 import qualified Data.IntMap as IM
 import Language.DMoCHi.Common.Id
+import Language.DMoCHi.Common.Util
 import Data.List(intersperse,nub,foldl')
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import Debug.Trace
@@ -137,37 +138,32 @@ incrCls (S x y z) = S x (y+1) z
 pop :: S -> S
 pop (S x y z) = S x y (tail z)
 
-{- needed no longer
-closures :: Program -> [Exp]
-closures (Program ds t0) = (ds >>= (\(_,_,e) -> go e)) <|> go t0
-    where
-    go (Value _) = empty
-    go (Let _ _ lv e) = sub lv <|> go e
-    go (Assume _ _ e) = go e
-    go e@(Lambda _ _ _ e1) = pure e <|> go e1
-    go (Fail _) = empty
-    go (Branch _ _ e1 e2) = go e1 <|> go e2
-    sub (LValue _) = empty
-    sub (LApp _ _ _ _) = empty
-    sub (LExp _ e) = go e
-    sub (LRand) = empty
-    -}
 
 fromSValue :: SValue -> ML.Value
-fromSValue (SVar x) = ML.Var x
-fromSValue (Int i)  = ML.CInt i
-fromSValue (Bool b) = ML.CBool b
-fromSValue (P v1 v2) = ML.Pair (fromSValue v1) (fromSValue v2)
-fromSValue (Add v1 v2) = ML.Op (ML.OpAdd (fromSValue v1) (fromSValue v2))
-fromSValue (Sub v1 v2) = ML.Op (ML.OpSub (fromSValue v1) (fromSValue v2))
-fromSValue (Eq v1 v2) = ML.Op (ML.OpEq (fromSValue v1) (fromSValue v2))
-fromSValue (Lt v1 v2) = ML.Op (ML.OpLt (fromSValue v1) (fromSValue v2))
-fromSValue (Lte v1 v2) = ML.Op (ML.OpLte (fromSValue v1) (fromSValue v2))
-fromSValue (And v1 v2) = ML.Op (ML.OpAnd (fromSValue v1) (fromSValue v2))
-fromSValue (Or v1 v2) = ML.Op (ML.OpOr (fromSValue v1) (fromSValue v2))
-fromSValue (Not v1) = ML.Op (ML.OpNot (fromSValue v1))
-fromSValue (Iff v1 v2) = error "Iff is not supported"
-fromSValue (C v1) = error "Cannot convert a closure to a syntactic value"
+fromSValue = \case
+    SVar x -> ML.Atomic $ ML.Var x
+    Int i  -> ML.Atomic $ ML.CInt i
+    Bool b -> ML.Atomic $ ML.CBool b
+    P v1 v2 -> ML.Pair (fromSValue v1) (fromSValue v2)
+    Add v1 v2 -> bin ML.OpAdd v1 v2
+    Sub v1 v2 -> bin ML.OpSub v1 v2
+    Eq v1 v2 -> bin ML.OpEq v1 v2
+    Lt v1 v2 -> bin ML.OpLt v1 v2
+    Lte v1 v2 -> bin ML.OpLte v1 v2
+    And v1 v2 -> bin ML.OpAnd v1 v2
+    Or v1 v2 -> bin ML.OpOr v1 v2
+    Not v1 -> unary ML.OpNot v1
+    Iff v1 v2 -> error "Iff is not supported"
+    C _ -> error "Cannot convert a closure to a syntactic value"
+    where
+    bin f v1 v2 = 
+        let ML.Atomic !av1 = fromSValue v1 in
+        let ML.Atomic !av2 = fromSValue v2 in
+        ML.Atomic $ ML.Op (f av1 av2)
+    unary f v1 = 
+        let ML.Atomic !av1 = fromSValue v1 in
+        ML.Atomic $ ML.Op (f av1)
+    
 
 symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log)
 symbolicExec prog trace = 
@@ -186,16 +182,16 @@ symbolicExec prog trace =
     eval :: CallId -> Env -> ML.Exp -> M m (Maybe SValue)
     eval callSite env _e = case _e of
         ML.Value v -> do
-            let sv = evalV env v 
+            sv <- evalV callSite env v 
             return $ Just sv
         ML.Let _ x lv e -> do
             r <- evalLV callSite env lv
             case r of
                 Just sv -> eval callSite (M.insert x sv env) e
                 Nothing -> return Nothing
-        ML.Fun fdef -> Just . C <$> genClosure callSite fdef env
+        -- ML.Fun fdef -> Just . C <$> genClosure callSite fdef env
         ML.Assume _ v e -> do
-            constrain (evalV env v)
+            constrain (evalA env v)
             eval callSite env e
         ML.Fail _ -> return Nothing
         ML.Branch _ i e1 e2 -> do
@@ -206,30 +202,33 @@ symbolicExec prog trace =
             else
                 eval callSite env e2
 
-    evalV :: Env -> ML.Value -> SValue
-    evalV env = \case
+    evalV :: CallId -> Env -> ML.Value -> M m SValue
+    evalV _ env (ML.Atomic av) = pure $ evalA env av
+    evalV callSite env (ML.Pair v1 v2) = P <$> evalV callSite env v1 <*> evalV callSite env v2
+    evalV callSite env (ML.Fun fdef) = C <$> genClosure callSite fdef env
+    evalA :: Env -> ML.AValue -> SValue
+    evalA env = \case
         ML.Var x -> env M.! x
         ML.CInt x -> Int x
         ML.CBool x -> Bool x
-        ML.Pair v1 v2 -> P (evalV env v1) (evalV env v2)
         ML.Op op -> case op of
-            ML.OpAdd v1 v2 -> Add (evalV env v1) (evalV env v2)
-            ML.OpSub v1 v2 -> Sub (evalV env v1) (evalV env v2)
-            ML.OpEq  v1 v2  -> Eq (evalV env v1) (evalV env v2)
-            ML.OpLt  v1 v2  -> Lt (evalV env v1) (evalV env v2)
-            ML.OpLte v1 v2 -> Lte (evalV env v1) (evalV env v2)
-            ML.OpAnd v1 v2 -> And (evalV env v1) (evalV env v2)
-            ML.OpOr  v1 v2 -> Or (evalV env v1) (evalV env v2)
+            ML.OpAdd v1 v2 -> Add (evalA env v1) (evalA env v2)
+            ML.OpSub v1 v2 -> Sub (evalA env v1) (evalA env v2)
+            ML.OpEq  v1 v2  -> Eq (evalA env v1) (evalA env v2)
+            ML.OpLt  v1 v2  -> Lt (evalA env v1) (evalA env v2)
+            ML.OpLte v1 v2 -> Lte (evalA env v1) (evalA env v2)
+            ML.OpAnd v1 v2 -> And (evalA env v1) (evalA env v2)
+            ML.OpOr  v1 v2 -> Or (evalA env v1) (evalA env v2)
             ML.OpFst _ v -> 
-                let P sv _ = evalV env v in sv
+                let P sv _ = evalA env v in sv
             ML.OpSnd _ v -> 
-                let P _ sv = evalV env v in sv
-            ML.OpNot v1 -> Not (evalV env v1)
+                let P _ sv = evalA env v in sv
+            ML.OpNot v1 -> Not (evalA env v1)
     evalLV :: CallId -> Env -> ML.LetValue -> M m (Maybe SValue)
     evalLV callSite env = \case 
-        ML.LValue v -> pure $ Just (evalV env v)
+        ML.LValue v -> pure $ Just (evalA env v)
         ML.LApp _ label f v -> do
-            let sv = evalV env v
+            sv <- evalV callSite env v
             let C (Cls fdef clsId env') = env M.! f
             let x  = ML.arg fdef
                 e0 = ML.body fdef
@@ -238,7 +237,7 @@ symbolicExec prog trace =
             ret_cid <- callCounter <$> get
             retval (ReturnInfo j sv r (CallId ret_cid))
             return r
-        ML.LFun fdef -> Just . C <$> genClosure callSite fdef env
+        -- ML.LFun fdef -> Just . C <$> genClosure callSite fdef env
         ML.LExp label e -> do
             r <- eval callSite env e
             letexp (LetExpInfo callSite label r)
@@ -424,15 +423,28 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
     flatten (P v1 v2) env = flatten v1 (flatten v2 env)
     push = flatten . decompose
 
+{-
 evalRType :: M.Map Id (RType,SValue) -> ML.Value -> (RType,SValue)
 evalRType env = go where
-    go (ML.Var x) = env M.! x
-    go (ML.CInt i) = (RInt, Int i)
-    go (ML.CBool b) = (RBool, Bool b)
+    go (ML.Atomic v) = evalRTypeA env v
     go (ML.Pair v1 v2) = 
         let (r1,sv1) = go v1 
             (r2,sv2) = go v2 in
         (RPair r1 r2, P sv1 sv2)
+    go (ML.Fun fdef) = 
+    -}
+        
+evalRTypeA :: M.Map Id (RType,SValue) -> ML.AValue -> (RType,SValue)
+evalRTypeA env = go where
+    go (ML.Var x) = env M.! x
+    go (ML.CInt i) = (RInt, Int i)
+    go (ML.CBool b) = (RBool, Bool b)
+    {-
+    go (ML.Pair v1 v2) = 
+        let (r1,sv1) = go v1 
+            (r2,sv2) = go v2 in
+        (RPair r1 r2, P sv1 sv2)
+    -}
     go (ML.Op (ML.OpAdd v1 v2)) = 
         let (r1,sv1) = go v1 
             (r2,sv2) = go v2 in
@@ -521,15 +533,14 @@ refineCGen prog trace = do
                      W m ()
             check env cs callSite _e tau = case _e of
                 ML.Let _ x (ML.LValue v) e -> do
-                    let env' = M.insert x (evalRType env v) env
+                    let env' = M.insert x (evalRTypeA env v) env
                     check env' cs callSite e tau
                 ML.Let _ x (ML.LApp _ i f v) e -> do
                     let (RFun fassoc,_) = env M.! f
-                        (ty_v,sv) = evalRType env v
                         j = callTbl M.! (callSite,i)
                         ty_f = fassoc IM.! unCallId j
+                    sv <- checkValue env cs callSite v (argType ty_f)
                     clause cs (substLFormula (argName ty_f) sv (preCond ty_f))
-                    subType cs ty_v (argType ty_f)
                     case resType ty_f of
                         RPostType _ _ _ -> do
                             let x'    = decompose x
@@ -542,11 +553,13 @@ refineCGen prog trace = do
                     let x' = decompose x 
                         env' = M.insert x (RInt,x') env
                     check env' cs callSite e tau
+{-
                 ML.Let _ f (ML.LFun fdef) e -> do
                     theta <- checkFunDef (ML.name f) env cs callSite fdef Nothing
                     let env' = M.insert f (theta,decompose f) env
                     addFuncBinding (ML.ident fdef) theta
                     check env' cs callSite e tau
+-}
                 ML.Let _ x (ML.LExp label e') e -> do
                     let letv = letMap M.! (callSite, label)
                     tau' <- genP (ML.name x ++ "_" ++ show label) (M.keys env) letv
@@ -559,6 +572,7 @@ refineCGen prog trace = do
                                 cs'  = Right (substLFormula (posName tau') x' (posCond tau')) : cs
                             check env' cs' callSite e tau
                         RPostTypeFailure -> return ()
+                        {- 
                 ML.Fun fdef -> do
                     case tau of
                         RPostType _ rty cond -> do
@@ -567,8 +581,9 @@ refineCGen prog trace = do
                         RPostTypeFailure -> do
                             let s = render $ ML.pprintF fdef
                             error $ "This function " ++ s ++ " cannot have the refinement type" ++ show tau
+                            -}
                 ML.Assume _ v e -> do
-                    let (_,sv) = evalRType env v
+                    let (_,sv) = evalRTypeA env v
                     let cs' = Left sv : cs
                     check env cs' callSite e tau
                 ML.Branch _ label e1 e2 -> do
@@ -580,9 +595,10 @@ refineCGen prog trace = do
                 ML.Value v -> 
                     case tau of
                         RPostType _ _ _ -> do
-                            let (rty,sv) = evalRType env v
+                            -- let (rty,sv) = evalRType env v
+                            -- subType cs rty (posType tau)
+                            sv <- checkValue env cs callSite v (posType tau)
                             clause cs (substLFormula (posName tau) sv (posCond tau))
-                            subType cs rty (posType tau)
                         RPostTypeFailure -> do
                             let s = render $ ML.pprintV 0 v
                             error $ "This value "++ s ++ " cannot have the refinement type" ++ show tau
@@ -604,6 +620,21 @@ refineCGen prog trace = do
                         cs' = Right (preCond ty_f) : cs
                     check env' cs' (CallId j) e0 (resType ty_f)
                 return theta
+            checkValue env cs callSite v theta = case v of
+                ML.Atomic av -> do
+                    let (rty, sv) = evalRTypeA env av
+                    subType cs rty theta
+                    return sv
+                ML.Pair v1 v2 -> do
+                    let RPair rty1 rty2 = theta
+                    sv1 <- checkValue env cs callSite v1 rty1
+                    sv2 <- checkValue env cs callSite v2 rty2
+                    return (P sv1 sv2)
+                ML.Fun fdef -> do
+                    checkFunDef "fun" env cs callSite fdef (Just theta)
+                    f <- freshId "fun"
+                    return (SVar (ML.Id (ML.getType fdef) f))
+                
             clause cs fml = do
                 liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
                 {-
@@ -701,10 +732,15 @@ substSValue x v _sv = case _sv of
 updateFormula :: PAbst.Formula -> [PAbst.Formula] -> [PAbst.Formula]
 updateFormula phi fml = case phi of
     ML.CBool _ -> fml
+    -- decompose boolean combinations
+    ML.Op (ML.OpAnd v1 v2) -> updateFormula v1 (updateFormula v2 fml)
+    ML.Op (ML.OpOr v1 v2) -> updateFormula v1 (updateFormula v2 fml)
     _ | phi `elem` fml -> fml
       | otherwise -> phi : fml
 
-refineTermType :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> RPostType -> PAbst.TermType -> PAbst.TermType
+-- penv :: i -> (xs,fml) s.t. P_{i} = \xs. fml
+-- env : mapping from variables in the formula to values in PType 
+refineTermType :: IM.IntMap ([Id], ML.AValue) -> M.Map String ML.AValue -> RPostType -> PAbst.TermType -> PAbst.TermType
 refineTermType penv env (RPostType r rty fml) (abst_r, abst_rty, abst_fml) = (abst_r, abst_rty', abst_fml')
     where
     abst_rty' = refinePType penv env rty abst_rty
@@ -712,7 +748,7 @@ refineTermType penv env (RPostType r rty fml) (abst_r, abst_rty, abst_fml) = (ab
     abst_fml' = updateFormula phi' abst_fml
 refineTermType _ _ RPostTypeFailure termType = termType
 
-refinePType :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> RType -> PAbst.PType -> PAbst.PType
+refinePType :: IM.IntMap ([Id], ML.AValue) -> M.Map String ML.AValue -> RType -> PAbst.PType -> PAbst.PType
 refinePType _ _ RBool PAbst.PBool = PAbst.PBool
 refinePType _ _ RInt PAbst.PInt = PAbst.PInt
 refinePType penv env (RPair rty1 rty2) (PAbst.PPair ty pty1 pty2) = 
@@ -728,15 +764,34 @@ refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
         pty_x' = (abst_x, abst_pty', updateFormula pre abst_fml)
         pty_r' = refineTermType penv env' (resType as) pty_r
 
-refineLFormula :: IM.IntMap ([Id], ML.Value) -> M.Map String ML.Value -> LFormula -> PAbst.Formula
+refineLFormula :: IM.IntMap ([Id], ML.AValue) -> M.Map String ML.AValue -> LFormula -> PAbst.Formula
 refineLFormula penv env fml = phi' where
     Formula _ i args = fml
     (args_phi, phi) = penv IM.! i
     env' = M.union (M.fromList $ zip (map ML.name args_phi) (map recover args)) env
     recover (SVar x) = env M.! (ML.name x)
-    phi' = ML.evalV env' phi
+    phi' = phi & fix (\go -> \case 
+        ML.Var x -> case M.lookup (ML.name x) env' of
+            Just r -> r
+            Nothing -> error $ "Error!:" ++ show (ML.name x, env)
+        ML.CInt i -> ML.CInt i
+        ML.CBool b -> ML.CBool b
+        ML.Op op -> ML.Op $ case op of
+            ML.OpAdd a b -> ML.OpAdd (go a) (go b)
+            ML.OpSub a b -> ML.OpSub (go a) (go b)
+            ML.OpEq  a b -> ML.OpEq  (go a) (go b)
+            ML.OpLt  a b -> ML.OpLt  (go a) (go b)
+            ML.OpLte a b -> ML.OpLte (go a) (go b)
+            ML.OpAnd a b -> ML.OpAnd (go a) (go b)
+            ML.OpOr  a b -> ML.OpOr  (go a) (go b)
+            ML.OpNot a   -> ML.OpNot (go a)
+            ML.OpFst t a -> ML.OpFst t (go a)
+            ML.OpSnd t a -> ML.OpSnd t (go a))
+
+
         
-extendEnv :: Id -> ML.Value -> M.Map String ML.Value -> M.Map String ML.Value
+        
+extendEnv :: Id -> ML.AValue -> M.Map String ML.AValue -> M.Map String ML.AValue
 extendEnv x v env = case ML.getType x of
     ML.TInt -> M.insert (ML.name x) v env
     ML.TBool -> M.insert (ML.name x) v env
@@ -749,7 +804,7 @@ extendEnv x v env = case ML.getType x of
     ML.TFun _ _ -> env
 
 
-refine :: IM.IntMap [Id] -> [(Int,RType)] -> [(Int,RPostType)] -> [(Int,[Id],ML.Value)] -> PAbst.TypeMap -> PAbst.TypeMap
+refine :: IM.IntMap [Id] -> [(Int,RType)] -> [(Int,RPostType)] -> [(Int,[Id],ML.AValue)] -> PAbst.TypeMap -> PAbst.TypeMap
 refine fvMap rtyAssoc rpostAssoc subst typeMap = typeMap'' where
     penv = IM.fromList [ (s,(xs,v)) | (s,xs,v) <- subst ]
     typeMap' = foldl' (\acc (i, rty) -> 
