@@ -43,6 +43,8 @@ dot :: Parser String
 dot = P.dot lexer
 comma :: Parser String
 comma = P.comma lexer
+commaSep :: Parser a -> Parser [a]
+commaSep = P.commaSep lexer
 natural :: Parser Integer
 natural = P.natural lexer
 semiSep :: Parser a -> Parser [a]
@@ -57,10 +59,10 @@ parseProgramFromFile = parseFromFile (whiteSpace >> progP)
 progP :: Parser Program
 progP = Program <$> many defP <*> exprP
 
-defP :: Parser (Id,PType,Exp)
+defP :: Parser (Id,Type,Exp)
 defP = try $ do
     x <- reserved "let" *> identifier
-    ty <- colon *> ptypeP
+    ty <- colon *> typeP
     reservedOp "="
     t <- exprP
     optional (reservedOp ";;")
@@ -79,15 +81,16 @@ exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") <?> "expr" where
         reserved "else"
         eElse <- exprP
         return $ Branch (Assume pred eThen) (Assume (Op (OpNot pred)) eElse)
-    lambdaP = Lambda <$> (reserved "fun" *> identifier <* reservedOp "->") 
+    lambdaP = Lambda <$> (reserved "fun" *> argsP <* reservedOp "->") 
                      <*> exprP
+    argsP = [] <$ parens empty <|> many identifier
     failP   = Fail <$ reserved "Fail"
 
 letP :: Parser Exp
 letP = (Let <$> (reserved "let" *> identifier)
            <*> sub
            <*> (reserved "in" *> exprP)) <?> "let"
-    where sub = LExp <$> (reservedOp ":" *> ptypeP) <*> (reservedOp "=" *> exprP)
+    where sub = LExp <$> (reservedOp ":" *> typeP) <*> (reservedOp "=" *> exprP)
             <|> try (LApp <$> (reservedOp "=" *> identifier) <*> many1 valueP)
             <|> (reservedOp "=" *> (LValue <$> valueP <|> LRand <$ reservedOp "*"))
 
@@ -123,6 +126,17 @@ termP = Var <$> identifier
                         Nothing -> return p1
                         Just p2 -> return $ Pair p1 p2)
 
+typeP :: Parser Type
+typeP = prim <|> func 
+    where
+    base = TInt <$ reserved "int"
+       <|> TBool <$ reserved "bool"
+       <|> parens typeP
+    prim = chainr1 base (TPair <$ reservedOp "*" )
+    func = TFun <$> brackets arglist <*> (reservedOp "->" *> typeP)
+    arglist = commaSep prim
+
+{-
 ptypeP :: Parser PType
 ptypeP = base PInt "int" 
      <|> base PBool "bool" 
@@ -136,4 +150,5 @@ ptypeP = base PInt "int"
 
 predicateP :: Parser Predicate
 predicateP = (,) <$> identifier <*> (dot *> valueP) where
+-}
 

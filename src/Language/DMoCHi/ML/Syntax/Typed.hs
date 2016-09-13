@@ -49,14 +49,14 @@ data Op = OpAdd Value Value
         | OpNot Value  deriving(Eq,Show)
 
 data LetValue = LValue Value
-              | LApp Type !Int Id Value
+              | LApp Type !Int Id [Value]
               | LFun FunDef
               | LExp !Int Exp 
               | LRand
               deriving(Eq,Show)
 
 data FunDef = FunDef { ident :: !Int,
-                       arg   :: Id,
+                       args  :: [Id],
                        body  :: Exp }
                        deriving(Show, Eq)
 
@@ -96,7 +96,7 @@ instance HasType Op where
     getType (OpSnd a _)   = a
 
 instance HasType FunDef where
-    getType e = TFun (getType (arg e)) (getType (body e))
+    getType e = TFun (map getType (args e)) (getType (body e))
 
 substV :: Id -> Value -> Value -> Value
 substV x v = go where
@@ -167,19 +167,16 @@ sizeV (Op op) = (case op of
 
 sizeLV :: LetValue -> Int
 sizeLV (LValue v) = sizeV v
-sizeLV (LApp _ _ _ v) = foldr (\v y -> 1 + sizeV v + y) 1 [v]
+sizeLV (LApp _ _ _ vs) = foldr (\v y -> 1 + sizeV v + y) 1 vs
 sizeLV (LExp _ e) = sizeE e
 sizeLV (LFun e) = sizeE (body e) + 1
 sizeLV LRand = 1
-
-
-
 
 freeVariables :: S.Set Id -> Exp -> S.Set Id
 freeVariables = goE S.empty where
     goE :: S.Set Id -> S.Set Id -> Exp -> S.Set Id
     goE !acc env (Value v) = goV acc env v
-    goE !acc env (Fun fdef) = goE acc (S.insert (arg fdef) env) (body fdef)
+    goE !acc env (Fun fdef) = goE acc (foldr S.insert env (args fdef)) (body fdef)
     goE !acc env (Let _ x lv e) = goE (goLV acc env lv) (S.insert x env) e
     goE !acc env (Assume _ v e) = goE (goV acc env v) env e
     goE !acc _ (Fail _) = acc
@@ -200,8 +197,9 @@ freeVariables = goE S.empty where
     goV !acc env (Op (OpSnd _ v)) = goV acc env v
     goV !acc env (Op (OpNot v)) = goV acc env v
     goLV !acc env (LValue v) = goV acc env v
-    goLV !acc env (LApp _ _ f v) = goV (push acc env f) env v
-    goLV !acc env (LFun fdef) = goE acc (S.insert (arg fdef) env) (body fdef)
+    goLV !acc env (LApp _ _ f vs) = 
+        foldl (\acc v -> goV acc env v) (push acc env f) vs
+    goLV !acc env (LFun fdef) = goE acc (foldr S.insert env (args fdef)) (body fdef)
     goLV !acc env (LExp _ e) = goE acc env e
     goLV !acc env LRand = acc
     push acc env x | S.member x env = acc

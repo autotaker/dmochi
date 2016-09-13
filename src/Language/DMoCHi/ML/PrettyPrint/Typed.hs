@@ -17,10 +17,10 @@ pprintE (Let _ x' lv e) =
                        <+> equals 
                        <+> pprintV 0 v <+> text "in" $+$ 
             pprintE e
-        LApp ty i f v ->
+        LApp ty i f vs ->
             text "let" <+> text x <+> colon <+> pprintT 0 ty
                        <+> equals <+> text ("(*" ++ show i ++ "*)") <+>
-                text (name f) <+> hsep (map (pprintV 9) [v]) <+> text "in" $+$
+                text (name f) <+> hsep (map (pprintV 9) vs) <+> text "in" $+$
             pprintE e
         LExp i ev ->
             text "let" <+> text x <+> colon <+> pprintT 0 (getType ev) 
@@ -44,8 +44,9 @@ pprintE (Branch _ i e1 e2) =
 pprintE (Fun fdef) = pprintF fdef
 
 pprintF :: FunDef -> Doc
-pprintF (FunDef i x e) = 
-    text "fun" <+> text ("(*" ++ show i ++ "*)") <+> text (name x) <+> text "->" $+$ 
+pprintF (FunDef i xs e) = 
+    text "fun" <+> text ("(*" ++ show i ++ "*)") 
+               <+> hsep (map (text.name) xs) <+> text "->" $+$ 
     nest 4 (pprintE e)
 
 

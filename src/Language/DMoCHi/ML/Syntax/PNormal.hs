@@ -49,13 +49,13 @@ data Op = OpAdd AValue AValue
         | OpNot AValue  deriving(Eq,Show)
 
 data LetValue = LValue AValue
-              | LApp Type !Int Id Value
+              | LApp Type !Int Id [Value]
               | LExp !Int Exp 
               | LRand
               deriving(Eq,Show)
 
 data FunDef = FunDef { ident :: !Int,
-                       arg   :: Id,
+                       args  :: [Id],
                        body  :: Exp }
                        deriving(Show, Eq)
 
@@ -97,7 +97,7 @@ instance HasType Op where
     getType (OpSnd a _)   = a
 
 instance HasType FunDef where
-    getType e = TFun (getType (arg e)) (getType (body e))
+    getType e = TFun (map getType (args e)) (getType (body e))
 
 {-
 substV :: Id -> Value -> Value -> Value
@@ -173,7 +173,7 @@ sizeV (Pair v1 v2) = 1 + sizeV v1 + sizeV v2
 
 sizeLV :: LetValue -> Int
 sizeLV (LValue v) = sizeAV v
-sizeLV (LApp _ _ _ v) = 2 + sizeV v
+sizeLV (LApp _ _ _ vs) = 1 + sum (map sizeV vs)
 sizeLV (LExp _ e) = sizeE e
 sizeLV LRand = 1
 
@@ -188,7 +188,7 @@ freeVariables = goE S.empty where
 
     goV :: S.Set Id -> S.Set Id -> Value -> S.Set Id
     goV !acc env (Atomic v) = goAV acc env v
-    goV !acc env (Fun fdef) = goE acc (S.insert (arg fdef) env) (body fdef)
+    goV !acc env (Fun fdef) = goE acc (foldr S.insert env (args fdef)) (body fdef)
     goV !acc env (Pair v1 v2) = goV (goV acc env v1) env v2
 
     goAV :: S.Set Id -> S.Set Id -> AValue -> S.Set Id
@@ -206,7 +206,8 @@ freeVariables = goE S.empty where
     goAV !acc env (Op (OpSnd _ v)) = goAV acc env v
     goAV !acc env (Op (OpNot v)) = goAV acc env v
     goLV !acc env (LValue v) = goAV acc env v
-    goLV !acc env (LApp _ _ f v) = goV (push acc env f) env v
+    goLV !acc env (LApp _ _ f vs) = 
+        foldl (\acc v -> goV acc env v) (push acc env f) vs
     goLV !acc env (LExp _ e) = goE acc env e
     goLV !acc env LRand = acc
     push acc env x | S.member x env = acc
@@ -216,11 +217,11 @@ alpha :: MonadId m => Value -> m Value
 alpha = alphaV M.empty where
     alphaV :: MonadId m => M.Map Id Id -> Value -> m Value
     alphaV env (Atomic av) = pure $ Atomic (renameA env av)
-    alphaV env (Fun (FunDef l x e)) = do
+    alphaV env (Fun (FunDef l xs e)) = do
         l' <- freshInt
-        x' <- alphaId x
-        e' <- alphaE (M.insert x x' env) e
-        return (Fun (FunDef l' x' e'))
+        xs' <- mapM alphaId xs
+        e' <- alphaE (foldr (uncurry M.insert) env (zip xs xs')) e
+        return (Fun (FunDef l' xs' e'))
     alphaV env (Pair v1 v2) = Pair <$> alphaV env v1 <*> alphaV env v2
 
     alphaE :: MonadId m => M.Map Id Id -> Exp -> m Exp
@@ -237,8 +238,8 @@ alpha = alphaV M.empty where
 
     alphaLV :: MonadId m => M.Map Id Id -> LetValue -> m LetValue
     alphaLV env (LValue av) = pure $ LValue (renameA env av)
-    alphaLV env (LApp ty l f v) = 
-        freshInt >>= (\l' -> LApp ty l' (rename env f) <$> (alphaV env v))
+    alphaLV env (LApp ty l f vs) = 
+        freshInt >>= (\l' -> LApp ty l' (rename env f) <$> (mapM (alphaV env) vs))
     alphaLV env (LExp l e) = 
         freshInt >>= (\l' -> LExp l' <$> alphaE env e)
     alphaLV env (LRand) = pure LRand
@@ -287,16 +288,14 @@ normalize prog = do
                 Atomic (Var y) -> convertE (M.insert x v' env) e
                 Atomic av -> Let ty x (LValue av) <$> convertE env e
                 _ -> convertE (M.insert x v' env) e
-        Typed.LApp ty' l f v -> do
-            v' <- convertV env v
+        Typed.LApp ty' l f vs -> do
+            vs' <- mapM (convertV env) vs
             case M.lookup f env of
                 Just (Atomic (Var g)) ->
-                    Let ty x (LApp ty' l f v') <$> convertE env e
+                    Let ty x (LApp ty' l g vs') <$> convertE env e
                 Just v -> error $ "Unexpected function value for function call: " ++ show v
                 Nothing -> 
-                    Let ty x (LApp ty' l f v') <$> convertE env e
-
-            Let ty x (LApp ty' l f v') <$> convertE env e
+                    Let ty x (LApp ty' l f vs') <$> convertE env e
         Typed.LFun fdef -> do
             fdef' <- convertF env fdef
             convertE (M.insert x (Fun fdef') env) e

@@ -23,7 +23,7 @@ elimUnreachable prog = prog' where
         | S.notMember f vis = 
             let vis' = S.insert f vis 
                 fdef = funMap M.! f 
-                fs = freeVariables (S.singleton (arg fdef)) (body fdef)
+                fs = freeVariables (S.fromList (args fdef)) (body fdef)
             in go vis' (S.union queue fs)
         | otherwise = go vis queue
     go vis _ = vis

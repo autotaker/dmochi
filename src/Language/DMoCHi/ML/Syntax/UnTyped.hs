@@ -1,14 +1,22 @@
 {-# LANGUAGE DeriveFunctor #-}
-module Language.DMoCHi.ML.Syntax.UnTyped where
+module Language.DMoCHi.ML.Syntax.UnTyped(Exp(..)
+                                        ,Program(..)
+                                        ,Value(..)
+                                        ,Op(..)
+                                        ,LetValue(..)
+                                        ,Id
+                                        ,Type(..)
+                                        ) where
+import Language.DMoCHi.ML.Syntax.Type hiding(Id)
 
 data Exp = Value Value 
          | Let Id LetValue Exp 
          | Assume Value Exp
-         | Lambda Id Exp
+         | Lambda [Id] Exp
          | Fail
          | Branch Exp Exp deriving(Show)
 
-data Program = Program { functions :: [(Id,PType,Exp)] 
+data Program = Program { functions :: [(Id,Type,Exp)] 
                        , mainTerm  :: Exp }
 
 data Value = Var Id
@@ -33,10 +41,13 @@ data Op = OpAdd Value Value
 
 data LetValue = LValue Value
               | LApp Id [Value]
-              | LExp PType Exp
+              | LExp Type Exp
               | LRand
               deriving(Show)
 
+type Id = String
+
+{-
 data PType = PInt [Predicate]
            | PBool [Predicate]
            | PPair PType (Id,PType)
@@ -51,7 +62,6 @@ instance Show PType where
     show (PFun ty (x,f)) = 
         let s1 = "("++x ++ " : " ++ show ty ++ ") -> " in
         s1 ++ show f
+        -}
 
-type Id = String
-type Predicate = (Id,Value)
 

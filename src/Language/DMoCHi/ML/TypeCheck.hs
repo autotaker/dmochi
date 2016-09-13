@@ -12,12 +12,14 @@ import Language.DMoCHi.Common.Id
 instance Show TypeError where
     show (UndefinedVariable s) = "UndefinedVariables: "++ s
     show (TypeMisMatch s t1 t2) = "TypeMisMatch: " ++ show t1 ++ " should be " ++ show t2 ++ ". context :" ++ s
+    show (TypeMisMatchList s t1 t2) = "TypeMisMatch: " ++ show t1 ++ " should be " ++ show t2 ++ ". context :" ++ s
     show (TypeMisUse t1 t2)     = "TypeUse: " ++ show t1 ++ " should be in " ++ show t2
     show (OtherError s)         = "OtherError: " ++ s
 
 type Env = M.Map String Type
 data TypeError = UndefinedVariable String 
                | TypeMisMatch String Type Type
+               | TypeMisMatchList String [Type] [Type]
                | TypeMisUse   Type [Type]
                | OtherError String
 
@@ -42,6 +44,10 @@ shouldBe :: MonadError TypeError m => String -> Type -> Type -> m ()
 shouldBe s t1 t2 | t1 == t2 = return ()
                  | otherwise = throwError (TypeMisMatch s t1 t2)
 
+shouldBeList :: MonadError TypeError m => String -> [Type] -> [Type] -> m ()
+shouldBeList s ts1 ts2 | ts1 == ts2 = return ()
+                       | otherwise = throwError (TypeMisMatchList s ts1 ts2)
+
 shouldBeValue :: MonadError TypeError m => Value -> Type -> m ()
 shouldBeValue v t1 = shouldBe (render $ pprintV 0 v) (getType v) t1
 
@@ -53,7 +59,9 @@ shouldBePair :: MonadError TypeError m => String -> Type -> m (Type,Type)
 shouldBePair _ (TPair t1 t2) = return (t1,t2)
 shouldBePair s _ = throwError (OtherError $ "expecting pair :" ++ s)
 
-convertP :: (Applicative m,MonadError TypeError m) => U.PType -> m Type
+convertP :: (Applicative m,MonadError TypeError m) => U.Type -> m Type
+convertP = pure 
+{-
 convertP = go M.empty where
     base f env ty ps = 
         f <$> mapM (\(x,p) -> do
@@ -70,6 +78,7 @@ convertP = go M.empty where
         ty1 <- go env p
         ty2 <- go (M.insert x ty1 env) f
         return (TFun ty1 ty2)
+        -}
 
 convertE :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> Type -> U.Exp -> m Exp
 convertE env ty _e = case _e of
@@ -78,16 +87,16 @@ convertE env ty _e = case _e of
         v' `shouldBeValue` ty
         return $ Value v'
     U.Let x lv e -> do
-        (lv',as) <- convertLV env lv
+        lv' <- convertLV env lv
         let ty' = getType lv'
         e' <- Let ty (Id ty' x) lv' <$> convertE (M.insert x ty' env) ty e
-        return $ foldr (\(x,vi) acc -> Let ty x vi acc) e' as
+        return e'
     U.Assume v e -> do
         v' <- convertV env v
         shouldBeValue  v' TBool
         Assume ty v' <$> convertE env ty e
-    U.Lambda x e -> do
-        fdef <- convertLambda env x e ty
+    U.Lambda xs e -> do
+        fdef <- convertLambda env xs e ty
         return $ Fun fdef
         {-
         f <- Id ty <$> freshId "f"
@@ -99,26 +108,35 @@ convertE env ty _e = case _e of
         i <- freshInt
         Branch ty i <$> convertE env ty e1 <*> convertE env ty e2
 
-convertLambda :: (MonadError TypeError m, MonadId m) => Env -> U.Id -> U.Exp -> Type -> m FunDef
-convertLambda env arg body (TFun t1 t2) = do
+convertLambda :: (MonadError TypeError m, MonadId m) => Env -> [U.Id] -> U.Exp -> Type -> m FunDef
+convertLambda env args body (TFun ts t2) = do
     i <- freshInt
-    FunDef i (Id t1 arg) <$> convertE (M.insert arg t1 env) t2 body
-convertLambda _ x _ _ = throwError $ OtherError $ "Expecting function:" ++ x
+    let env' = foldr (uncurry M.insert) env (zip args ts)
+    FunDef i (zipWith Id ts args) <$> convertE env' t2 body
+convertLambda _ xs _ _ = throwError $ OtherError $ "Expecting function:" ++ show xs
 
 
--- f v1 v2 .. vn ==> (yn-1 vn,[(y1,f v1),(y2,y1 v2),...,(yn-1,yn-2,vn-1)])
--- に変換する
-convertLV :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> U.LetValue -> m (LetValue,[(Id,LetValue)])
+convertLV :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> U.LetValue -> m (LetValue)
 convertLV env lv = case lv of
     U.LValue v -> do
         v' <- convertV env v
-        return (LValue v',[])
+        return $ LValue v'
     U.LRand -> 
-        return (LRand,[])
+        return LRand
     U.LApp f vs -> do
         vs' <- mapM (convertV env) vs
         case M.lookup f env of
             Just ty -> do
+                let ts' = map getType vs'
+                case ty of
+                    TFun ts t2 -> do
+                        shouldBeList (show (map (pprintV 0) vs')) ts ts'
+                        let f' = Id ty f
+                        i <- freshInt
+                        return $ LApp t2 i f' vs'
+                    _ -> throwError $ OtherError $ "Expecting function" ++ f
+                        
+                        {-
                 (ty',xs) <- foldM (\(tf,acc) v -> 
                     case tf of
                         TFun t1 t2 -> do
@@ -133,16 +151,17 @@ convertLV env lv = case lv of
                     yn = last (f':ys)
                     vn = last vs'
                 return $ (LApp ty' (last is) yn vn,l)
+            -}
             Nothing -> throwError $ UndefinedVariable f
     U.LExp ptyp (U.Lambda x e) -> do
         ty <- convertP ptyp
         fdef <- convertLambda env x e ty
-        return (LFun fdef,[])
+        return (LFun fdef)
     U.LExp ptyp e -> do
         ty <- convertP ptyp
         i <- freshInt
         lv <- LExp i <$> convertE env ty e
-        return (lv,[])
+        return lv
                 
 
 convertV :: (Applicative m,MonadError TypeError m) => Env -> U.Value -> m Value

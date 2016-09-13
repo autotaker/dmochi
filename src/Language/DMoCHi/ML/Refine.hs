@@ -300,21 +300,6 @@ instance Show LFormula where
             smeta = "{" ++ concat (intersperse "." (l : reverse accessors))++ "}" in
         "P" ++ smeta ++ "_" ++ show i ++ "(" ++ s ++ ")"
 
-{-
-pprintFormula :: LFormula -> String
-pprintFormula x = go M.empty x "" where
-    go env (Formula i []) = showString "P_" . shows i . showString "()"
-    go env (Formula i xs) =
-        showString "P_" . shows i . showChar '(' .
-        foldr1 (\a b -> a . showChar ',' . b) (map (\x ->
-            case M.lookup x env of
-                Just sv -> shows sv
-                Nothing -> showString $ ML.name x ++ " : " ++ show (ML.getType x)) xs)
-        . showChar ')'
-    go env (Subst theta fml) =
-        let env' = foldr (\(x,sv) -> M.insert x sv) env theta in
-        go env' fml
-        -}
 
 termOfFormula :: LFormula -> Horn.Term
 termOfFormula (Formula meta i vs) = Horn.Pred ("P"++ smeta ++ show i) (map termOfValue vs)
@@ -788,9 +773,6 @@ refineLFormula penv env fml = phi' where
             ML.OpFst t a -> ML.OpFst t (go a)
             ML.OpSnd t a -> ML.OpSnd t (go a))
 
-
-        
-        
 extendEnv :: Id -> ML.AValue -> M.Map String ML.AValue -> M.Map String ML.AValue
 extendEnv x v env = case ML.getType x of
     ML.TInt -> M.insert (ML.name x) v env
@@ -822,69 +804,3 @@ refine fvMap rtyAssoc rpostAssoc subst typeMap = typeMap'' where
                     in IM.insert i (Right termty') acc
                 ) typeMap' rpostAssoc
 
-{-
-deBooleanizeF :: MonadId m => SValue -> LFormula -> m (LFormula, SValue)
-deBooleanizeF fml0 (Formula i vs) = do
-    (fml,ws) <- foldM f (fml0, []) (reverse vs)
-    return (Formula i ws, fml)
-    where
-    f (fml,ws) v = case v of
-        SVar x     -> case ML.getType x of
-            ML.TInt -> return (fml, v : ws)
-            ML.TBool -> return (fml, SVar (ML.Id ML.TInt (ML.name x)) : ws)
-            _ -> error "deBooleanizeF: variable of unexpected type" 
-        Bool True  -> return (fml, Int 1 : ws)
-        Bool False -> return (fml, Int 0 : ws)
-        P _ _ -> error "deBooleanizeF: unexpected tuple"
-        C _ -> error "deBooleanizeF: unexpected closure"
-
-        Int i      -> return (fml, v : ws)
-        _ -> case ML.getType v of
-            ML.TInt -> return (fml, v : ws)
-            ML.TBool -> do
-                b <- ML.Id ML.TInt <$> freshId "b"
-                let fml' = (SVar b `Eq` Int 1) `Iff` v
-                return (fml' `And` fml, SVar b : ws)
-
-deBooleanizeA :: SValue -> SValue
-deBooleanizeA (And v1 v2) = And (deBooleanizeA v1) (deBooleanizeA v2)
-deBooleanizeA (Or  v1 v2) = Or  (deBooleanizeA v1) (deBooleanizeA v2)
-deBooleanizeA (Not v1) = Not (deBooleanizeA v1)
-deBooleanizeA (SVar x) = 
-    let y = SVar (ML.Id ML.TInt (ML.name x)) in
-    Eq y (Int 1)
-deBooleanizeA (Iff _ _) = error "deBooleanizeA: unexpected iff"
-deBooleanizeA v = v
-
-deBooleanize :: MonadId m => LFormula -> [Either SValue LFormula] -> m (LFormula, [Either SValue LFormula])
-deBooleanize hd cs = do
-    (hd',fml) <- deBooleanizeF (Bool True) hd
-    (fml',cs') <- foldM f (fml, []) (reverse cs)
-    return (hd',Left fml': cs')
-    where
-    f (fml, ds) _v = case _v of
-        Left sv -> return (fml, Left (deBooleanizeA sv) : ds)
-        Right p -> do
-            (p', fml') <- deBooleanizeF fml p
-            return (fml', Right p' : ds)
-            -}
-
-{-
-substValue :: M.Map Id Value -> Value -> Value
-substValue env = go where
-    go (Var y) = case M.lookup y env of
-        Just v -> v
-        Nothing -> Var y
-    go (Op op) = Op $ case op of
-        OpAdd a b -> OpAdd (go a) (go b)
-        OpSub a b -> OpSub (go a) (go b)
-        OpEq  a b -> OpEq  (go a) (go b)
-        OpLt  a b -> OpLt  (go a) (go b)
-        OpLte a b -> OpLte (go a) (go b)
-        OpAnd a b -> OpAnd (go a) (go b)
-        OpOr  a b -> OpOr  (go a) (go b)
-        OpNot a   -> OpNot (go a)
-        OpFst t a -> OpFst t (go a)
-        OpSnd t a -> OpSnd t (go a)
-    go w = w
-    -}

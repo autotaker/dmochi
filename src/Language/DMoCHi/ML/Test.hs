@@ -4,16 +4,15 @@ import System.IO
 import System.Process(callCommand)
 import System.Exit
 import Text.Printf
-import Language.DMoCHi.ML.Syntax.UnTyped
-import Language.DMoCHi.ML.Parser
 import qualified Language.DMoCHi.Boolean.Syntax as B
 import qualified Language.DMoCHi.Boolean.Sort   as B
 import qualified Language.DMoCHi.Boolean.HORS   as B
 import Language.DMoCHi.Boolean.Syntax.Typed as B(toUnTyped,tCheck)
 import Language.DMoCHi.Boolean.PrettyPrint.HORS(pprintHORS,printHORS)
 import Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
+import Language.DMoCHi.ML.Syntax.UnTyped
+import Language.DMoCHi.ML.Parser
 import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
-import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import Language.DMoCHi.ML.PrettyPrint.UnTyped
 import Language.DMoCHi.ML.Alpha
 import qualified Language.DMoCHi.ML.Inline  as Inline
@@ -22,13 +21,16 @@ import qualified Language.DMoCHi.ML.PrettyPrint.Typed as Typed
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as PNormal
+{-
+import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
+import qualified Language.DMoCHi.ML.Refine as Refine
+-}
 import Language.DMoCHi.Boolean.Test 
 import Control.Monad.Except
 import Text.Parsec(ParseError)
 import Data.Time
 import Text.PrettyPrint
 import Language.DMoCHi.Common.Id
-import qualified Language.DMoCHi.ML.Refine as Refine
 
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import qualified Language.DMoCHi.ML.HornClauseParser as Horn
@@ -85,6 +87,7 @@ doit = do
     liftIO $ printProgram program
     t_parsing_end <- liftIO $ getCurrentTime
 
+    -- alpha conversion
     alphaProgram <- withExceptT AlphaFailed $ alpha program
     liftIO $ putStrLn "Alpha Converted Program"
     liftIO $ printProgram alphaProgram
@@ -111,8 +114,9 @@ doit = do
     normalizedProgram<- PNormal.normalize typedProgram
     liftIO $ PNormal.printProgram normalizedProgram
 
+    throwError Debugging
 
-
+{-
     (typeMap0, fvMap) <- PAbst.initTypeMap normalizedProgram
     let lim = 20 :: Int
     let cegar _ k hcs | k >= lim = return ()
@@ -186,5 +190,5 @@ doit = do
         printf "\tModel Checking    : %7.3f sec\n" t_model_checking
         -}
 
-
+-}
 

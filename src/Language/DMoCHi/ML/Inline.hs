@@ -26,7 +26,7 @@ inline limit prog = doit
     edges :: [(Int,Int)]
     edges = do
         (f,fdef) <- functions prog
-        x <- S.toList (freeVariables (S.singleton (arg fdef)) (body fdef))
+        x <- S.toList (freeVariables (S.fromList (args fdef)) (body fdef))
         return (idTbl M.! f,idTbl M.! x)
     idTbl :: M.Map Id Int
     idTbl = M.fromList $ zip (map fst (functions prog)) [0..]
@@ -94,13 +94,14 @@ inlineE env (Value v) = return (Value v)
 inlineE env (Let ty x lv e) = do
     (lv',iv) <- case lv of
         LValue v -> return (lv, eval env v)
-        LApp ty0 l f v -> 
+        LApp ty0 l f vs -> 
             case M.lookup f env of
-                Just (IFun (FunDef _ y e0)) -> do
-                    y'  <- alphaId y
-                    e0' <- alphaLabel (M.singleton y y') e0
+                Just (IFun (FunDef _ ys e0)) -> do
+                    ys'  <- mapM alphaId ys
+                    e0' <- alphaLabel (M.fromList $ zip ys ys') e0
                     i   <- freshInt
-                    return (LExp i $ Let ty0 y' (LValue v) e0', INil)
+                    let e0'' = foldr (\(y',v) acc -> Let ty0 y' (LValue v) acc) e0' (zip ys vs)
+                    return (LExp i e0'', INil)
                 Just INil -> return (lv, INil)
                 Nothing -> return (lv, INil)
         LFun fdef -> do
@@ -141,19 +142,21 @@ alphaLabel = goE
     goE env (Let ty x lv e) = do
         lv' <- case lv of
             LValue v -> LValue <$> goV env v
-            LApp ty0 _ f v -> LApp ty0 <$> freshInt <*> rename env f <*> goV env v
-            LFun (FunDef _ y e0) -> do
-                y' <- alphaId y
-                LFun <$> (FunDef <$> freshInt <*> pure y' <*> goE (M.insert y y' env) e0)
+            LApp ty0 _ f vs -> LApp ty0 <$> freshInt <*> rename env f <*> mapM (goV env) vs
+            LFun (FunDef _ ys e0) -> do
+                ys' <- mapM alphaId ys
+                let env' = foldr (uncurry M.insert) env (zip ys ys')
+                LFun <$> (FunDef <$> freshInt <*> pure ys' <*> goE env' e0)
             LExp _ e0 -> LExp <$> freshInt <*> goE env e0
             LRand -> pure LRand
         x' <- alphaId x
         Let ty x' lv' <$> goE (M.insert x x' env) e
     goE env (Assume ty v e) = Assume ty <$> goV env v <*> goE env e
     goE env (Fail ty) = pure $ Fail ty
-    goE env (Fun (FunDef _ y e0)) = do
-        y' <- alphaId y
-        Fun <$> (FunDef <$> freshInt <*> pure y' <*> goE (M.insert y y' env) e0)
+    goE env (Fun (FunDef _ ys e0)) = do
+        ys' <- mapM alphaId ys
+        let env' = foldr (uncurry M.insert) env (zip ys ys')
+        Fun <$> (FunDef <$> freshInt <*> pure ys' <*> goE env' e0)
     goE env (Branch ty _ e1 e2) =
         Branch ty <$> freshInt <*> goE env e1 <*> goE env e2
     goV env (Var x) = Var <$> rename env x
@@ -182,7 +185,7 @@ simplify (Let ty x (LExp l e0) e) =
         Just e'' -> e''
         Nothing  -> Let ty x (LExp l e0') e'
 simplify (Let ty x (LFun fdef) e) =
-    let fdef' = FunDef (ident fdef) (arg fdef) (simplify $ body fdef) in
+    let fdef' = FunDef (ident fdef) (args fdef) (simplify $ body fdef) in
     Let ty x (LFun fdef') (simplify e)
 simplify (Let ty x lv e) = Let ty x lv (simplify e)
 simplify (Assume ty v e) = Assume ty v (simplify e)
@@ -229,7 +232,7 @@ elimIndirection env (Let ty x (LValue (Var y)) e) = elimIndirection (M.insert x 
 elimIndirection env (Let ty x lv e) = Let ty x lv' e' where
     lv' = case lv of
         LValue v -> LValue (renameV env v)
-        LApp ty l f v -> LApp ty l (rename env f) (renameV env v)
+        LApp ty l f vs -> LApp ty l (rename env f) (map (renameV env) vs)
         LFun fdef -> LFun (elimIndirectionF env fdef)
         LExp l e -> LExp l (elimIndirection env e)
         LRand -> LRand

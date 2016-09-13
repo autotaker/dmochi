@@ -24,7 +24,7 @@ alpha (Program fs t0) = do
         let fs' = map head $ filter ((>1).length) $ group $ sort $ map (\(x,_,_) -> x) fs
         throwError $ MultipleDefinition fs'
     flip runReaderT env $ do
-        fs' <- forM fs $ \(x,p,e) -> (,,) <$> rename x <*> renameP p <*> renameE e
+        fs' <- forM fs $ \(x,p,e) -> (,,) <$> rename x <*> pure p <*> renameE e
         t0' <- renameE t0
         return $ Program fs' t0'
 
@@ -36,11 +36,13 @@ rename x = do
         Nothing -> throwError $ UndefinedVariable x
         Just x' -> return x'
 
+{-
 renameP :: (MonadError AlphaError m,MonadId m, Applicative m) => PType -> M m PType
 renameP (PInt ps)  = PInt  <$> mapM (\(x,v) -> register x (renameV v)) ps
 renameP (PBool ps) = PBool <$> mapM (\(x,v) -> register x (renameV v)) ps
 renameP (PPair p1 (x,p2)) = PPair <$> renameP p1 <*> register x (renameP p2)
 renameP (PFun  p1 (x,p2)) = PFun  <$> renameP p1 <*> register x (renameP p2)
+-}
 
 
 renameE :: (MonadError AlphaError m,MonadId m, Applicative m) => Exp -> M m Exp
@@ -49,12 +51,12 @@ renameE (Let x lv e) = do
     lv' <- case lv of
         LValue v -> LValue <$> renameV v
         LApp f vs -> LApp <$> rename f <*> mapM renameV vs
-        LExp p ev -> LExp <$> renameP p <*> renameE ev
+        LExp p ev -> LExp <$> pure p <*> renameE ev
         LRand -> pure LRand
     (x',e') <- register x (renameE e)
     return $ Let x' lv' e'
 renameE (Assume v e) = liftA2 Assume (renameV v) (renameE e)
-renameE (Lambda x e) = uncurry Lambda <$> register x (renameE e)
+renameE (Lambda xs e) = uncurry Lambda <$> register' xs (renameE e)
 renameE Fail = pure Fail
 renameE (Branch e1 e2) = liftA2 Branch (renameE e1) (renameE e2)
 
@@ -84,3 +86,9 @@ register x m = do
     x' <- freshId x
     v  <- local (M.insert x x') m
     return (x',v)
+
+register' :: (MonadError AlphaError m,MonadId m) => [String] -> M m a -> M m ([String],a)
+register' xs m = do
+    xs' <- mapM freshId xs
+    v  <- local (\env -> foldr (uncurry M.insert) env (zip xs xs')) m
+    return (xs',v)
