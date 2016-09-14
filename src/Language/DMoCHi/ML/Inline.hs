@@ -100,7 +100,7 @@ inlineE env (Let ty x lv e) = do
                     ys'  <- mapM alphaId ys
                     e0' <- alphaLabel (M.fromList $ zip ys ys') e0
                     i   <- freshInt
-                    let e0'' = foldr (\(y',v) acc -> Let ty0 y' (LValue v) acc) e0' (zip ys vs)
+                    let e0'' = foldr (\(y',v) acc -> Let ty0 y' (LValue v) acc) e0' (zip ys' vs)
                     return (LExp i e0'', INil)
                 Just INil -> return (lv, INil)
                 Nothing -> return (lv, INil)

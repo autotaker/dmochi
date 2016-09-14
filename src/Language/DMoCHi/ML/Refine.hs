@@ -10,6 +10,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Writer
 import Control.Monad.State.Strict
+import Control.Arrow (first)
 import qualified Data.IntMap as IM
 import Language.DMoCHi.Common.Id
 import Language.DMoCHi.Common.Util
@@ -36,7 +37,7 @@ data ClosureInfo = ClosureInfo { label :: Int -- 対応する関数定義のラ�
                                } deriving Show
 -- 関数返り値の情報
 data ReturnInfo = ReturnInfo { rcallId :: CallId -- 関数呼び出しの識別子
-                             , argValue :: SValue -- 引数(let式の場合は(Int 0))
+                             , argValues :: [SValue] -- 引数
                              , retValue :: Maybe SValue -- 返り値(ないときはfailを表す)
                              , retCallId :: CallId -- 関数呼び出し終了時のCallId(exclusive)
                              } deriving Show
@@ -227,15 +228,16 @@ symbolicExec prog trace =
     evalLV :: CallId -> Env -> ML.LetValue -> M m (Maybe SValue)
     evalLV callSite env = \case 
         ML.LValue v -> pure $ Just (evalA env v)
-        ML.LApp _ label f v -> do
-            sv <- evalV callSite env v
+        ML.LApp _ label f vs -> do
+            svs <- mapM (evalV callSite env) vs
             let C (Cls fdef clsId env') = env M.! f
-            let x  = ML.arg fdef
+            let xs = ML.args fdef
                 e0 = ML.body fdef
             j <- newCall label callSite clsId
-            r <- eval j (M.insert x sv env') e0
+            let env'' = foldr (uncurry M.insert) env $ zip xs svs
+            r <- eval j env'' e0
             ret_cid <- callCounter <$> get
-            retval (ReturnInfo j sv r (CallId ret_cid))
+            retval (ReturnInfo j svs r (CallId ret_cid))
             return r
         -- ML.LFun fdef -> Just . C <$> genClosure callSite fdef env
         ML.LExp label e -> do
@@ -273,8 +275,8 @@ symbolicExec prog trace =
 -- Refinement types
 data RType = RBool | RInt | RFun !(IM.IntMap RFunAssoc) | RPair !RType !RType deriving(Show)
 
-data RFunAssoc = RFunAssoc { argName :: !Id
-                           , argType :: !RType
+data RFunAssoc = RFunAssoc { argNames :: ![Id]
+                           , argTypes :: ![RType]
                            , preCond :: !LFormula
                            , resType :: !RPostType }
 data RPostType = RPostType { posName :: !Id
@@ -286,8 +288,9 @@ data Meta = Meta !String [String]
 -- この定義だと{(int,int -> {int | P1})|P2}でP1からタプルの第一要素が参照できない。
 
 instance Show RFunAssoc where
-    show (RFunAssoc x rty cond res) = 
-        "{" ++ ML.name x ++ " : " ++ show rty ++ " | " ++ show cond ++ "}" ++ " -> " ++ show res
+    show (RFunAssoc xs rtys cond res) = 
+        let as = intersperse ", " [ ML.name x ++ " : " ++ show rty | (x,rty) <- zip xs rtys ] in 
+        "{" ++ concat as ++ " | " ++ show cond ++ "}" ++ " -> " ++ show res
 
 instance Show RPostType where
     show (RPostType r rty cond) = 
@@ -381,16 +384,18 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
                                  unCallId (callId info) > fst lim
                                  -- unCallId (callId info) < snd lim
                                  ] -- TODO Improve Impl
-            x  = ML.arg fdef
-            ML.TFun ty_arg ty_ret = ML.getType fdef
+            xs  = ML.args fdef
+            ML.TFun ty_args ty_ret = ML.getType fdef
         as <- forM cs $ \j -> do
-            let ReturnInfo _ arg_v mv ret_cid = rtnTbl IM.! (unCallId j)
-            let xj = ML.Id ty_arg (ML.name x)
+            let ReturnInfo _ arg_vs mv ret_cid = rtnTbl IM.! (unCallId j)
+            let xsj = [ ML.Id ty_arg (ML.name x) | (x,ty_arg) <- zip xs ty_args ]
             let lim' = (unCallId j, unCallId ret_cid)
-            arg_ty <- gen lim' (meta_add meta "pre") env arg_v
-            posTy <- genPost lim' (meta_add meta "post") (push xj env) mv
+            arg_tys <- forM (zip [(0::Int)..] arg_vs) $ \(i,arg_v) -> 
+                            gen lim' (meta_add meta ("pre_"++show i)) env arg_v
+            let env' = (foldl' (flip push) env xsj)
+            posTy <- genPost lim' (meta_add meta "post") env' mv
             p1 <- freshInt
-            return (unCallId j,RFunAssoc xj arg_ty (Formula (meta_add meta "pre") p1 (push xj env)) posTy)
+            return (unCallId j,RFunAssoc xsj arg_tys (Formula (meta_add meta "pre") p1 env') posTy)
         return $ RFun $ IM.fromList as
     genPost lim meta env mv = case mv of
         Just v -> do
@@ -520,18 +525,19 @@ refineCGen prog trace = do
                 ML.Let _ x (ML.LValue v) e -> do
                     let env' = M.insert x (evalRTypeA env v) env
                     check env' cs callSite e tau
-                ML.Let _ x (ML.LApp _ i f v) e -> do
+                ML.Let _ x (ML.LApp _ i f vs) e -> do
                     let (RFun fassoc,_) = env M.! f
                         j = callTbl M.! (callSite,i)
                         ty_f = fassoc IM.! unCallId j
-                    sv <- checkValue env cs callSite v (argType ty_f)
-                    clause cs (substLFormula (argName ty_f) sv (preCond ty_f))
+                    svs <- zipWithM (checkValue env cs callSite) vs (argTypes ty_f)
+                    let subst = M.fromList $ zip (argNames ty_f) svs
+                    clause cs (substLFormula subst (preCond ty_f))
                     case resType ty_f of
                         RPostType _ _ _ -> do
                             let x'    = decompose x
-                                tau_j = substPostType (argName ty_f) sv $ resType ty_f
+                                tau_j = substPostType subst $ resType ty_f
                                 env'  = M.insert x (posType tau_j,x') env
-                                cs'   = Right (substLFormula (posName tau_j) x' (posCond tau_j)) : cs
+                                cs'   = Right (substLFormula (M.singleton (posName tau_j) x') (posCond tau_j)) : cs
                             check env' cs' callSite e tau
                         RPostTypeFailure -> return ()
                 ML.Let _ x ML.LRand e -> do
@@ -554,7 +560,7 @@ refineCGen prog trace = do
                         RPostType _ _ _ -> do
                             let x'   = decompose x
                                 env' = M.insert x (posType tau', x') env
-                                cs'  = Right (substLFormula (posName tau') x' (posCond tau')) : cs
+                                cs'  = Right (substLFormula (M.singleton (posName tau') x') (posCond tau')) : cs
                             check env' cs' callSite e tau
                         RPostTypeFailure -> return ()
                         {- 
@@ -583,7 +589,7 @@ refineCGen prog trace = do
                             -- let (rty,sv) = evalRType env v
                             -- subType cs rty (posType tau)
                             sv <- checkValue env cs callSite v (posType tau)
-                            clause cs (substLFormula (posName tau) sv (posCond tau))
+                            clause cs (substLFormula (M.singleton (posName tau) sv) (posCond tau))
                         RPostTypeFailure -> do
                             let s = render $ ML.pprintV 0 v
                             error $ "This value "++ s ++ " cannot have the refinement type" ++ show tau
@@ -591,7 +597,7 @@ refineCGen prog trace = do
                     case tau of
                         RPostTypeFailure -> failClause cs
                         _ -> error $ "This failure term cannot have the refinement type" ++ show tau
-            checkFunDef fname env cs callSite fdef@(ML.FunDef label x e0) mtheta = do
+            checkFunDef fname env cs callSite fdef@(ML.FunDef label xs e0) mtheta = do
                 theta@(RFun fassoc) <- case mtheta of 
                     Just it -> return it
                     Nothing -> 
@@ -599,9 +605,9 @@ refineCGen prog trace = do
                             meta  = fname++ "_" ++ show label in
                         gen meta (M.keys env) (C (Cls fdef clsId undefined))
                 forM_ (IM.assocs fassoc) $ \(j,ty_f) -> do
-                    let xj = argName ty_f
-                        ty_xj = argType ty_f
-                        env' = M.insert x (ty_xj,decompose xj) env
+                    let xsj = argNames ty_f
+                        ty_xsj = argTypes ty_f
+                        env' = foldr (uncurry M.insert) env (zip xs (zip ty_xsj (map decompose xsj))) 
                         cs' = Right (preCond ty_f) : cs
                     check env' cs' (CallId j) e0 (resType ty_f)
                 return theta
@@ -639,14 +645,15 @@ refineCGen prog trace = do
                     (RBool,RBool) -> return ()
                     (RPair t1 t2,RPair t3 t4) -> subType cs t1 t3 >> subType cs t2 t4
                     (RFun fs1,RFun fs2) -> do
-                        forM_ (IM.assocs fs2) $ \(i,RFunAssoc x2 rty2 cond2 pty2) -> do
-                            let RFunAssoc x1 rty1 cond1 pty1  = fs1 IM.! i
+                        forM_ (IM.assocs fs2) $ \(i,RFunAssoc xs2 rtys2 cond2 pty2) -> do
+                            let RFunAssoc xs1 rtys1 cond1 pty1  = fs1 IM.! i
                             let cs' = Right cond2 : cs
-                            clause cs' (substLFormula x1 (decompose x2) cond1)
-                            subType cs rty2 rty1
-                            subTypePost cs' (substPostType x1 (decompose x2) pty1) pty2
+                            let subst = M.fromList $ zip xs1 (map decompose xs2)
+                            clause cs' (substLFormula subst cond1)
+                            zipWithM (subType cs) rtys2 rtys1
+                            subTypePost cs' (substPostType subst pty1) pty2
             subTypePost cs (RPostType r1 ty1 cond1) (RPostType r2 ty2 cond2) = do
-                let cs' = Right (substLFormula r1 (decompose r2) cond1) : cs
+                let cs' = Right (substLFormula (M.singleton r1 (decompose r2)) cond1) : cs
                 clause cs' cond2
                 subType cs' ty1 ty2
             subTypePost cs RPostTypeFailure RPostTypeFailure = return ()
@@ -670,46 +677,50 @@ refineCGen prog trace = do
         return ()
 
 -- assume that v is a decomposed value
-substPostType :: Id -> SValue -> RPostType -> RPostType
-substPostType x v (RPostType r rty cond) =
-    RPostType r (substRType x v rty) (substLFormula x v cond)
-substPostType x v RPostTypeFailure = RPostTypeFailure
+substPostType :: M.Map Id SValue -> RPostType -> RPostType
+substPostType subst (RPostType r rty cond) =
+    RPostType r (substRType subst rty) (substLFormula subst cond)
+substPostType subst RPostTypeFailure = RPostTypeFailure
 
 -- assume that v is a decomposed value
-substRType :: Id -> SValue -> RType -> RType
-substRType x v = go where
+substRType :: M.Map Id SValue -> RType -> RType
+substRType subst = go where
     go (RPair ty1 ty2) = RPair (go ty1) (go ty2)
     go (RFun fassoc) = 
-        RFun (fmap (\(RFunAssoc y rty cond pos) ->
-            RFunAssoc y (go rty) (substLFormula x v cond) (substPostType x v pos)) fassoc)
+        RFun (fmap (\(RFunAssoc ys rtys cond pos) ->
+            RFunAssoc ys (map go rtys) (substLFormula subst cond) (substPostType subst pos)) fassoc)
     go RBool = RBool
     go RInt = RInt
 
 -- assume that x have a base type (int, bool)
-substLFormulaBase :: Id -> SValue -> LFormula -> LFormula
-substLFormulaBase x sv (Formula meta i ws) = Formula meta i ws' where
-    ws' = map (substSValue x sv) ws
+substLFormulaBase :: M.Map Id SValue -> LFormula -> LFormula
+substLFormulaBase subst (Formula meta i ws) = Formula meta i ws' where
+    ws' = map (substSValue subst) ws
 
-substLFormula :: Id -> SValue -> LFormula -> LFormula
-substLFormula = go . decompose
+substLFormula :: M.Map Id SValue -> LFormula -> LFormula
+substLFormula subst = substLFormulaBase subst'
     where
-    go (SVar x) sv = substLFormulaBase x sv
-    go (P x1 x2) (P sv1 sv2) = go x1 sv1 . go x2 sv2
-    go x sv = error $ "substLFormula: unexpected pattern " ++ show (x,sv)
+    subst' = M.fromList $ 
+        M.assocs subst >>= fix (\go p -> case p of
+            (SVar x,sv) -> return (x,sv)
+            (P x1 x2, P sv1 sv2) -> go (x1,sv1) <|> go (x2,sv2)
+            (x,sv) -> error $ "substLFormula: unexpected pattern " ++ show (x,sv)
+            ) . first decompose
 
-substSValue :: Id -> SValue -> SValue -> SValue
-substSValue x v _sv = case _sv of
-    SVar y | y == x -> v
-           | otherwise -> _sv
-    P sv1 sv2   -> P (substSValue x v sv1) (substSValue x v sv2)
-    Add sv1 sv2 -> Add (substSValue x v sv1) (substSValue x v sv2)
-    Sub sv1 sv2 -> Sub (substSValue x v sv1) (substSValue x v sv2)
-    Eq  sv1 sv2 -> Eq  (substSValue x v sv1) (substSValue x v sv2)
-    Lt  sv1 sv2 -> Lt  (substSValue x v sv1) (substSValue x v sv2)
-    Lte sv1 sv2 -> Lte (substSValue x v sv1) (substSValue x v sv2)
-    And sv1 sv2 -> And (substSValue x v sv1) (substSValue x v sv2)
-    Or  sv1 sv2 -> Or (substSValue x v sv1) (substSValue x v sv2)
-    Not sv1     -> Not (substSValue x v sv1)
+substSValue :: M.Map Id SValue -> SValue -> SValue
+substSValue subst _sv = case _sv of
+    SVar y -> case M.lookup y subst of
+        Just v -> v
+        Nothing -> _sv
+    P sv1 sv2   -> P (substSValue subst sv1) (substSValue subst sv2)
+    Add sv1 sv2 -> Add (substSValue subst sv1) (substSValue subst sv2)
+    Sub sv1 sv2 -> Sub (substSValue subst sv1) (substSValue subst sv2)
+    Eq  sv1 sv2 -> Eq  (substSValue subst sv1) (substSValue subst sv2)
+    Lt  sv1 sv2 -> Lt  (substSValue subst sv1) (substSValue subst sv2)
+    Lte sv1 sv2 -> Lte (substSValue subst sv1) (substSValue subst sv2)
+    And sv1 sv2 -> And (substSValue subst sv1) (substSValue subst sv2)
+    Or  sv1 sv2 -> Or (substSValue subst sv1) (substSValue subst sv2)
+    Not sv1     -> Not (substSValue subst sv1)
     C cls       -> error "substSValue: substituting closure is not supported"
     Int i       -> _sv
     Bool b      -> _sv
@@ -741,12 +752,12 @@ refinePType penv env (RPair rty1 rty2) (PAbst.PPair ty pty1 pty2) =
 refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
     where
     pty' = uncurry (PAbst.PFun ty) $ foldl' f (pty_x0, pty_r0) (IM.elems fassoc)
-    f ((abst_x, abst_pty, abst_fml), pty_r) as = pre `seq` abst_pty' `seq` (pty_x', pty_r')
+    f ((abst_xs, abst_ptys, abst_fml), pty_r) as = pre `seq` abst_ptys' `seq` (pty_x', pty_r')
         where
-        env'  = extendEnv (argName as) (ML.Var abst_x) env
+        env'  = foldr (uncurry extendEnv) env (zip (argNames as) (map ML.Var abst_xs))
         pre   = refineLFormula penv env' (preCond as)
-        abst_pty' = refinePType penv env (argType as) abst_pty
-        pty_x' = (abst_x, abst_pty', updateFormula pre abst_fml)
+        abst_ptys' = zipWith (refinePType penv env) (argTypes as) abst_ptys
+        pty_x' = (abst_xs, abst_ptys', updateFormula pre abst_fml)
         pty_r' = refineTermType penv env' (resType as) pty_r
 
 refineLFormula :: IM.IntMap ([Id], ML.AValue) -> M.Map String ML.AValue -> LFormula -> PAbst.Formula

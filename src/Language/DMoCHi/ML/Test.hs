@@ -21,10 +21,8 @@ import qualified Language.DMoCHi.ML.PrettyPrint.Typed as Typed
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as PNormal
-{-
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
--}
 import Language.DMoCHi.Boolean.Test 
 import Control.Monad.Except
 import Text.Parsec(ParseError)
@@ -114,9 +112,7 @@ doit = do
     normalizedProgram<- PNormal.normalize typedProgram
     liftIO $ PNormal.printProgram normalizedProgram
 
-    throwError Debugging
 
-{-
     (typeMap0, fvMap) <- PAbst.initTypeMap normalizedProgram
     let lim = 20 :: Int
     let cegar _ k hcs | k >= lim = return ()
@@ -190,5 +186,4 @@ doit = do
         printf "\tModel Checking    : %7.3f sec\n" t_model_checking
         -}
 
--}
 

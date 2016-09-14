@@ -83,7 +83,7 @@ exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") <?> "expr" where
         return $ Branch (Assume pred eThen) (Assume (Op (OpNot pred)) eElse)
     lambdaP = Lambda <$> (reserved "fun" *> argsP <* reservedOp "->") 
                      <*> exprP
-    argsP = [] <$ parens empty <|> many identifier
+    argsP = parens (pure []) <|> many1 identifier
     failP   = Fail <$ reserved "Fail"
 
 letP :: Parser Exp
@@ -91,7 +91,8 @@ letP = (Let <$> (reserved "let" *> identifier)
            <*> sub
            <*> (reserved "in" *> exprP)) <?> "let"
     where sub = LExp <$> (reservedOp ":" *> typeP) <*> (reservedOp "=" *> exprP)
-            <|> try (LApp <$> (reservedOp "=" *> identifier) <*> many1 valueP)
+            <|> try (LApp <$> (reservedOp "=" *> identifier) 
+                          <*> (try (parens (pure [])) <|>  many1 valueP))
             <|> (reservedOp "=" *> (LValue <$> valueP <|> LRand <$ reservedOp "*"))
 
 valueP :: Parser Value
