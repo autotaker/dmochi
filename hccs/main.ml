@@ -40,8 +40,8 @@ let infer_constructor hcs =
 let () =
     begin
       FPATConfig.set_default ();
-      HCCSSolver.link_dyn (GenHCCSSolver.solve (CHGenInterpProver.interpolate
-      true));
+      HCCSSolver.link_dyn (GenHCCSSolver.solve (CHGenInterpProver.interpolate true));
+(*       HCCSSolver.link_dyn (BwIPHCCSSolver.solve); *)
       InterpProver.link_dyn (InterpProver.interpolate_csisat_dyn);
       Format.printf "@[<v>";
       begin
@@ -75,7 +75,7 @@ let () =
                      hcs)
                  |> List.map (HornClause.simplify_full [])
                  |> List.map HornClause.normalize
-                 |> (fun hcs -> Format.printf "Simplified HCCS:@,  %a@," HCCS.pr_verbose hcs; hcs)
+                 |> (fun hcs -> Format.printf "Simplified HCCS:@,  %a@," HCCS.pr_verbose hcs; Format.print_flush(); hcs)
                  |> HCCSSolver.solve_dyn
                  |> PredSubst.normalize
                  |> (fun ans -> Format.printf "solution:@,  %a@," PredSubst.pr ans;ans)

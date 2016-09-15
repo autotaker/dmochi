@@ -32,6 +32,7 @@ instance Show HCCS where
 instance Show Clause where
     show (Clause Bot body) = 
         "?- " ++ (concat $ intersperse ", " (map show body)) ++ "."
+    show (Clause (PVar _ []) _) = ""
     show (Clause (PVar p ts) body) = 
         show (Pred p ts) ++ " :- " ++ (concat $ intersperse "," (map show body)) ++ "."
 
@@ -41,7 +42,7 @@ instance Show Term where
     showsPrec _ (Int i) = shows i
     showsPrec _ (Var x) = showString x
     -- showsPrec _ (Pair t1 t2) = showParen True $ shows t1 . showChar ',' . showChar ' ' . shows t2
-    showsPrec _ (Pred p []) = showString $ p ++"(dummy)"
+    showsPrec _ (Pred p []) = showString "top"
     showsPrec _ (Pred p ps) = 
         showString p . showChar '(' .
         (foldr1 (\a b -> a . showChar ',' . showChar ' ' . b) (map shows ps)) .

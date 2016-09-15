@@ -71,9 +71,8 @@ body:
  | { [] }
 
 atom:
- | PVAR LPAREN terms RPAREN
-        { Pva.make $1 $3
-          |> Pva.to_formula }
+ | PVAR { Pva.make $1 [] |> Pva.to_formula }
+ | PVAR LPAREN terms RPAREN { Pva.make $1 $3 |> Pva.to_formula }
  | term EQ term
         { Formula.eq
             (Type.meet (snd $1) (snd $3))

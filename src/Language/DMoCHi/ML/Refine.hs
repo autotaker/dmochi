@@ -209,7 +209,8 @@ symbolicExec prog trace =
     evalV callSite env (ML.Fun fdef) = C <$> genClosure callSite fdef env
     evalA :: Env -> ML.AValue -> SValue
     evalA env = \case
-        ML.Var x -> env M.! x
+        ML.Var x -> case M.lookup x env of Just v -> v 
+                                           Nothing -> error $ "lookup error: key " ++ (show x)
         ML.CInt x -> Int x
         ML.CBool x -> Bool x
         ML.Op op -> case op of
@@ -234,7 +235,7 @@ symbolicExec prog trace =
             let xs = ML.args fdef
                 e0 = ML.body fdef
             j <- newCall label callSite clsId
-            let env'' = foldr (uncurry M.insert) env $ zip xs svs
+            let env'' = foldr (uncurry M.insert) env' $ zip xs svs
             r <- eval j env'' e0
             ret_cid <- callCounter <$> get
             retval (ReturnInfo j svs r (CallId ret_cid))
@@ -761,6 +762,8 @@ refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
         pty_r' = refineTermType penv env' (resType as) pty_r
 
 refineLFormula :: IM.IntMap ([Id], ML.AValue) -> M.Map String ML.AValue -> LFormula -> PAbst.Formula
+refineLFormula penv env (Formula _ _ []) = ML.CBool True  {- this is ad-hoc technique to avoid lookup error: 
+                                                             if args is null, penv may not contain the corresponding formula -}
 refineLFormula penv env fml = phi' where
     Formula _ i args = fml
     (args_phi, phi) = penv IM.! i

@@ -1,0 +1,15 @@
+let mc91 : [int] -> int =
+    fun x ->
+        if x > 100 then
+            x - 10
+        else
+            let v1 = mc91 (x + 11) in
+            let v2 = mc91 v1 in
+            v2;;
+
+let n = * in
+assume n <= 101;
+let r = mc91 n in
+assume not(r = 91);
+Fail
+

@@ -1,0 +1,79 @@
+let head_pair : [int * ([int] -> int * int)] -> int * int =
+    fun p -> let f = p.snd in
+             let z = f 0 in
+             z;;
+
+let head_int : [int * ([int] -> int)] -> int =
+    fun p -> let f = p.snd in
+             let z = f 0 in
+             z;;
+
+let tail_pair : [int * ([int] -> int * int)] -> int * ([int] -> int * int) =
+    fun p -> let n = p.fst in
+             let f = p.snd in
+             let g : [int] -> int * int = fun j -> let v = f (j + 1) in v in
+             (n - 1, g);;
+
+let tail_int : [int * ([int] -> int)] -> int * ([int] -> int) =
+    fun p -> let n = p.fst in
+             let f = p.snd in
+             let g : [int] -> int = fun j -> let v = f (j + 1) in v in
+             (n - 1, g);;
+             
+let nil_pair : [] -> int * ([int] -> int * int) =
+    fun () -> let f : [int] -> int * int = fun x -> (0, 0) in
+              (0, f);;
+
+let nil_int : [] -> int * ([int] -> int) =
+    fun () -> let f : [int] -> int = fun x -> 0 in
+              (0, f);;
+
+let cons_int : [int, int * ([int] -> int)] -> int * ([int] -> int) =
+	fun x p ->
+		let n = p.fst in
+		let f = p.snd in
+		let g : [int] -> int = fun j ->
+            if j = 0 then x
+            else let z = f (j - 1) in z in
+		(n+1,g)
+
+let cons_pair : [int * int, int * ([int] -> int * int)] -> int * ([int] -> int * int) =
+	fun x p ->
+		let n = p.fst in
+		let f = p.snd in
+		let g : [int] -> int * int = fun j ->
+            if j = 0 then x
+            else let z = f (j - 1) in z in
+		(n+1,g)
+
+let zip : [int * ([int] -> int), int * ([int] -> int)] -> int * ([int] -> int * int) =
+    fun xs ys ->
+        if xs.fst = 0 then
+            if ys.fst = 0 then
+                let r = nil_pair () in r
+            else
+                Fail
+        else 
+            if ys.fst = 0 then
+                Fail
+            else
+                let x = head_int xs in
+                let xs1 = tail_int xs in
+                let y = head_int ys in
+                let ys1 = tail_int ys in
+                let rs1 = zip xs1 ys1 in
+                let rs = cons_pair (x, y) rs1 in
+                rs;;
+
+let make_list : [int] -> int * ([int] -> int) =
+    fun n ->
+        if n = 0 then
+            let r = nil_int () in r
+        else
+            let xs = make_list (n - 1) in
+            let r = cons_int n xs in
+            r;;
+let n = * in
+let xs = make_list n in
+let rs = zip xs xs in
+0;;

@@ -1,0 +1,12 @@
+let copy : [int] -> int =
+    fun x ->
+        if x = 0 then 
+            0
+        else
+            let y = copy (x - 1) in
+            1 + y;;
+
+let n = * in
+let n1 = copy n in
+let n2 = copy n1 in
+assume (not (n2 = n)); Fail
