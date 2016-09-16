@@ -1,0 +1,27 @@
+diff --git a/Makefile.config.model b/Makefile.config.model
+index 87a7521..cd89e4c 100644
+--- a/Makefile.config.model
++++ b/Makefile.config.model
+@@ -1,5 +1,5 @@
+ ATP = ./atp
+-CSISAT = ../csisat-read-only
++CSISAT = ../../src/csisat-1.2/
+ SPPOC = ../sppoc
+ 
+ RSREFINE = ../idepceg/rsrefine
+diff --git a/fwHCCSSolver.ml b/fwHCCSSolver.ml
+index 4ba04fa..1f79907 100644
+--- a/fwHCCSSolver.ml
++++ b/fwHCCSSolver.ml
+@@ -104,9 +104,11 @@ let rec extlbs_of extlbs hcs =
+     end
+   else
+     hcs1
++    |> Logger.pprintf "original horn clauses:@,  %a@," HCCS.pr
+     |> List.concat_map (HCCS.resolve_hc extlbs)
+     |> HCCS.simplify_full []
+     (* cannot replace the above code with: resolve extlbs *)
++    |> List.unique
+     |> Logger.pprintf "inlined horn clauses:@,  %a@," HCCS.pr
+     |> (@) extlbs
+     (*|> merge @todo this may cause error *)
