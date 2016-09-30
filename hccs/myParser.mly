@@ -54,8 +54,8 @@ hcs:
  | DOT { [] }
 
 hc:
- | head DECLARE body { HornClause.of_formulas $1 $3 }
- | QUERY body { HornClause.of_formulas Formula.mk_false $2 }
+ | head DECLARE body { HornClause.of_formulas (List.concat_map Formula.fvs ($1 :: $3)) $1 $3 }
+ | QUERY body { HornClause.of_formulas (List.concat_map Formula.fvs $2) Formula.mk_false $2 }
 
 head:
  | BOT
