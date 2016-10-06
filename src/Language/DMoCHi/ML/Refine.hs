@@ -20,8 +20,14 @@ import Debug.Trace
 import Text.PrettyPrint
 
 type Trace = [Bool]
-newtype CallId = CallId { unCallId :: Int } deriving (Show,Eq,Ord)
-newtype ClosureId = ClosureId { unClosureId :: Int } deriving (Show,Eq,Ord)
+newtype CallId = CallId { unCallId :: Int } deriving (Eq,Ord)
+newtype ClosureId = ClosureId { unClosureId :: Int } deriving (Eq,Ord)
+
+instance Show CallId where
+    show (CallId x) = show x
+
+instance Show ClosureId where
+    show (ClosureId x) = show x
 
 type Constraint = SValue -- must have the sort Bool
 data CallInfo = CallInfo { calleeId :: ClosureId   -- 呼び出されたクロージャの識別子
@@ -119,7 +125,10 @@ instance ML.HasType Closure where
     getType (Cls fdef _ _) = ML.getType fdef
 
 instance Show Closure where
-    show (Cls i x _) = "Closure " ++ show (ML.ident i) ++ " " ++ show x
+    showsPrec d (Cls i x _) = showParen (d > app_prec) $
+        showString "Closure " . showsPrec (app_prec+1) (ML.ident i) . showChar ' ' . showsPrec (app_prec + 1) x
+        where
+        app_prec = 10
 type Env = M.Map Id SValue
 type Id = ML.Id
 
@@ -490,11 +499,14 @@ refineCGen prog trace = do
     if isFeasible then
         return Nothing
     else fmap Just $ execWriterT $ do
-        liftIO $ print calls
-        liftIO $ print closures
-        liftIO $ print returns
-        liftIO $ print branches
-        liftIO $ print letexps
+        let dump str l = liftIO $ do
+                putStrLn $ str ++ ":"
+                mapM_ (\v -> putStr "  " >> print v) l
+        dump "Calls" calls
+        dump "Closures" closures
+        dump "Returns" returns
+        dump "Branches" branches
+        dump "Letexps" letexps
         let (gen,genP) = genRTypeFactory calls closures returns
         let addFuncBinding :: Int -> RType -> W m ()
             addFuncBinding label ty = tell ([],([(label,ty)],[]))
@@ -514,7 +526,7 @@ refineCGen prog trace = do
         genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,v) -> do
             ty <- gen (ML.name f) [] v
             return (f,(ty,decompose f))
-        liftIO $ print genv'
+        dump "RefineEnv" (M.assocs genv')
 
         let check :: M.Map Id (RType,SValue) ->   {- environment -}
                      [Either SValue LFormula] ->  {- accumulator of constraints -}
