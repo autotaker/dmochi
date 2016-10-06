@@ -1,0 +1,14 @@
+
+let h : [int, ([int] -> int), int] -> int = 
+    fun m f i -> 
+        if i >= m then 0
+        else let r = f i in
+             let r = h m f (i + 1) in
+             r;;
+
+let m = * in
+assume m > 0;
+let f : [int] -> int = 
+    fun i -> if i >= m then Fail else 0 in
+let r = h m f 0 in 
+r

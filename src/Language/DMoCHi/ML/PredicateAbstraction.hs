@@ -143,26 +143,27 @@ cast' cs pv e curTy newTy = case (curTy,newTy) of
     (PFun _ (xs,ty_xs,ps) (r,ty_r,qs), 
      PFun _ (ys,ty_ys,ps') (r',ty_r',qs')) -> do
         y_pair <- B.freshSym "arg" (toSortArg (ys,ty_ys,ps'))
-        B.Lam y_pair <$> do
-            let y_body = B.f_proj 0 2 (B.V y_pair)
-                y_preds = B.f_proj 1 2 (B.V y_pair)
+        B.Lam y_pair <$> do                                                               {- fun y_pair -> -}
+            let y_body = B.f_proj 0 2 (B.V y_pair)                                        {-     let y_body = y_pair.fst in  -}
+                y_preds = B.f_proj 1 2 (B.V y_pair)                                       {-     let y_preds = y_pair.snd in -}
                 n = length ps'
                 pv' = [ (B.f_proj i n y_preds, fml) | (i,fml) <- zip [0..] ps'] ++ pv
                 arity = length xs
-            x_body  <- B.T <$> forM (zip3 [0..] ty_ys ty_xs) (\(i,ty_y,ty_x) ->
-                 cast' cs pv' (B.f_proj i arity y_body) ty_y ty_x)
-            let subst = M.fromList $ zip xs ys
+                subst = M.fromList $ zip xs ys
+            x_body  <- B.T <$> forM (zip3 [0..] ty_ys ty_xs) (\(i,ty_y,ty_x) ->           {-     let x_body = <v1...vn>  -}
+                 cast' cs pv' (B.f_proj i arity y_body) ty_y (substPType subst ty_x))
             x_preds <- abstFormulae cs pv' (map (substFormula subst) ps)
             r_pair <- B.freshSym (ML.name r) (toSortTerm (r,ty_r,qs))
-            B.f_let r_pair (B.f_app e (B.T [x_body,x_preds])) <$> do -- let r_pair = e (x_body, x_preds) in
-                let r_body = B.f_proj 0 2 $ B.V r_pair  -- r_body corresponds to ty_r
-                    r_preds = B.f_proj 1 2 $ B.V r_pair -- r_preds corresponds to qs
+            B.f_let r_pair (B.f_app e (B.T [x_body,x_preds])) <$> do                      {- let r_pair = e (x_body, x_preds) in -}
+                let r_body = B.f_proj 0 2 $ B.V r_pair                                    {- r_body corresponds to ty_r          -}
+                    r_preds = B.f_proj 1 2 $ B.V r_pair                                   {- r_preds corresponds to qs           -}
                     m = length qs
+                    subst' = M.insert r r' subst
                     pv'' = [ (B.f_proj i m r_preds, 
-                              substFormula (M.insert r r' subst) fml) | (i,fml) <- zip [0..] qs] ++ pv'
-                r'_body <- cast' cs pv'' r_body (substPType subst ty_r) ty_r'
+                              substFormula subst' fml) | (i,fml) <- zip [0..] qs] ++ pv'
+                r'_body <- cast' cs pv'' r_body (substPType subst' ty_r) ty_r'
                 r'_preds <- abstFormulae cs pv'' qs'
-                return $ B.T [r'_body,r'_preds] 
+                return $ B.T [r'_body,r'_preds]                                           {- <r_body, r_preds> -}
 cast cs pv e curTy newTy = do
     r <- cast' cs pv e curTy newTy
     liftIO $ putStrLn $ render $
@@ -302,8 +303,10 @@ abstTerm :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> M
 abstTerm tbl env cs pv t (r,ty,qs) = doit where
     doit = case t of
         ML.Value v -> do
-            e1 <- abstValue tbl env cs pv v ty
-            e2 <- abstFormulae cs pv (map (substVFormula $ M.singleton r v) qs)
+            let subst = M.singleton r v
+            let ty' = substVPType subst ty
+            e1 <- abstValue tbl env cs pv v ty'
+            e2 <- abstFormulae cs pv (map (substVFormula subst) qs)
             return $ B.T [e1,e2]
 
 {-
@@ -321,8 +324,9 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
 
         ML.Let _ x (ML.LApp _ _ f vs) t' -> do
             let PFun _ (ys,ty_ys,ps) (r',ty_r',qs') = env M.! f
-            arg_body  <- B.T <$> zipWithM (abstValue tbl env cs pv) vs ty_ys
             let subst = M.fromList $ zip ys vs
+            let ty_ys' = map (substVPType subst) ty_ys
+            arg_body  <- B.T <$> zipWithM (abstValue tbl env cs pv) vs ty_ys'
             arg_preds <- abstFormulae cs pv (map (substVFormula subst) ps)
             let f' = toSymbol f (env M.! f)
             x' <- B.freshSym (ML.name x ++ "_pair") (toSortTerm (r',ty_r',qs'))
@@ -332,7 +336,7 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
                 subst1 = M.insert r' (ML.Atomic (ML.Var x)) subst
                 pv' = [ (B.f_proj i n x_preds, 
                          substVFormula subst1 fml) | (i,fml) <- zip [0..] qs' ] ++ pv
-                ty_r'' = substVPType subst ty_r'
+                ty_r'' = substVPType subst1 ty_r'
             B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .  
               B.f_let (toSymbol x ty_r') x_body <$>
                 abstTerm tbl (M.insert x ty_r'' env) cs pv' t' (r,ty,qs)
@@ -353,7 +357,7 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
                     n = length ps
                     pv' = [ (B.f_proj i n x_preds, substFormula (M.singleton y x) fml) | (i,fml) <- zip [0..] ps ] ++ pv
                 B.f_let (toSymbol x ty_y) x_body <$>
-                    abstTerm tbl (M.insert x ty_y env) cs pv' t' (r,ty,qs)
+                    abstTerm tbl (M.insert x (substPType (M.singleton y x) ty_y) env) cs pv' t' (r,ty,qs)
 
         ML.Let _ x ML.LRand t' -> 
             B.f_let (toSymbol x PInt) (B.T []) <$>
@@ -389,11 +393,12 @@ abstFunDef tbl env cs pv func mpty = do
             subst = M.fromList $ zip ys xs
             pv' = [ (B.f_proj i n x_preds, substFormula subst fml) | (i,fml) <- zip [0..] ps ] ++ pv
             rty' = substTermType subst rty
+            ty_ys' = map (substPType subst) ty_ys
             arity = length xs
-        let env' = foldr (uncurry M.insert) env (zip xs ty_ys)
+        let env' = foldr (uncurry M.insert) env (zip xs ty_ys')
         e' <- abstTerm tbl env' cs pv' t1 rty'
         return $ foldr (\(i,x,ty_y) -> 
-            B.f_let (toSymbol x ty_y) (B.f_proj i arity x_body)) e' (zip3 [0..] xs ty_ys)
+            B.f_let (toSymbol x ty_y) (B.f_proj i arity x_body)) e' (zip3 [0..] xs ty_ys')
     return (e,ty_f)
 
 printTypeMap :: TypeMap -> IO ()
