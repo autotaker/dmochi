@@ -411,7 +411,7 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
         return $ RFun $ IM.fromList as
     genPost lim meta env mv = case mv of
         Just v -> do
-            let rj = ML.Id (ML.getType v) "r"
+            rj <- ML.Id (ML.getType v) <$> freshId "r"
             let env' = push rj env
             pty <- gen lim meta env' v
             p0 <- freshInt
