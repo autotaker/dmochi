@@ -1,0 +1,26 @@
+let make_array : [int] -> [int] -> int =
+    fun n -> fun i -> if 0 <= i && i < n then 0 else Fail;;
+
+let update : [int, ([int] -> int), int] -> [int] -> int =
+    fun i a x -> fun j -> 
+        if j > i - 1 && j <= i then 
+            x 
+        else let r = a j in r;;
+let init : [int, int, ([int] -> int)] -> [int] -> int =
+    fun i n a ->
+        if i >= n then a
+        else let a1 = update i a 1 in
+             let r = init (i + 1) n a1 in
+             r
+
+let k = * in
+let n = * in
+let i = * in
+assume k >= 0 && k <= 0;
+let a = make_array n in
+let x = init k n a in
+assume 0 <= i && i < n;
+let v = x i in
+assume (not (v >= 1));
+Fail
+

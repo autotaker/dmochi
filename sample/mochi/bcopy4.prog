@@ -1,0 +1,22 @@
+let array1 : [int] -> int = fun i -> 0;;
+let array2 : [int] -> int = fun i -> 0;;
+let update : [([int] -> int), int, int] -> [int] -> int =
+    fun a i x -> fun j -> 
+        if i = j then x else let r = a i in r;;
+
+let bcopy_aux : [int, ([int] -> int), ([int] -> int), int] -> int =
+    fun m src des i ->
+        if i >= m then 0
+        else
+            if 0 <= i && i <= m then
+                let v = src i in
+                let des = update des i v in
+                let r = bcopy_aux m src des (i + 1) in
+                r
+            else Fail
+
+let n = * in
+let bcopy : [([int] -> int), ([int] -> int)] -> int = 
+    fun src des -> let r = bcopy_aux n src des 0 in r in
+let r = bcopy array1 array2 in
+r;;

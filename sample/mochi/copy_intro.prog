@@ -1,0 +1,6 @@
+let copy : [int] -> int = fun x -> if x = 0 then 0 else let r = copy (x - 1) in 1 + r;;
+let n = * in
+let v1 = copy n in
+let v2 = copy v1 in
+assume not( v2 = n);
+Fail

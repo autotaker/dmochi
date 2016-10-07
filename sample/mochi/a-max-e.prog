@@ -1,0 +1,20 @@
+let make_array : [int] -> [int] -> int =
+    fun n -> fun i -> n - i
+let array_max : [int, int, ([int] -> int), int] -> int =
+    fun n i a m ->
+        if i >= n then
+            m
+        else
+            let x = a i in
+            let z : int = if x > m then m else x in
+            let r = array_max n (i + 1) a z in
+            r;;
+
+let n = * in
+let i = * in
+assume n > 0 && i >= 0 && i <= 0;
+let a = make_array n in
+let m = array_max n i a (-1) in
+assume not( m >= n );
+Fail
+    

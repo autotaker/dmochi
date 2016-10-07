@@ -1,0 +1,12 @@
+let f : [int] -> bool = fun n -> n < 0;;
+let filter : [([int] -> bool), int] -> int =
+    fun f n ->
+        if n = 0 then 0
+        else
+            (let r = filter f (n - 1) in 1 + r) <>
+            (let r = filter f (n - 1) in r);;
+let n = * in
+let v = filter f n in
+assume not(v <= n);
+Fail;;
+

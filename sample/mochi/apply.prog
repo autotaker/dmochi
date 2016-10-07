@@ -1,0 +1,16 @@
+let apply : [([int] -> int), int] -> int =
+    fun f x -> let r = f x in r;;
+
+let g : [int] -> [int] -> int =
+    fun y -> fun z -> if y = z then 0 else Fail;;
+
+let k : [int] -> int =
+    fun n ->
+        let fn = g n in
+        let tmp = apply fn n in
+        let r = k (n + 1) in
+        r;;
+
+let r = k 0 in
+0;;
+

@@ -1,0 +1,23 @@
+let make_array : [int] -> [int] -> int = 
+    fun n -> fun i -> if 0 <= i && i < n then 0 else Fail;;
+
+let dotprod : [int, ([int] -> int), ([int] -> int), int, int] -> int =
+    fun n v1 v2 i sum ->
+        if i >= n then
+            sum
+        else
+            let a1 = v1 i in
+            let a2 = v2 i in
+            let tmp = dotprod n v1 v2 (i + 1) (sum + a1 + a2) in
+            let tmp = dotprod n v1 v2 (i + 1) (sum + a1 + a2) in
+            tmp;;
+
+let n = * in
+let m = * in
+let z = * in
+let v1 = make_array n in
+let v2 = make_array n in
+assume z = 0;
+let r = dotprod n v1 v2 z z in
+r;;
+

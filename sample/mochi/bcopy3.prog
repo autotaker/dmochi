@@ -1,0 +1,26 @@
+let make_array : [int] -> [int] -> int =
+    fun n -> fun i ->
+        if 0 <= i && i < n then
+            0
+        else Fail;;
+
+let update : [([int] -> int), int, int] -> [int] -> int =
+    fun des i x -> fun j -> 
+        if i = j then x else let r = des i in r;;
+
+let bcopy_aux : [int, ([int] -> int), ([int] -> int), int] -> int =
+    fun m src des i ->
+        if i >= m then 0
+        else
+            let v = src i in
+            let tmp = update des i v in
+            let r = bcopy_aux m src des (i + 1) in
+            r;;
+
+let n = * in
+let m = * in
+let array1 = make_array n in
+let array2 = make_array m in
+assume n <= m;
+let r = bcopy_aux n array1 array2 0 in
+r

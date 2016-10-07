@@ -1,0 +1,9 @@
+let f : [int, ([int] -> int)] -> int =
+    fun n k -> if n >= 0 then 0 else let r = k 0 in r;;
+let g : [int] -> int =
+    fun n -> if n = 1 then 0 else Fail;;
+let n = * in
+let r = f n g in
+r;;
+
+
