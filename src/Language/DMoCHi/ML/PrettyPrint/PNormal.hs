@@ -8,6 +8,10 @@ module Language.DMoCHi.ML.PrettyPrint.PNormal(pprintE
 import Text.PrettyPrint
 import Language.DMoCHi.ML.Syntax.PNormal
 
+pprintApp :: Id -> [Value] -> Doc
+pprintApp f [] = text (name f) <+> parens empty
+pprintApp f vs = text (name f) <+> hsep (map (pprintV 9) vs)
+
 pprintE :: Exp -> Doc
 pprintE (Value v) = pprintV 0 v
 pprintE (Let _ x' lv e) = 
@@ -21,7 +25,7 @@ pprintE (Let _ x' lv e) =
         LApp ty i f vs ->
             text "let" <+> text x <+> colon <+> pprintT 0 ty
                        <+> equals <+> text ("(*" ++ show i ++ "*)") <+>
-                text (name f) <+> hsep (map (pprintV 9) vs) <+> text "in" $+$
+                pprintApp f vs <+> text "in" $+$
             pprintE e
         LExp i ev ->
             text "let" <+> text x <+> colon <+> pprintT 0 (getType ev) 

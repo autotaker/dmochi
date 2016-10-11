@@ -1,5 +1,6 @@
 let n = * in
 let f : [int] -> int = fun x -> x in
+let g : [] -> int = fun () -> n in
 let y = (f (f n), n + f 0) in
-let z = f (f n + f n) in
+let z = f (f n + g()) in
 f (f n + y.fst) + z

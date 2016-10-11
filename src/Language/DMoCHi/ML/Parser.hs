@@ -128,10 +128,12 @@ termP = varOrApp
 varOrApp :: Parser Value
 varOrApp = do
     f <- identifier
-    l <- many termP
+    let l2m [] = Nothing
+        l2m vs = Just vs
+    l <- try (parens (pure (Just []))) <|> l2m <$> many termP
     case l of
-        [] -> return $ Var f
-        vs -> return $ App f vs
+        Nothing -> return $ Var f
+        Just vs -> return $ App f vs
 
 typeP :: Parser Type
 typeP = prim <|> func 

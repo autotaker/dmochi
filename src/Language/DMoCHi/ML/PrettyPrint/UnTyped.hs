@@ -13,6 +13,10 @@ pprintE (Let x lv e) =
         LValue v  -> 
             text "let" <+> text x <+> equals <+> pprintV 0 v <+> text "in" $+$ 
             pprintE e
+        LApp f [] ->
+            text "let" <+> text x <+> equals <+> 
+                text f <+> parens empty <+> text "in" $+$
+            pprintE e
         LApp f vs ->
             text "let" <+> text x <+> equals <+> 
                 text f <+> hsep (map (pprintV 9) vs) <+> text "in" $+$
@@ -44,6 +48,7 @@ pprintV _ (Var x) = text x
 pprintV _ (CInt x) = integer x
 pprintV _ (CBool b) = text $ if b then "true" else "false" 
 pprintV _ (Pair v1 v2) = parens (pprintV 0 v1 <+> comma <+> pprintV 0 v2)
+pprintV assoc (App f []) = precParens (assoc <= 8) $ text f <+> parens empty
 pprintV assoc (App f vs) = precParens (assoc <= 8) $ text f <+> hsep (map (pprintV 9) vs) 
 pprintV assoc (Op op) = 
     precParens (assoc <= assoc') (case op of
