@@ -1,0 +1,5 @@
+let n = * in
+let f : [int] -> int = fun x -> x in
+let y = (f (f n), n + f 0) in
+let z = f (f n + f n) in
+f (f n + y.fst) + z

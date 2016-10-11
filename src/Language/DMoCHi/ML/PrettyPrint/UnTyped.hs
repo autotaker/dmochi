@@ -35,17 +35,18 @@ pprintE (Fail) = text "Fail"
 pprintE (Branch e1 e2) =
     parens (pprintE e1) $+$ text "<>" $+$ parens (pprintE e2)
 
+precParens :: Bool -> Doc -> Doc
+precParens True d = d
+precParens False d = parens d
+
 pprintV :: Int -> Value -> Doc
 pprintV _ (Var x) = text x
 pprintV _ (CInt x) = integer x
 pprintV _ (CBool b) = text $ if b then "true" else "false" 
 pprintV _ (Pair v1 v2) = parens (pprintV 0 v1 <+> comma <+> pprintV 0 v2)
-pprintV assoc (Op op) | assoc <= assoc' =  op' 
-                      | otherwise = parens op' where
-    assoc' = priority op
-    f = pprintV assoc'
-    g = pprintV (assoc'+1)
-    op' = case op of
+pprintV assoc (App f vs) = precParens (assoc <= 8) $ text f <+> hsep (map (pprintV 9) vs) 
+pprintV assoc (Op op) = 
+    precParens (assoc <= assoc') (case op of
         OpAdd v1 v2 -> f v1 <+> text "+" <+> g v2
         OpSub v1 v2 -> f v1 <+> text "-" <+> g v2
         OpNeg v1 -> text "-" <> f v1
@@ -58,8 +59,11 @@ pprintV assoc (Op op) | assoc <= assoc' =  op'
         OpGte v1 v2 -> g v1 <+> text ">=" <+> g v2
         OpAnd v1 v2 -> f v1 <+> text "&&" <+> g v2
         OpOr  v1 v2 -> f v1 <+> text "||" <+> g v2
-        OpNot v1    -> text "not" <+> (g v1)
-    
+        OpNot v1    -> text "not" <+> (g v1))
+    where
+    assoc' = priority op
+    f = pprintV assoc'
+    g = pprintV (assoc'+1)
 
 
 pprintProgram :: Program -> Doc

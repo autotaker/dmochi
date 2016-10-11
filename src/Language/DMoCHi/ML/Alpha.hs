@@ -36,15 +36,6 @@ rename x = do
         Nothing -> throwError $ UndefinedVariable x
         Just x' -> return x'
 
-{-
-renameP :: (MonadError AlphaError m,MonadId m, Applicative m) => PType -> M m PType
-renameP (PInt ps)  = PInt  <$> mapM (\(x,v) -> register x (renameV v)) ps
-renameP (PBool ps) = PBool <$> mapM (\(x,v) -> register x (renameV v)) ps
-renameP (PPair p1 (x,p2)) = PPair <$> renameP p1 <*> register x (renameP p2)
-renameP (PFun  p1 (x,p2)) = PFun  <$> renameP p1 <*> register x (renameP p2)
--}
-
-
 renameE :: (MonadError AlphaError m,MonadId m, Applicative m) => Exp -> M m Exp
 renameE (Value v) = fmap Value $ renameV v
 renameE (Let x lv e) = do
@@ -60,12 +51,12 @@ renameE (Lambda xs e) = uncurry Lambda <$> register' xs (renameE e)
 renameE Fail = pure Fail
 renameE (Branch e1 e2) = liftA2 Branch (renameE e1) (renameE e2)
 
-
 renameV :: (MonadError AlphaError m,Applicative m) => Value -> M m Value
 renameV (Var x) = Var <$> rename x
 renameV (CInt i) = return $ CInt i
 renameV (CBool b) = return $ CBool b
 renameV (Pair v1 v2) = liftA2 Pair (renameV v1) (renameV v2)
+renameV (App f vs) = liftA2 App (rename f) (mapM renameV vs)
 renameV (Op op) = Op <$> case op of
     OpAdd v1 v2 -> liftA2 OpAdd (renameV v1) (renameV v2)
     OpSub v1 v2 -> liftA2 OpSub (renameV v1) (renameV v2)

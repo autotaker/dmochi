@@ -15,6 +15,7 @@ import Language.DMoCHi.ML.Parser
 import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
 import Language.DMoCHi.ML.PrettyPrint.UnTyped
 import Language.DMoCHi.ML.Alpha
+import qualified Language.DMoCHi.ML.CallNormalize as CallNormalize
 import qualified Language.DMoCHi.ML.Inline  as Inline
 import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.PrettyPrint.Typed as Typed
@@ -90,10 +91,15 @@ doit = do
     liftIO $ putStrLn "Alpha Converted Program"
     liftIO $ printProgram alphaProgram
 
+    -- Call normalizing
+    alphaNormProgram <- CallNormalize.normalize alphaProgram
+    liftIO $ putStrLn "Call Normalized Program"
+    liftIO $ printProgram alphaNormProgram
+
     -- type checking
     liftIO $ putStrLn "Typed Program"
     t_type_checking_begin <- liftIO $ getCurrentTime
-    _typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
+    _typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaNormProgram
     liftIO $ Typed.printProgram _typedProgram
     t_type_checking_end <- liftIO $ getCurrentTime
 

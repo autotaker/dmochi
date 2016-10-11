@@ -1,0 +1,14 @@
+let make_array : [int] -> [int] -> int = fun n -> fun i -> 1;;
+let init : [int, int, ([int] -> int)] -> [int] -> int =
+    fun i n a ->
+        if i >= n then a
+        else let r = init (i + 1) n a in r
+
+let n = * in
+let i = * in
+let a = make_array n in
+let x = init 0 n a in
+let v = x i in
+assume (not (v >= 1));
+Fail
+

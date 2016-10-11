@@ -23,6 +23,7 @@ data Value = Var Id
            | CInt Integer
            | CBool Bool
            | Pair Value Value
+           | App Id [Value]
            | Op Op deriving(Show)
 
 data Op = OpAdd Value Value
@@ -46,22 +47,3 @@ data LetValue = LValue Value
               deriving(Show)
 
 type Id = String
-
-{-
-data PType = PInt [Predicate]
-           | PBool [Predicate]
-           | PPair PType (Id,PType)
-           | PFun  PType (Id,PType)
-
-instance Show PType where
-    show (PInt xs) = "int"++ show xs
-    show (PBool xs) = "bool"++show xs
-    show (PPair ty_f (x,ty_s)) = 
-        let s1 = "("++x++ " ; " ++ show ty_f ++ ") * " in
-        s1 ++ show ty_s
-    show (PFun ty (x,f)) = 
-        let s1 = "("++x ++ " : " ++ show ty ++ ") -> " in
-        s1 ++ show f
-        -}
-
-

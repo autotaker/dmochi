@@ -91,8 +91,6 @@ letP = (Let <$> (reserved "let" *> identifier)
            <*> sub
            <*> (reserved "in" *> exprP)) <?> "let"
     where sub = LExp <$> (reservedOp ":" *> typeP) <*> (reservedOp "=" *> exprP)
-            <|> try (LApp <$> (reservedOp "=" *> identifier) 
-                          <*> (try (parens (pure [])) <|>  many1 valueP))
             <|> (reservedOp "=" *> (LValue <$> valueP <|> LRand <$ reservedOp "*"))
 
 valueP :: Parser Value
@@ -117,7 +115,7 @@ valueP = buildExpressionParser opTable termP <?> "value" where
                                  (reserved "snd" >> pure (Op . OpSnd)))
 
 termP :: Parser Value
-termP = Var <$> identifier 
+termP = varOrApp
     <|> CInt <$> natural 
     <|> CBool True <$ reserved "true" 
     <|> CBool False <$ reserved "false"
@@ -126,6 +124,14 @@ termP = Var <$> identifier
                    case mp2 of
                         Nothing -> return p1
                         Just p2 -> return $ Pair p1 p2)
+
+varOrApp :: Parser Value
+varOrApp = do
+    f <- identifier
+    l <- many termP
+    case l of
+        [] -> return $ Var f
+        vs -> return $ App f vs
 
 typeP :: Parser Type
 typeP = prim <|> func 
@@ -136,20 +142,4 @@ typeP = prim <|> func
     prim = chainr1 base (TPair <$ reservedOp "*" )
     func = TFun <$> brackets arglist <*> (reservedOp "->" *> typeP)
     arglist = commaSep prim
-
-{-
-ptypeP :: Parser PType
-ptypeP = base PInt "int" 
-     <|> base PBool "bool" 
-     <|> try pair
-     <|> func 
-     <|> parens ptypeP where
-    base cstr ty = cstr <$> (reserved ty *> option [] (brackets $ semiSep predicateP))
-    func = g PFun  <$> identifier <*> (reservedOp ":" *> ptypeP) <*> (reservedOp "->" *> ptypeP)
-    pair = g PPair <$> identifier <*> (reservedOp ":" *> ptypeP) <*> (reservedOp "*"  *> ptypeP)
-    g f x ty1 ty2 = f ty1 (x,ty2)
-
-predicateP :: Parser Predicate
-predicateP = (,) <$> identifier <*> (dot *> valueP) where
--}
 
