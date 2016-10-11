@@ -1,0 +1,8 @@
+let mc91 : [int] -> int = fun x -> 
+    if x > 100 then
+        x - 10
+    else
+        mc91 (mc91 (x + 11))
+let n = * in
+assume n <= 102;
+assert(mc91 n = 91)

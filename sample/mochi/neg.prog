@@ -1,0 +1,9 @@
+let twice : [([([] -> int)] -> [] -> int), ([] -> int)] -> [] -> int =
+    fun f x -> fun () -> let tmp = f (f x) in tmp();;
+let g : [int] -> [] -> int = fun n -> fun () -> n;;
+let neg : [([] -> int)] -> [] -> int = fun x -> fun () -> - x ();;
+let n = * in
+assume n >= 0;
+let tmp = twice neg (g n) in
+let z =  tmp () in
+assert(z >= 0);;

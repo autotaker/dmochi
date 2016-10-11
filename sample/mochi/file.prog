@@ -1,0 +1,19 @@
+let readit : [int] -> int = fun st ->
+  if st = 1 then 1 else (if st = 3 then st else Fail);;
+let read_ : [bool, int] -> int = fun x st ->
+  if x then readit st else st;;
+let closeit : [int] -> int = fun st ->
+  if st = 1 then 2 else (if st = 3 then st else (assume false; 0));;
+let close_ : [bool, int] -> int = fun x st ->
+  if x then closeit st else st;;
+let f : [bool, bool, int] -> int = fun x y st ->
+  let tmp = close_ y (close_ x st) in f x y (read_ y (read_ x st))
+let next : [int] -> int = fun st -> if st=0 then 1 else 3;;
+let g : [int, bool, int] -> int = fun b3 x st -> 
+    if b3 > 0 then f x true (next st) else f x false st;;
+let b2 = * in
+let b3 = * in
+if b2 > 0 then 
+    g b3 true 1 
+else 
+    g b3 false 0

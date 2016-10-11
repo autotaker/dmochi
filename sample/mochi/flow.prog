@@ -1,0 +1,10 @@
+let lamp : [int] -> int = fun x -> x;;
+
+assume true;
+let f : [int] -> int =
+    let id : [([int] -> int)] -> [int] -> int = fun x -> x in
+    let tmp : [int] -> int = fun x -> Fail in
+    let unused = id tmp in
+    lamp in
+f 0
+

@@ -1,0 +1,13 @@
+let c : [int] -> int = fun x -> 0;;
+let b : [([int] -> int), int] -> int = fun x q -> x 1;;
+let a : [([int] -> int), ([int] -> int), int] -> int = fun x y q ->
+    if q = 0 then let tmp = x 0 in y 0 else Fail;;
+let f : [int, ([int] -> int), int] -> int = fun n x q ->
+    if n <= 0 then x q else 
+        let b1 : [int] -> int = fun y -> b x y in
+        let f1 : [int] -> int = fun y -> f (n - 1) b1 y in
+        a x f1 q
+let s : [int, int] -> int = fun n q -> f n c q;;
+
+let n = * in
+s n 0

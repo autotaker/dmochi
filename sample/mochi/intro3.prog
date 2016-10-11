@@ -1,0 +1,6 @@
+let f : [int, ([int] -> int)] -> int = fun x g -> g (x + 1) ;;
+let h : [int,int] -> int = fun y z -> assert (y > z);;
+let n = * in
+assume n >= 0;
+let h1 : [int] -> int = fun x -> h n x in
+f n h1;;

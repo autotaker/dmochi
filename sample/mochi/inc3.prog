@@ -1,0 +1,12 @@
+let make_array : [int] -> [int] -> int = fun n -> fun i -> assert(0 <= i && i < n);;
+let update : [int, int, ([int] -> int), int] -> int =
+    fun i n des x -> let tmp = des i in 0;;
+let inc3 : [int, ([int] -> int), int] -> int = fun m src i ->
+    if i >= m
+    then 0
+    else
+        let tmp = update i m src (src i + 1) in
+        inc3 m src (i + 1);;
+let n = * in
+assume n > 0;
+inc3 n (make_array n) 0

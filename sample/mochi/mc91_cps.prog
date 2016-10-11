@@ -1,0 +1,11 @@
+let mc91 : [int, ([int] -> int)] -> int = fun x k -> 
+    if x > 100 then
+        k (x - 10)
+    else
+        let k1 : [int] -> int = fun r -> mc91 r k in
+        mc91 (x + 11) k1
+
+let n = * in
+assume n <= 101;
+let k : [int] -> int = fun r -> assume n <= 101; assert( r = 91) in
+mc91 n k

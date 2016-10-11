@@ -1,0 +1,11 @@
+let ar : [int] -> int = fun i -> 0;;
+let update : [([int] -> int), int, int] -> [int] -> int =
+    fun a i x -> fun j -> if j = i then x else a j;;
+let g : [int, ([int] -> int), int] -> int = 
+    fun e a j -> 
+        if j < e then 
+            let tmp : int = assert (0 <= j && j < e) in
+            g e (update a j (a j + 1)) (j + 1)
+        else 0;;
+let n = * in
+g n ar 0

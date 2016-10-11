@@ -9,7 +9,7 @@ import Language.DMoCHi.ML.Syntax.UnTyped
 
 reservedNames :: [String]
 reservedNames = ["let","rec","in","and","fun","not",
-                 "if","then","else","true","false","assume","fst","snd",
+                 "if","then","else","true","false","assume","assert","fst","snd",
                  "Fail","Main"]
 
 language :: P.LanguageDef st
@@ -70,9 +70,13 @@ defP = try $ do
 
 exprP :: Parser Exp
 exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") <?> "expr" where
-    simpleP = Value <$> (try valueP) <|> letP <|> assumeP <|> lambdaP <|> ifP <|> failP <|> parens exprP
+    simpleP = Value <$> (try valueP) <|> letP <|> assumeP <|> assertP <|> lambdaP <|> ifP <|> failP <|> parens exprP
     assumeP = Assume <$> (reserved "assume" *> valueP <* semi) 
                      <*> exprP
+    assertP = do
+        reserved "assert" 
+        v <- termP
+        return $ Branch (Assume v (Value (CInt 0))) (Assume (Op (OpNot v)) Fail)
     ifP = do
         reserved "if"
         pred <- valueP
@@ -124,13 +128,23 @@ termP = varOrApp
                    case mp2 of
                         Nothing -> return p1
                         Just p2 -> return $ Pair p1 p2)
+argP :: Parser Value
+argP = Var <$> identifier
+    <|> CInt <$> natural 
+    <|> CBool True <$ reserved "true" 
+    <|> CBool False <$ reserved "false"
+    <|> parens (do p1 <- valueP
+                   mp2 <- optionMaybe (comma >> valueP)
+                   case mp2 of
+                        Nothing -> return p1
+                        Just p2 -> return $ Pair p1 p2)
 
 varOrApp :: Parser Value
 varOrApp = do
     f <- identifier
     let l2m [] = Nothing
         l2m vs = Just vs
-    l <- try (parens (pure (Just []))) <|> l2m <$> many termP
+    l <- try (parens (pure (Just []))) <|> l2m <$> many argP
     case l of
         Nothing -> return $ Var f
         Just vs -> return $ App f vs

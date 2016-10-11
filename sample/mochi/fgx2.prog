@@ -1,0 +1,9 @@
+let f : [([int] -> int), int] -> int = 
+    fun g x -> 
+        if g x >= 3 then Fail 
+        else let f1 : [int] -> int = fun x -> f g x in
+             f f1 (g x);;
+let succ : ([int] -> int) = fun x -> x + 1;;
+f succ 0
+
+

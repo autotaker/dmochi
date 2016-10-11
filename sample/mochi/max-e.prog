@@ -1,0 +1,8 @@
+let max : [([int,int] -> int), int, int, int] -> int = fun max2 x y z -> max2 (max2 x y) y;;
+let f : [int,int] -> int = fun x y -> if x >= y then x else y;;
+let x = * in
+let y = * in
+let z = * in
+let m = max f x y z in
+assert (f x m = m && f y m = m && f z m = m);;
+

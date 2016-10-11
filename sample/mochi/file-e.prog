@@ -1,0 +1,9 @@
+let read : [int] -> int = fun fp -> assert (fp = 0);;
+let read_n : [int, int] -> int = fun fp n ->
+    if n <= 0 then fp
+    else let tmp = read fp in read_n fp (n - 1);;
+let n = * in
+let fp = * in
+assume fp >= 0;
+let fp = read_n fp n in
+assert (fp = 0)
