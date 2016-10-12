@@ -433,7 +433,7 @@ initTypeMap (ML.Program fs t0) = do
             gather fv (ML.Let s x lv e) = do
                 case lv of
                     ML.LValue _ -> return ()
-                    ML.LApp _ _ _ _ -> return ()
+                    ML.LApp _ _ _ vs -> mapM_ (gather fv . ML.Value) vs
                     ML.LExp i e' -> do
                         gather fv e'
                         ty <- genTermType (ML.getType e')
