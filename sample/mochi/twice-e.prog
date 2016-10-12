@@ -1,0 +1,5 @@
+let twice : [([int] -> int), int] -> int = fun f x -> f (f x);;
+let f : [int] -> int = fun x -> x + x;;
+let n = * in
+assume n >= 0;
+assert(twice f n > n);;

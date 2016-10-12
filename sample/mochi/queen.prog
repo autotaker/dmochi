@@ -1,0 +1,81 @@
+let make_array : [int,int] -> [int] -> int = fun n s -> fun i -> s;;
+let update : [int,int,([int] -> int),int] -> [int] -> int = fun i n a x ->
+    let tmp = a i in
+    let a : [int] -> int = fun j -> if i = j then x else a j in 
+    a;;
+let print_string : [] -> int = fun () -> 0;;
+let abs : [int] -> int = fun x -> if x < 0 then - x else x;;
+
+let dotsPrint : [int] -> int =
+    fun n -> if n = 0 then 
+        0 
+    else 
+        let tmp = print_string() in
+        dotsPrint (n - 1);;
+
+let queenPrintAux : [int, ([int] -> int)] -> [int] -> int =
+    fun size queenArray -> 
+        fun row ->
+            let aux1 = queenPrintAux size queenArray in
+            if row = size then 0 else
+                let n = queenArray row in
+                let tmp : int = assert (0 <= row && row <= size) in
+                let tmp = dotsPrint (n - 1) in
+                let tmp = print_string () in
+                let tmp = dotsPrint (size - n) in
+                let tmp = print_string () in
+                aux1 (row + 1)
+
+let testAux : [int, int,([int] -> int)] -> [int] -> bool = fun j qj queenArray -> 
+    fun i ->
+        let aux2 = testAux j qj queenArray in
+        if i < j then
+            let qi = queenArray i in
+            if qi = qj then false
+            else if abs(qj - qi) = j - i then false
+            else aux2 (i + 1)
+        else true;;
+
+let loopAux : [int, 
+               ([int, ([int] -> int)] -> bool), 
+               ([([int] -> int)] -> int)] -> [int, ([int] -> int)] -> int =
+    fun size test queenPrint -> 
+        fun row queenArray ->
+            let loop = loopAux size test queenPrint in
+            let next = queenArray row + 1 in
+            if next > size then
+                let queenArray = assign size row 0 queenArray in
+                if row = 0 then 0
+                else loop (row - 1) queenArray
+            else
+                let queenArray = assign size row next queenArray in
+                if test row queenArray then
+                    if row + 1 = size then
+                        let tmp = queenPrint queenArray  in
+                        loop row queenArray
+                    else
+                        loop (row + 1) queenArray
+                else loop row queenArray;;
+
+let assign : [int,int,int, ([int] -> int)] -> [int] -> int = 
+    fun size i j queenArray -> update i size queenArray j;;
+
+let queen : [int] -> int = fun size ->
+    let queenArray = make_array size 0 in
+    let queenPrint : [([int] -> int)] -> int =
+        fun queenArray -> 
+            let aux1 = queenPrintAux size queenArray in
+            let tmp = aux1 0 in
+            print_string () in
+    let test : [int, ([int] -> int)] -> bool = 
+        fun j queenArray ->
+            let qj = queenArray j in
+            let aux2 = testAux j qj queenArray in
+            aux2 0 in
+    let loop = loopAux size test queenPrint in
+    loop 0 queenArray;;
+
+let n = * in
+assume n > 0;
+queen n;;
+

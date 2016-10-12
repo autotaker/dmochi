@@ -1,0 +1,6 @@
+let succ : [int] -> int = fun x -> x + 1;;
+let repeat : [([int] -> int), int, int] -> int = fun f n s ->
+    if n = 0 then s else f (repeat f (n - 1) s);;
+
+let n = * in
+assert(repeat succ n 0 = n);;

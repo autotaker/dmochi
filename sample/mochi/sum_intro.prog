@@ -1,0 +1,6 @@
+let add : [int, int] -> int = fun x y -> x + y;;
+let sum : [int] -> int = fun n ->
+    if n <= 0 then 0 else add n (sum (n - 1));;
+
+let n = * in
+assert( n  <= sum n );;

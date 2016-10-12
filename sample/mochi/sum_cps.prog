@@ -1,0 +1,10 @@
+let cps_sum : [int, ([int] -> int)] -> int = fun n k ->
+    if n <= 0 then 
+        k 0 
+    else 
+        let k1 : [int] -> int = fun v -> k (n + v) in
+        cps_sum (n - 1) k1;;
+
+let n = * in
+let k : [int] -> int = fun x -> assert (x >= n) in
+cps_sum n k;;
