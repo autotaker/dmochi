@@ -37,8 +37,8 @@ instance Show Clause where
         show (Pred p ts) ++ " :- " ++ (concat $ intersperse "," (map show body)) ++ "."
 
 instance Show Term where
-    showsPrec _ (Bool True) = showString "top"
-    showsPrec _ (Bool False) = showString "bot"
+    showsPrec _ (Bool True) = showString "true"
+    showsPrec _ (Bool False) = showString "false"
     showsPrec _ (Int i) = shows i
     showsPrec _ (Var x) = showString x
     -- showsPrec _ (Pair t1 t2) = showParen True $ shows t1 . showChar ',' . showChar ' ' . shows t2

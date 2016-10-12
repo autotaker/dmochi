@@ -64,8 +64,7 @@ let () =
                  end
                  |> (fun hcs -> Format.printf "HCCS:@,  %a@," HCCS.pr_verbose hcs; hcs)
                  |> (fun hcs -> infer_constructor hcs, hcs)
-(*                  |> (fun (tenv, hcs) -> SimTypInfer.infer_hccs tenv hcs (*
- *                  type inference *)) *)
+                 |> (fun (tenv, hcs) -> SimTypInfer.infer_hccs tenv hcs (* type inference *))
                  |> (fun (env, hcs) ->
                      Unwinding.ctenv0 := env;
                      Format.printf

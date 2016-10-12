@@ -94,24 +94,17 @@ atom:
  | TOP { Formula.mk_true }
 
 term:
-    /*
- | PVAR LPAREN terms RPAREN
-        { let ts, tys = List.split $3 in
-          let ty = Type.mk_fun_args_ret tys Type.mk_top in
-          Term.mk_app
-            (Term.mk_const (Const.Con(ty, Idnt.make $1)))
-            ts,
-          Type.mk_top }
- | PVAR { Term.mk_const (Const.Con(Type.mk_top, Idnt.make $1)),
-          Type.mk_top }
-        */
  | INT { IntTerm.make $1, Type.mk_int }
- | VAR { Term.mk_var (Idnt.make $1), Type.mk_int }
+ | VAR { Term.mk_var (Idnt.make $1), Type.mk_unknown }
  | term PLUS term { IntTerm.add (fst $1) (fst $3), Type.mk_int }
  | term TIMES term { IntTerm.mul (fst $1) (fst $3), Type.mk_int }
  | term MINUS term { IntTerm.sub (fst $1) (fst $3), Type.mk_int }
  | term DIV term { IntTerm.div (fst $1) (fst $3), Type.mk_int }
  | LPAREN term RPAREN { $2 }
+ /*
+ | BOT { BoolTerm.mk_false, Type.mk_bool }
+ | TOP { BoolTerm.mk_true, Type.mk_bool }
+ */
 
 terms:
  | term COMMA terms { $1 :: $3 }
