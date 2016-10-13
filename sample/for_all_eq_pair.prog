@@ -1,0 +1,37 @@
+let head : [int * ([int] -> int * int)] -> int * int =
+    fun p -> let f = p.snd in f 0;;
+
+let tail : [int * ([int] -> int * int)] -> int * ([int] -> int * int) =
+    fun p -> let n = p.fst in
+             let f = p.snd in
+             let g : [int] -> int * int = fun i -> f (i + 1) in
+             (n - 1, g);;
+
+let nil : [] -> (int * ([int] -> int * int)) = fun () -> 
+    let f : [int] -> int * int = fun i -> assume false; (0,0) in
+    (0,f);;
+
+let cons : [int * int, int * ([int] -> int * int)] -> int * ([int] -> int * int) =
+    fun x xs ->
+        let n = xs.fst in
+        let f = xs.snd in
+        let g : [int] -> int * int = fun i -> if i = 0 then x else f (i - 1) in
+        (n + 1, g);;
+
+let for_all : [([int * int] -> bool), int * ([int] -> int * int)] -> bool =
+    fun f xs ->
+        if xs.fst = 0 then
+            true
+        else
+            let x = head xs in
+            let xs1 = tail xs in
+            if f x then for_all f xs1 else false;;
+
+let make_list : [int] -> int * ([int] -> int * int) =
+    fun n ->
+        if n < 0 then nil() else cons (n,n) (make_list (n-1));;
+
+let eq_pair : [int * int] -> bool = fun p -> p.fst = p.snd;;
+
+let n = * in
+assert(for_all eq_pair (make_list n))

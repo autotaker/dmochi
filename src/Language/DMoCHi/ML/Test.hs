@@ -151,7 +151,7 @@ doit = do
                             let file_hcs = printf "%s_%d.hcs" path k
                             liftIO $ putStr $ show (Horn.HCCS clauses)
                             liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
-                            liftIO $ callCommand (hccsSolver ++ " " ++ file_hcs)
+                            liftIO $ callCommand (hccsSolver ++ " -hccs it " ++ file_hcs)
                             parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
                             --liftIO $ print parseRes
                             solution  <- case parseRes of

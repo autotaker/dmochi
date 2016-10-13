@@ -1,0 +1,40 @@
+(*
+type option = None | Some of int
+
+let rec exists test f n m =
+  if n < m
+  then
+    if test (f n)
+    then Some n
+    else exists test f (n+1) m
+  else
+    None
+
+let mult3 n = 3 * n
+
+let main n m =
+  let test x = x = m in
+    match exists test mult3 0 n with
+        None -> ()
+      | Some x -> assert (0 <= x && x < n)
+
+*)
+let exists : [ ([int] -> bool), ([int] -> int), int, int ] -> bool * int =
+  fun test f n m ->
+    if n < m
+    then
+      if test (f n)
+      then (true, n)
+      else exists test f (n+1) m
+    else
+      (false, -1);;
+
+let mult3 : [int] -> int = fun n -> n + n + n;;
+let n = * in
+let m = * in
+let test : [int] -> bool  = fun x -> x = m in
+let r = exists test mult3 0 n in
+if r.fst then
+    let x = r.snd in
+    assert(0 <= x && x < n)
+else 0;;

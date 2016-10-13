@@ -1,0 +1,8 @@
+let pos : [int] -> bool = fun n -> 
+    if n > 0 then true else not(pos (-n));;
+
+let n = * in
+if pos n then
+    assert(n > 0)
+else
+    assert(n < 0)
