@@ -314,51 +314,6 @@ instance Show LFormula where
         "P" ++ smeta ++ "_" ++ show i ++ "(" ++ s ++ ")"
 
 
-termOfFormula :: LFormula -> Horn.Term
-termOfFormula (Formula meta i vs) = Horn.Pred ("P"++ smeta ++ show i) (map termOfValue vs)
-    where
-    Meta l accessors = meta
-    smeta = "{" ++ concat (intersperse "." (l : reverse accessors)) ++ "}"
-
-
--- assume that the value has type int
-termOfValue :: SValue -> Horn.Term
-termOfValue = \case
-    SVar x -> Horn.Var (ML.name x)
-    Int i -> Horn.Int i
---    P v1 v2  -> Horn.Pair (termOfValue v1) (termOfValue v2)
-    Add v1 v2 -> Horn.Add (termOfValue v1) (termOfValue v2)
-    Sub v1 v2 -> Horn.Sub (termOfValue v1) (termOfValue v2)
-    v -> error $ "termOfValue: unexpected value: " ++ show v
---    Eq v1 v2 -> Horn.Eq (termOfValue v1) (termOfValue v2)
---    Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
---    Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
-{-
-    Not v -> case v of
-        Bool b -> Horn.Bool (not b)
-        Eq v1 v2 -> Horn.NEq (termOfValue v1) (termOfValue v2)
-        Lt v1 v2 -> Horn.Gte (termOfValue v1) (termOfValue v2)
-        Lte v1 v2 -> Horn.Gt (termOfValue v1) (termOfValue v2)
-        Not v -> termOfValue v
-        C _ -> error "termOfValue: unexpected closure"
-        _ -> error "termOfValue: negation of Boolean combination is not supported"
-    C _ -> error "termOfValue: unexpected closure"
--}
-
--- assume the value has type bool
-atomOfValue :: SValue -> Horn.Term
-atomOfValue = \case
-    SVar x -> case ML.getType x of
-        ML.TBool -> Horn.Var (ML.name x) `Horn.Eq` Horn.Int 1
-    Bool b -> Horn.Bool b
-    Eq v1 v2 -> Horn.Eq (termOfValue v1) (termOfValue v2)
-    Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
-    Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
-    Not v -> Horn.Not (atomOfValue v)
-    And v1 v2 -> Horn.And (atomOfValue v1) (atomOfValue v2)
-    Iff v1 v2 -> Horn.Iff (atomOfValue v1) (atomOfValue v2)
-    Or  v1 v2 -> Horn.Or  (atomOfValue v1) (atomOfValue v2)
-    v -> error $ "atomOfValue: unexpected value: " ++ show v
 
 
 type RTypeGen m = (String -> [Id] -> SValue -> m RType,          -- Refinement type generator for values
@@ -655,16 +610,7 @@ refineCGen prog trace = do
                 
             clause cs fml = do
                 liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
-                {-
-                (fml,cs) <- deBooleanize fml cs
-                liftIO $ putStrLn $ "debooleanized Clause: " ++ show cs ++ "==>" ++ show fml
-                -}
-                let hd = case termOfFormula fml of
-                        Horn.Pred x ts  -> Horn.PVar x ts
-                    body = map f cs
-                    f (Left sv) = atomOfValue sv
-                    f (Right v) = termOfFormula v
-                addClause $ Horn.Clause hd body
+                genClause (Just fml) cs >>= addClause
             subType cs ty1 ty2 = do
                 liftIO $ putStrLn $ "SubType: " ++ show cs ++ " |- " ++ show ty1 ++ "<:" ++ show ty2
                 case (ty1,ty2) of
@@ -689,16 +635,66 @@ refineCGen prog trace = do
             subTypePost cs ty1 ty2 = error $ "subTypePost: unexpected subtyping:" ++ show (cs,ty1,ty2) 
             failClause cs = do
                 liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==> False" 
-                let body = map f cs
-                    f (Left sv) = atomOfValue sv
-                    f (Right v) = termOfFormula v
-                addClause $ Horn.Clause Horn.Bot body
+                genClause Nothing cs >>= addClause
         forM_ (ML.functions prog) $ \(f,fdef) -> do
             theta <- checkFunDef (ML.name f) genv' [] (CallId 0) fdef (Just $ fst $ genv' M.! f)
             addFuncBinding (ML.ident fdef) theta
         x <- freshId "main"
         check genv' [] (CallId 0) (ML.mainTerm prog) RPostTypeFailure
         return ()
+
+genClause :: MonadId m => Maybe LFormula -> [Either SValue LFormula] -> m Horn.Clause
+genClause hd body = do
+    ((chd,cbody),extra) <- runWriterT $ do
+        chd <- case hd of
+            Just fml -> do
+                Horn.Pred s t <- termOfFormula fml
+                return $ Horn.PVar s t
+            Nothing -> return Horn.Bot
+        cbody <- forM body $ \case
+            Left sv -> atomOfValue sv
+            Right v -> termOfFormula v
+        return (chd,cbody)
+    return $ Horn.Clause chd (cbody ++ extra)
+    
+termOfFormula :: MonadId m => LFormula -> WriterT [Horn.Term] m Horn.Term
+termOfFormula (Formula meta i vs) = do
+    ts <- mapM termOfValue vs
+    return $ Horn.Pred ("P"++ smeta ++ show i) ts
+    where
+    Meta l accessors = meta
+    smeta = "{" ++ concat (intersperse "." (l : reverse accessors)) ++ "}"
+
+-- assume that the value has type int/bool
+termOfValue :: MonadId m => SValue -> WriterT [Horn.Term] m Horn.Term
+termOfValue = \case
+    SVar x -> pure $ Horn.Var (ML.name x)
+    Int i -> pure $ Horn.Int i
+    Bool b -> pure $ Horn.Bool b
+    Add v1 v2 -> liftA2 Horn.Add (termOfValue v1) (termOfValue v2)
+    Sub v1 v2 -> liftA2 Horn.Sub (termOfValue v1) (termOfValue v2)
+    v | ML.getType v == ML.TBool -> do
+        b <- freshId "b"
+        v' <- atomOfValue v
+        tell [Horn.Var b `Horn.Iff` v']
+        return (Horn.Var b)
+    v -> error $ "termOfValue: unexpected value: " ++ show v
+
+-- assume the value has type bool
+atomOfValue :: MonadId m => SValue -> WriterT [Horn.Term] m Horn.Term
+atomOfValue = \case
+    SVar x -> case ML.getType x of
+        ML.TBool -> pure $ Horn.Var (ML.name x)
+        _ -> error $ "atomOfValue: unexpected value: " ++ show x
+    Bool b -> pure $ Horn.Bool b
+    Eq v1 v2 -> liftA2 Horn.Eq (termOfValue v1) (termOfValue v2)
+    Lt v1 v2 -> liftA2 Horn.Lt (termOfValue v1) (termOfValue v2)
+    Lte v1 v2 -> liftA2 Horn.Lte (termOfValue v1) (termOfValue v2)
+    Not v -> fmap Horn.Not (atomOfValue v)
+    And v1 v2 -> liftA2 Horn.And (atomOfValue v1) (atomOfValue v2)
+    Iff v1 v2 -> liftA2 Horn.Iff (atomOfValue v1) (atomOfValue v2)
+    Or  v1 v2 -> liftA2 Horn.Or  (atomOfValue v1) (atomOfValue v2)
+    v -> error $ "atomOfValue: unexpected value: " ++ show v
 
 -- assume that v is a decomposed value
 substPostType :: M.Map Id SValue -> RPostType -> RPostType

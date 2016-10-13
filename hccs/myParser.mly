@@ -36,10 +36,8 @@
 
 %start parser_main
 %type <Fpat.HCCS.t> parser_main
-%start atom
-%type <Fpat.Formula.t> atom
-%%
 
+%% 
 parser_main:
  | hcs EOF { $1 }
  | hc EOF { [$1] }
@@ -73,39 +71,32 @@ body:
 atom:
  | PVAR { Pva.make $1 [] |> Pva.to_formula }
  | PVAR LPAREN terms RPAREN { Pva.make $1 $3 |> Pva.to_formula }
- | term EQ term
-        { Formula.eq
-            (Type.meet (snd $1) (snd $3))
-            (fst $1) (fst $3) }
- | term NOTEQ term
-        { Formula.neq
-            (Type.meet (snd $1) (snd $3))
-            (fst $1) (fst $3) }
- | term GT term { IntFormula.gt (fst $1) (fst $3) }
- | term LT term { IntFormula.lt (fst $1) (fst $3) }
- | term LEQ term { IntFormula.leq (fst $1) (fst $3) }
- | term GEQ term { IntFormula.geq (fst $1) (fst $3) }
- | NOT atom { Formula.bnot $2 }
- | atom AND atom { Formula.mk_and $1 $3 }
- | atom OR  atom { Formula.mk_or  $1 $3 }
- | atom IFF atom { Formula.mk_and (Formula.imply $1 $3) (Formula.imply $3 $1) }
- | LPAREN atom RPAREN { $2 }
- | BOT { Formula.mk_false }
- | TOP { Formula.mk_true }
+ | term { Formula.of_term $1 }
 
 term:
- | INT { IntTerm.make $1, Type.mk_int }
- | VAR { Term.mk_var (Idnt.make $1), Type.mk_unknown }
- | term PLUS term { IntTerm.add (fst $1) (fst $3), Type.mk_int }
- | term TIMES term { IntTerm.mul (fst $1) (fst $3), Type.mk_int }
- | term MINUS term { IntTerm.sub (fst $1) (fst $3), Type.mk_int }
- | term DIV term { IntTerm.div (fst $1) (fst $3), Type.mk_int }
+ | INT { IntTerm.make $1 }
+ | VAR { Term.mk_var (Idnt.make $1) }
+ | term PLUS term { IntTerm.add $1 $3 }
+ | term TIMES term { IntTerm.mul $1 $3 }
+ | term MINUS term { IntTerm.sub $1 $3 }
+ | term DIV term { IntTerm.div $1 $3 }
+ | term EQ term
+        { Formula.term_of (Formula.eq (Type.mk_unknown) $1 $3) }
+ | term NOTEQ term
+        { Formula.term_of (Formula.neq (Type.mk_unknown) $1 $3) }
+ | term GT term { Formula.term_of (IntFormula.gt $1 $3) }
+ | term LT term { Formula.term_of (IntFormula.lt $1 $3) }
+ | term LEQ term { Formula.term_of (IntFormula.leq $1 $3) }
+ | term GEQ term { Formula.term_of (IntFormula.geq $1 $3) }
+ | NOT term { Formula.term_of (Formula.bnot (Formula.of_term $2)) }
+ | term AND term { Formula.term_of (Formula.mk_and (Formula.of_term $1) (Formula.of_term $3)) }
+ | term OR  term { Formula.term_of (Formula.mk_or  (Formula.of_term $1) (Formula.of_term $3)) }
+ | term IFF term { let a, b = Formula.of_term $1, Formula.of_term $3 in
+                   Formula.term_of (Formula.mk_and (Formula.imply a b) (Formula.imply b a)) }
+ | BOT { BoolTerm.mk_false }
+ | TOP { BoolTerm.mk_true }
  | LPAREN term RPAREN { $2 }
- /*
- | BOT { BoolTerm.mk_false, Type.mk_bool }
- | TOP { BoolTerm.mk_true, Type.mk_bool }
- */
 
 terms:
- | term COMMA terms { $1 :: $3 }
- | term { [$1] }
+ | term COMMA terms { ($1, Type.mk_unknown) :: $3 }
+ | term { [$1, Type.mk_unknown] }

@@ -251,7 +251,7 @@ abstAValue env cs pv = go
     go v ty = case v of
         ML.Var x -> cast cs pv (B.V (toSymbol x (env M.! x))) (env M.! x) ty
         ML.CInt i -> return $ B.T []
-        ML.CBool b -> return $ B.C b
+        ML.CBool b -> return $ (B.C b)
 --        ML.Pair v1 v2 -> 
 --            let PPair _ ty1 ty2 = ty in
 --            (\x y -> B.T [x,y]) <$> go v1 ty1 <*> go v2 ty2
@@ -309,13 +309,6 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
             e2 <- abstFormulae cs pv (map (substVFormula subst) qs)
             return $ B.T [e1,e2]
 
-{-
-        ML.Fun fdef -> do
-            (e1,_) <- abstFunDef tbl env cs pv fdef (Just ty)
-            e2 <- abstFormulae cs pv qs
-            return $ B.T [e1,e2]
--}
-
         ML.Let _ x (ML.LValue v) t' -> do
             let ty_x = typeOfAValue env v
             ex <- abstValue tbl env cs pv (ML.Atomic v) ty_x
@@ -337,16 +330,10 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
                 pv' = [ (B.f_proj i n x_preds, 
                          substVFormula subst1 fml) | (i,fml) <- zip [0..] qs' ] ++ pv
                 ty_r'' = substVPType subst1 ty_r'
-            B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .  
-              B.f_let (toSymbol x ty_r') x_body <$>
-                abstTerm tbl (M.insert x ty_r'' env) cs pv' t' (r,ty,qs)
-
-{-
-        ML.Let _ f (ML.LFun func) t' -> do
-            (e_f,ty_f) <- abstFunDef tbl env cs pv func Nothing
-            B.f_let (toSymbol f ty_f) e_f <$> 
-                abstTerm tbl (M.insert f ty_f env) cs pv t' (r,ty,qs)
--}
+            B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .           -- let x = f <body, preds> in
+              B.f_let (toSymbol x ty_r') x_body <$>                               -- let v = x.fst
+                (B.f_assume <$> (abstFormula cs pv' (ML.CBool True)) <*>          -- assume phi; // avoid incosinsitent states
+                    abstTerm tbl (M.insert x ty_r'' env) cs pv' t' (r,ty,qs))     -- abst(cs,pv',t,tau)
 
         ML.Let _ x (ML.LExp ident t_x) t' -> do
             let Right (y,ty_y,ps) = tbl IM.! ident
@@ -356,8 +343,10 @@ abstTerm tbl env cs pv t (r,ty,qs) = doit where
                     x_preds = B.f_proj 1 2 (B.V x_pair)
                     n = length ps
                     pv' = [ (B.f_proj i n x_preds, substFormula (M.singleton y x) fml) | (i,fml) <- zip [0..] ps ] ++ pv
-                B.f_let (toSymbol x ty_y) x_body <$>
-                    abstTerm tbl (M.insert x (substPType (M.singleton y x) ty_y) env) cs pv' t' (r,ty,qs)
+                    env' = M.insert x (substPType (M.singleton y x) ty_y) env
+                B.f_let (toSymbol x ty_y) x_body <$>                         -- let x = abst(cs,pv,t1,tau1)
+                    (B.f_assume <$> (abstFormula cs pv' (ML.CBool True)) <*> -- assume phi;
+                        abstTerm tbl env' cs pv' t' (r,ty,qs))               -- abst(cs,pv',t,tau)
 
         ML.Let _ x ML.LRand t' -> 
             B.f_let (toSymbol x PInt) (B.T []) <$>
@@ -396,7 +385,8 @@ abstFunDef tbl env cs pv func mpty = do
             ty_ys' = map (substPType subst) ty_ys
             arity = length xs
         let env' = foldr (uncurry M.insert) env (zip xs ty_ys')
-        e' <- abstTerm tbl env' cs pv' t1 rty'
+        e' <- B.f_assume <$> (abstFormula cs pv' (ML.CBool True)) 
+                         <*> (abstTerm tbl env' cs pv' t1 rty')
         return $ foldr (\(i,x,ty_y) -> 
             B.f_let (toSymbol x ty_y) (B.f_proj i arity x_body)) e' (zip3 [0..] xs ty_ys')
     return (e,ty_f)

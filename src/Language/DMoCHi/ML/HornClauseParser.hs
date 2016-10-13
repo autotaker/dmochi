@@ -99,7 +99,7 @@ exprP env = it where
     prefix name fun       = Prefix (reservedOp name >> pure fun)
     prefix' name fun      = Prefix (reserved name >> pure fun)
     scalar (CInt c) t = foldl1 (after2 Op OpAdd) [ t | _ <- [1..c]]
-    termP = Var <$> (fmap (\x -> Id (env M.! x) x) identifier)
+    termP = Var <$> (fmap (\x -> Id (env M.! x) x) identifier) <* optional (parens (pure ()))
         <|> CInt <$> natural 
         <|> CBool True <$ reserved "true" 
         <|> CBool False <$ reserved "false"
