@@ -1,0 +1,6 @@
+#!/bin/bash
+
+DMOCHI_HOME="$PWD"
+RCAML_BIN="$PWD/../vhorn/rcaml_bin/bin"
+
+export PATH="$DMOCHI_HOME/.cabal-sandbox/bin:$RCAML_BIN:$PATH"

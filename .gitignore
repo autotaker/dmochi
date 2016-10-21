@@ -5,6 +5,7 @@
 .cabal-sandbox/
 dist/
 cabal.sandbox.config
+activate.sh
 tmp/
 ML/sample/*.log
 ML/sample/*.hrs

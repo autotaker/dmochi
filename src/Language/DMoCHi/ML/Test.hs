@@ -51,8 +51,8 @@ instance Show MainError where
     show Debugging = "Debugging"
 
 getHCCSSolver :: IO FilePath
-getHCCSSolver = Paths_dmochi.getDataFileName "hcsolver"
-
+--getHCCSSolver = Paths_dmochi.getDataFileName "hcsolver"
+getHCCSSolver = return "rcaml.opt"
 
 run :: IO ()
 run = do
