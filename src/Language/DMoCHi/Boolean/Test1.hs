@@ -9,10 +9,11 @@ import Language.DMoCHi.Common.Id
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as Typed
 import qualified Language.DMoCHi.Boolean.Type3 as Sat
 import Language.DMoCHi.Boolean.PrettyPrint.Typed
+import Language.DMoCHi.Common.Util
 import Text.PrettyPrint(render)
 import Control.Monad.Except
 import qualified Data.Map as M
-import Language.DMoCHi.Boolean.Test(test,measure,testTyped)
+import Language.DMoCHi.Boolean.Test(test,testTyped)
 import Text.Printf
 import Data.Time
 import Options.Applicative

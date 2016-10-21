@@ -4,18 +4,22 @@ import System.IO
 import System.Process(callCommand)
 import System.Exit
 import System.Console.GetOpt
+import Control.Monad.Except
+import Text.Parsec(ParseError)
+import Text.PrettyPrint
 import Text.Printf
+
 import qualified Language.DMoCHi.Boolean.Syntax as B
 import qualified Language.DMoCHi.Boolean.Sort   as B
 import qualified Language.DMoCHi.Boolean.HORS   as B
-import Language.DMoCHi.Boolean.Syntax.Typed as B(toUnTyped,tCheck)
-import Language.DMoCHi.Boolean.PrettyPrint.HORS(pprintHORS,printHORS)
-import Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
-import Language.DMoCHi.ML.Syntax.UnTyped
-import Language.DMoCHi.ML.Parser
+import           Language.DMoCHi.Boolean.Syntax.Typed as B(toUnTyped,tCheck)
+import           Language.DMoCHi.Boolean.PrettyPrint.HORS(pprintHORS,printHORS)
+import           Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
+import           Language.DMoCHi.ML.Syntax.UnTyped
+import           Language.DMoCHi.ML.Parser
 import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
-import Language.DMoCHi.ML.PrettyPrint.UnTyped
-import Language.DMoCHi.ML.Alpha
+import           Language.DMoCHi.ML.PrettyPrint.UnTyped
+import           Language.DMoCHi.ML.Alpha
 import qualified Language.DMoCHi.ML.CallNormalize as CallNormalize
 import qualified Language.DMoCHi.ML.Inline  as Inline
 import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
@@ -25,16 +29,13 @@ import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
-import Language.DMoCHi.Boolean.Test 
-import Control.Monad.Except
-import Text.Parsec(ParseError)
-import Data.Time
-import Text.PrettyPrint
-import Language.DMoCHi.Common.Id
+import           Language.DMoCHi.Boolean.Test 
+import           Language.DMoCHi.Common.Id
+import           Language.DMoCHi.Common.Util
 
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import qualified Language.DMoCHi.ML.HornClauseParser as Horn
-import Paths_dmochi
+import           Paths_dmochi
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
@@ -42,7 +43,6 @@ data MainError = NoInputSpecified
                | IllTyped Typed.TypeError 
                | Debugging
                | BooleanError String
-
 
 instance Show MainError where
     show NoInputSpecified = "NoInputSpecified"
@@ -52,11 +52,12 @@ instance Show MainError where
     show (BooleanError s) = "Boolean: " ++ s
     show Debugging = "Debugging"
 
-data Flag = Help | HCCS HCCSSolver deriving Eq
+data Flag = Help | HCCS HCCSSolver | CEGARLimit Int deriving Eq
 data HCCSSolver = IT | GCH  deriving Eq
 
 data Config = Config { targetProgram :: FilePath
-                     , hornOption :: String }
+                     , hornOption :: String
+                     , cegarLimit :: Int }
 
 
 getHCCSSolver :: IO FilePath
@@ -65,19 +66,21 @@ getHCCSSolver = return "rcaml.opt"
 
 defaultConfig :: FilePath -> Config
 defaultConfig path = Config { targetProgram = path
-                            , hornOption = "" }
+                            , hornOption = ""
+                            , cegarLimit = 20 }
 
 run :: IO ()
 run = do
     hSetBuffering stdout NoBuffering
-    m <- runFreshT $ runExceptT doit
+    m <- measure "Total" $ runFreshT $ runExceptT doit
     case m of
         Left err -> print err >> exitFailure
         Right _ -> return ()
         
 options :: [ OptDescr Flag ]
 options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
-          , Option [] ["hccs"] (ReqArg parseSolver "it|gch") "Set hccs solver" ]
+          , Option [] ["hccs"] (ReqArg parseSolver "it|gch") "Set hccs solver"
+          , Option ['l'] ["limit"] (ReqArg (CEGARLimit . read) "N") "Set CEGAR round limit (default = 20)" ]
     where
     parseSolver "it" = HCCS IT
     parseSolver "gch" = HCCS GCH
@@ -93,120 +96,119 @@ parseArgs = doit
   die errs = dump (concat errs ++ info) >> exitFailure
   help = dump info >> exitSuccess
   doit = do
+    pname <- getProgName
     argv <- getArgs
+    printf "Command: %s %s\n" pname (unwords $ map show argv)
     case parse argv of
         (opts, files, []) | Help `elem` opts -> help
         (opts, [file], []) -> return $
             foldl (\acc opt -> case opt of
                      HCCS IT -> acc { hornOption = hornOption acc ++ "-hccs it" }
-                     HCCS GCH -> acc { hornOption = hornOption acc ++ "-hccs gch" }) 
+                     HCCS GCH -> acc { hornOption = hornOption acc ++ "-hccs gch" }
+                     CEGARLimit l -> acc { cegarLimit = l } ) 
                   (defaultConfig file) opts
         (opts, [], []) -> die ["No target specified\n"]
         (opts, files, []) -> die ["Multiple targets Specified\n"]
         (_,_,errs) -> die errs
 
+data CEGARResult a = Safe | Unsafe | Refine a
+
 doit :: ExceptT MainError (FreshT IO) ()
 doit = do
-    t_begin <- liftIO $ getCurrentTime
     -- check args
-    t_input_begin <- liftIO $ getCurrentTime
-    pname <- liftIO $ getProgName
-    conf <- liftIO $ parseArgs
-    t_input_end <- liftIO $ getCurrentTime
-
+    conf <- measure "ParseArg" $ liftIO parseArgs
     hccsSolver <- liftIO getHCCSSolver
     
     -- parsing
-    t_parsing_begin <- liftIO $ getCurrentTime
     let path = targetProgram conf
-    parseRes <- liftIO $ parseProgramFromFile path
-    program  <- case parseRes of
-        Left err -> throwError $ ParseFailed err
-        Right p  -> return p
-    liftIO $ putStrLn "Parsed Program"
-    liftIO $ printProgram program
-    t_parsing_end <- liftIO $ getCurrentTime
+    parsedProgram <- measure "Parse" $ do
+        parseRes <- liftIO $ parseProgramFromFile path
+        program  <- case parseRes of
+            Left err -> throwError $ ParseFailed err
+            Right p  -> return p
+        liftIO $ putStrLn "Parsed Program"
+        liftIO $ printProgram program
+        return program
 
-    -- alpha conversion
-    alphaProgram <- withExceptT AlphaFailed $ alpha program
-    liftIO $ putStrLn "Alpha Converted Program"
-    liftIO $ printProgram alphaProgram
+    normalizedProgram <- measure "Preprocess" $ do
+        -- alpha conversion
+        alphaProgram <- withExceptT AlphaFailed $ alpha parsedProgram
+        liftIO $ putStrLn "Alpha Converted Program"
+        liftIO $ printProgram alphaProgram
 
-    -- Call normalizing
-    alphaNormProgram <- CallNormalize.normalize alphaProgram
-    liftIO $ putStrLn "Call Normalized Program"
-    liftIO $ printProgram alphaNormProgram
+        -- Call normalizing
+        alphaNormProgram <- CallNormalize.normalize alphaProgram
+        liftIO $ putStrLn "Call Normalized Program"
+        liftIO $ printProgram alphaNormProgram
 
-    -- type checking
-    liftIO $ putStrLn "Typed Program"
-    t_type_checking_begin <- liftIO $ getCurrentTime
-    _typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaNormProgram
-    liftIO $ Typed.printProgram _typedProgram
-    t_type_checking_end <- liftIO $ getCurrentTime
+        -- type checking
+        liftIO $ putStrLn "Typed Program"
+        _typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaNormProgram
+        liftIO $ Typed.printProgram _typedProgram
 
-    -- inlining
-    liftIO $ putStrLn "Inlined Program"
-    typedProgram' <- Inline.inline 1000 _typedProgram
-    liftIO $ Typed.printProgram typedProgram'
+        -- inlining
+        liftIO $ putStrLn "Inlined Program"
+        typedProgram' <- Inline.inline 1000 _typedProgram
+        liftIO $ Typed.printProgram typedProgram'
 
-    -- unreachable code elimination
-    liftIO $ putStrLn "Unreachable Code Elimination"
-    typedProgram <- return $ Unreachable.elimUnreachable typedProgram'
-    liftIO $ Typed.printProgram typedProgram
+        -- unreachable code elimination
+        liftIO $ putStrLn "Unreachable Code Elimination"
+        typedProgram <- return $ Unreachable.elimUnreachable typedProgram'
+        liftIO $ Typed.printProgram typedProgram
 
-    -- normalizing
-    liftIO $ putStrLn "Normalizing"
-    normalizedProgram<- PNormal.normalize typedProgram
-    liftIO $ PNormal.printProgram normalizedProgram
-
+        -- normalizing
+        liftIO $ putStrLn "Normalizing"
+        normalizedProgram <- PNormal.normalize typedProgram
+        liftIO $ PNormal.printProgram normalizedProgram
+        return normalizedProgram
 
     (typeMap0, fvMap) <- PAbst.initTypeMap normalizedProgram
-    let lim = 20 :: Int
-    let cegar _ k hcs | k >= lim = return ()
-        cegar typeMap k hcs = measure (printf "CEGAR-%d" k) $ do
-            liftIO $ putStrLn "Predicate Abstracion"
-            boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg typeMap normalizedProgram
-            let file_boolean = printf "%s_%d.bool" path k
-            liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
-            liftIO $ putStrLn "Converted program"
-            liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
-            case runExcept (B.tCheck boolProgram') of
-                Left (s1,s2,str,ctx) -> do
-                    liftIO $ do
-                        printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
-                        forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
-                            printf "Context %d: %s\n" i (show t)
-                    throwError $ BooleanError "Abstracted Program is ill-typed"
-                Right _ -> return ()
-            let boolProgram = B.toUnTyped boolProgram'
-            -- liftIO $ B.printProgram boolProgram
+    let cegar _ k hcs | k >= cegarLimit conf = return ()
+        cegar typeMap k hcs = do
+            res <- measure (printf "CEGAR-%d" k) $ do
+                liftIO $ putStrLn "Predicate Abstracion"
+                boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg typeMap normalizedProgram
+                let file_boolean = printf "%s_%d.bool" path k
+                liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
+                liftIO $ putStrLn "Converted program"
+                liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
+                case runExcept (B.tCheck boolProgram') of
+                    Left (s1,s2,str,ctx) -> do
+                        liftIO $ do
+                            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+                            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                                printf "Context %d: %s\n" i (show t)
+                        throwError $ BooleanError "Abstracted Program is ill-typed"
+                    Right _ -> return ()
+                let boolProgram = B.toUnTyped boolProgram'
+                -- liftIO $ B.printProgram boolProgram
 
-            
-            r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
-            case r of
-                Just trace -> do
-                    refine <- Refine.refineCGen normalizedProgram trace
-                    case refine of
-                        Nothing -> liftIO $ putStrLn "UnSafe!!"
-                        Just (clauses, (rtyAssoc,rpostAssoc)) -> do
-                            let file_hcs = printf "%s_%d.hcs" path k
-                            liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
-                            let opts = hornOption conf
-                            let cmd = printf "%s %s -print-hccs-solution %s %s" 
-                                             hccsSolver opts (file_hcs ++ ".ans") file_hcs
-                            liftIO $ callCommand cmd
-                            parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-                            liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
-                            solution  <- case parseRes of
-                                Left err -> throwError $ ParseFailed err
-                                Right p  -> return p
-                            let typeMap' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
-                            cegar typeMap' (k+1) (clauses ++ hcs)
-                Nothing -> do
-                    liftIO $ putStrLn "Safe!!"
-                    return ()
-
-            return ()
+                r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
+                case r of
+                    Just trace -> measure "Refinement" $ do
+                        refine <- Refine.refineCGen normalizedProgram trace
+                        case refine of
+                            Nothing -> return Unsafe
+                            Just (clauses, (rtyAssoc,rpostAssoc)) -> do
+                                let file_hcs = printf "%s_%d.hcs" path k
+                                liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
+                                let opts = hornOption conf
+                                let cmd = printf "%s %s -print-hccs-solution %s %s" 
+                                                 hccsSolver opts (file_hcs ++ ".ans") file_hcs
+                                liftIO $ callCommand cmd
+                                parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
+                                liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
+                                solution  <- case parseRes of
+                                    Left err -> throwError $ ParseFailed err
+                                    Right p  -> return p
+                                let typeMap' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
+                                return $ Refine (typeMap', clauses ++ hcs)
+                    Nothing -> return Safe
+            case res of
+                Safe -> liftIO $ putStrLn "Safe!"
+                Unsafe -> liftIO $ putStrLn "Unsafe!"
+                Refine (typeMap', hcs') ->
+                    cegar typeMap' (k+1) hcs'
     cegar typeMap0 0 []
 
                 {-

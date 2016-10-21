@@ -1,5 +1,4 @@
 module Language.DMoCHi.Boolean.Test where
---import Language.DMoCHi.Boolean.Parser.MoCHi
 import Language.DMoCHi.Boolean.Alpha
 import Language.DMoCHi.Boolean.Flow hiding(Context)
 import Language.DMoCHi.Boolean.SortCheck
@@ -7,22 +6,11 @@ import Language.DMoCHi.Boolean.Type2
 import qualified Language.DMoCHi.Boolean.Flow2 as Flow2
 import qualified Language.DMoCHi.Boolean.Type3 as Sat
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as Typed
---import Language.DMoCHi.Boolean.Type
+import           Language.DMoCHi.Common.Util
 import Language.DMoCHi.Boolean.Syntax
 import Control.Monad.Except
 import qualified Data.Map as M
-import Data.Time
 import Text.Printf
-
-measure :: MonadIO m => String -> m a -> m a
-measure header doit = do
-    let f t = fromRational (toRational t) :: Double
-    t_start <- liftIO $ getCurrentTime
-    v <- doit
-    t_end <- liftIO $ getCurrentTime
-    let time = f $ diffUTCTime t_end t_start
-    liftIO $ printf "%s: %.5f sec\n" header time
-    return v
 
 test :: MonadIO m => FilePath -> Program -> ExceptT String m (Maybe [Bool])
 test path input = do
