@@ -3,6 +3,7 @@ import System.Environment
 import System.IO
 import System.Process(callCommand)
 import System.Exit
+import System.Console.GetOpt
 import Text.Printf
 import qualified Language.DMoCHi.Boolean.Syntax as B
 import qualified Language.DMoCHi.Boolean.Sort   as B
@@ -42,6 +43,7 @@ data MainError = NoInputSpecified
                | Debugging
                | BooleanError String
 
+
 instance Show MainError where
     show NoInputSpecified = "NoInputSpecified"
     show (ParseFailed err) = "ParseFailed: " ++ show err
@@ -50,9 +52,20 @@ instance Show MainError where
     show (BooleanError s) = "Boolean: " ++ s
     show Debugging = "Debugging"
 
+data Flag = Help | HCCS HCCSSolver deriving Eq
+data HCCSSolver = IT | GCH  deriving Eq
+
+data Config = Config { targetProgram :: FilePath
+                     , hornOption :: String }
+
+
 getHCCSSolver :: IO FilePath
 --getHCCSSolver = Paths_dmochi.getDataFileName "hcsolver"
 getHCCSSolver = return "rcaml.opt"
+
+defaultConfig :: FilePath -> Config
+defaultConfig path = Config { targetProgram = path
+                            , hornOption = "" }
 
 run :: IO ()
 run = do
@@ -61,7 +74,36 @@ run = do
     case m of
         Left err -> print err >> exitFailure
         Right _ -> return ()
+        
+options :: [ OptDescr Flag ]
+options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
+          , Option [] ["hccs"] (ReqArg parseSolver "it|gch") "Set hccs solver" ]
+    where
+    parseSolver "it" = HCCS IT
+    parseSolver "gch" = HCCS GCH
+    parseSolver s = error $ "Not Supported Parameter for --hccs: " ++ s
 
+parseArgs :: IO Config
+parseArgs = doit
+  where
+  parse argv = getOpt RequireOrder options argv
+  header = "Usage: dmochi [OPTION..] target"
+  dump = hPutStrLn stderr
+  info = usageInfo header options
+  die errs = dump (concat errs ++ info) >> exitFailure
+  help = dump info >> exitSuccess
+  doit = do
+    argv <- getArgs
+    case parse argv of
+        (opts, files, []) | Help `elem` opts -> help
+        (opts, [file], []) -> return $
+            foldl (\acc opt -> case opt of
+                     HCCS IT -> acc { hornOption = hornOption acc ++ "-hccs it" }
+                     HCCS GCH -> acc { hornOption = hornOption acc ++ "-hccs gch" }) 
+                  (defaultConfig file) opts
+        (opts, [], []) -> die ["No target specified\n"]
+        (opts, files, []) -> die ["Multiple targets Specified\n"]
+        (_,_,errs) -> die errs
 
 doit :: ExceptT MainError (FreshT IO) ()
 doit = do
@@ -69,15 +111,14 @@ doit = do
     -- check args
     t_input_begin <- liftIO $ getCurrentTime
     pname <- liftIO $ getProgName
-    args <- liftIO $ getArgs
-    when (length args == 0) $ throwError NoInputSpecified
+    conf <- liftIO $ parseArgs
     t_input_end <- liftIO $ getCurrentTime
 
     hccsSolver <- liftIO getHCCSSolver
     
     -- parsing
     t_parsing_begin <- liftIO $ getCurrentTime
-    let path = head args
+    let path = targetProgram conf
     parseRes <- liftIO $ parseProgramFromFile path
     program  <- case parseRes of
         Left err -> throwError $ ParseFailed err
@@ -151,9 +192,12 @@ doit = do
                             let file_hcs = printf "%s_%d.hcs" path k
                             liftIO $ putStr $ show (Horn.HCCS clauses)
                             liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
-                            liftIO $ callCommand (hccsSolver ++ " -hccs it " ++ file_hcs)
+                            let opts = hornOption conf
+                            let cmd = printf "%s %s -print-hccs-solution %s %s" 
+                                             hccsSolver opts (file_hcs ++ ".ans") file_hcs
+                            liftIO $ callCommand cmd
                             parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-                            --liftIO $ print parseRes
+                            liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
                             solution  <- case parseRes of
                                 Left err -> throwError $ ParseFailed err
                                 Right p  -> return p
