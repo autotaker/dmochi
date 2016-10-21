@@ -11,6 +11,7 @@ import qualified Data.Map as M
 parseSolution :: FilePath -> IO (Either ParseError [(Int,[Id],AValue)])
 parseSolution = parseFromFile mainP
 
+
 reservedNames :: [String]
 reservedNames = ["not", "true","false","int","bool"]
 
@@ -52,12 +53,11 @@ commaSep :: Parser a -> Parser [a]
 commaSep = P.commaSep lexer
 
 mainP :: Parser [(Int,[Id],AValue)]
-mainP = string "solution." >> whiteSpace >> many defP <* eof
+mainP = string "solution:" >> whiteSpace >> many defP <* eof
 
 predP :: Parser Int
 predP = do
-    char 'P'
-    braces $ many1 (noneOf "}")
+    many1 (noneOf "[")
     brackets $ do
         i <- natural
         colon

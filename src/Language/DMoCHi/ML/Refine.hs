@@ -73,7 +73,7 @@ data SValue = SVar Id
             | And SValue SValue
             | Or SValue SValue
             | Not SValue
-            | Iff SValue SValue
+--            | Iff SValue SValue
             | C Closure
 
 instance ML.HasType SValue where
@@ -113,8 +113,6 @@ instance Show SValue where
         showParen (d >= 4) $ (showsPrec 4 v1) . (showString " && ") . (showsPrec 4 v2)
     showsPrec d (Or v1 v2) = 
         showParen (d >= 3) $ (showsPrec 3 v1) . (showString " || ") . (showsPrec 3 v2)
-    showsPrec d (Iff v1 v2) = 
-        showParen (d >= 3) $ (showsPrec 3 v1) . (showString " <=> ") . (showsPrec 3 v2)
     showsPrec d (Not v1) = 
         showParen (d >= 8) $ (showString "not ") . showsPrec 8 v1
     showsPrec d (C cls) = showsPrec d cls
@@ -163,7 +161,6 @@ fromSValue = \case
     And v1 v2 -> bin ML.OpAnd v1 v2
     Or v1 v2 -> bin ML.OpOr v1 v2
     Not v1 -> unary ML.OpNot v1
-    Iff v1 v2 -> error "Iff is not supported"
     C _ -> error "Cannot convert a closure to a syntactic value"
     where
     bin f v1 v2 = 
@@ -445,8 +442,8 @@ decompose x = case ML.getType x of
     ML.TInt -> SVar x
     ML.TBool -> SVar x
     ML.TPair t1 t2 -> 
-        P (decompose (ML.Id t1 (ML.name x ++"$fst"))) 
-          (decompose (ML.Id t2 (ML.name x ++"$snd")))
+        P (decompose (ML.Id t1 (ML.name x ++"_fst"))) 
+          (decompose (ML.Id t2 (ML.name x ++"_snd")))
     ML.TFun _ _ -> SVar x
 
 type W m a = WriterT ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])) m a
@@ -660,10 +657,10 @@ genClause hd body = do
 termOfFormula :: MonadId m => LFormula -> WriterT [Horn.Term] m Horn.Term
 termOfFormula (Formula meta i vs) = do
     ts <- mapM termOfValue vs
-    return $ Horn.Pred ("P"++ smeta ++ show i) ts
+    return $ Horn.Pred ("p_"++ smeta ++ "[" ++ show i ++ ":0]") ts
     where
     Meta l accessors = meta
-    smeta = "{" ++ concat (intersperse "." (l : reverse accessors)) ++ "}"
+    smeta = concat (intersperse "_" (l : reverse accessors))
 
 -- assume that the value has type int/bool
 termOfValue :: MonadId m => SValue -> WriterT [Horn.Term] m Horn.Term
@@ -673,11 +670,12 @@ termOfValue = \case
     Bool b -> pure $ Horn.Bool b
     Add v1 v2 -> liftA2 Horn.Add (termOfValue v1) (termOfValue v2)
     Sub v1 v2 -> liftA2 Horn.Sub (termOfValue v1) (termOfValue v2)
-    v | ML.getType v == ML.TBool -> do
-        b <- freshId "b"
-        v' <- atomOfValue v
-        tell [Horn.Var b `Horn.Iff` v']
-        return (Horn.Var b)
+    Eq v1 v2 -> liftA2 Horn.Eq (termOfValue v1) (termOfValue v2)
+    Lt v1 v2 -> liftA2 Horn.Lt (termOfValue v1) (termOfValue v2)
+    Lte v1 v2 -> liftA2 Horn.Lte (termOfValue v1) (termOfValue v2)
+    Not v -> fmap Horn.Not (termOfValue v)
+    And v1 v2 -> liftA2 Horn.And (termOfValue v1) (termOfValue v2)
+    Or  v1 v2 -> liftA2 Horn.Or  (termOfValue v1) (termOfValue v2)
     v -> error $ "termOfValue: unexpected value: " ++ show v
 
 -- assume the value has type bool
@@ -692,7 +690,6 @@ atomOfValue = \case
     Lte v1 v2 -> liftA2 Horn.Lte (termOfValue v1) (termOfValue v2)
     Not v -> fmap Horn.Not (atomOfValue v)
     And v1 v2 -> liftA2 Horn.And (atomOfValue v1) (atomOfValue v2)
-    Iff v1 v2 -> liftA2 Horn.Iff (atomOfValue v1) (atomOfValue v2)
     Or  v1 v2 -> liftA2 Horn.Or  (atomOfValue v1) (atomOfValue v2)
     v -> error $ "atomOfValue: unexpected value: " ++ show v
 
@@ -813,8 +810,8 @@ extendEnv x v env = case ML.getType x of
     ML.TBool -> M.insert (ML.name x) v env
     ML.TPair t1 t2 -> extendEnv x1 v1 $ extendEnv x2 v2 env
         where
-        x1 = ML.Id t1 (ML.name x ++ "$fst")
-        x2 = ML.Id t2 (ML.name x ++ "$snd")
+        x1 = ML.Id t1 (ML.name x ++ "_fst")
+        x2 = ML.Id t2 (ML.name x ++ "_snd")
         v1 = ML.Op (ML.OpFst t1 v)
         v2 = ML.Op (ML.OpSnd t2 v)
     ML.TFun _ _ -> env

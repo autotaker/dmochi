@@ -33,6 +33,7 @@ instance Show Clause where
     show (Clause Bot body) = 
         "?- " ++ (concat $ intersperse ", " (map show body)) ++ "."
     show (Clause (PVar _ []) _) = ""
+    show (Clause (PVar p ts) []) = show (Pred p ts) ++ "."
     show (Clause (PVar p ts) body) = 
         show (Pred p ts) ++ " :- " ++ (concat $ intersperse "," (map show body)) ++ "."
 
@@ -68,7 +69,7 @@ instance Show Term where
     showsPrec d (Or  t1 t2) = showParen (d >= 3) $
         (showsPrec 3 t1) . showString " \\/ " . (showsPrec 4 t2)
     showsPrec d (Iff t1 t2) = showParen (d >= 3) $
-        (showsPrec 3 t1) . showString " <=> " . (showsPrec 4 t2)
+        (showsPrec 3 t1) . showString " = " . (showsPrec 4 t2)
     showsPrec d (Not t1) = showChar '!' . (showsPrec 6 t1)
 
 
