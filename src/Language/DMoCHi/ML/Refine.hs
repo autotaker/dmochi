@@ -18,6 +18,7 @@ import Data.List(intersperse,nub,foldl')
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import Debug.Trace
 import Text.PrettyPrint
+import Text.Printf
 
 type Trace = [Bool]
 newtype CallId = CallId { unCallId :: Int } deriving (Eq,Ord)
@@ -448,6 +449,7 @@ decompose x = case ML.getType x of
 
 type W m a = WriterT ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])) m a
 
+
 refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m) => 
               ML.Program -> Trace -> 
               m (Maybe ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])))
@@ -486,6 +488,12 @@ refineCGen prog trace = do
             ty <- gen (ML.name f) [] v
             return (f,(ty,decompose f))
         dump "RefineEnv" (M.assocs genv')
+
+        let showC :: Either SValue LFormula -> String
+            showC (Left sv) = show sv
+            showC (Right fml) = show fml
+            showCs :: [Either SValue LFormula] -> String
+            showCs = concat . intersperse ", " . map showC
 
         let check :: M.Map Id (RType,SValue) ->   {- environment -}
                      [Either SValue LFormula] ->  {- accumulator of constraints -}
@@ -606,10 +614,10 @@ refineCGen prog trace = do
                     sv <$ checkFunDef "fun" env cs callSite fdef (Just theta)
                 
             clause cs fml = do
-                liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==>" ++ show fml
-                genClause (Just fml) cs >>= addClause
+                liftIO $ printf "Clause: %s ==> %s\n" (showCs cs) (show fml)
+                addClause (genClause (Just fml) cs)
             subType cs ty1 ty2 = do
-                liftIO $ putStrLn $ "SubType: " ++ show cs ++ " |- " ++ show ty1 ++ "<:" ++ show ty2
+                liftIO $ printf "SubType: %s |- %s <: %s\n" (showCs cs) (show ty1) (show ty2)
                 case (ty1,ty2) of
                     (RInt,RInt) -> return ()
                     (RBool,RBool) -> return ()
@@ -631,8 +639,8 @@ refineCGen prog trace = do
             subTypePost cs RPostTypeFailure RPostTypeFailure = return ()
             subTypePost cs ty1 ty2 = error $ "subTypePost: unexpected subtyping:" ++ show (cs,ty1,ty2) 
             failClause cs = do
-                liftIO $ putStrLn $ "Clause: " ++ show cs ++ "==> False" 
-                genClause Nothing cs >>= addClause
+                liftIO $ printf "Clause: %s ==> _|_\n" (showCs cs) 
+                addClause (genClause Nothing cs)
         forM_ (ML.functions prog) $ \(f,fdef) -> do
             theta <- checkFunDef (ML.name f) genv' [] (CallId 0) fdef (Just $ fst $ genv' M.! f)
             addFuncBinding (ML.ident fdef) theta
@@ -640,57 +648,55 @@ refineCGen prog trace = do
         check genv' [] (CallId 0) (ML.mainTerm prog) RPostTypeFailure
         return ()
 
-genClause :: MonadId m => Maybe LFormula -> [Either SValue LFormula] -> m Horn.Clause
-genClause hd body = do
-    ((chd,cbody),extra) <- runWriterT $ do
-        chd <- case hd of
-            Just fml -> do
-                Horn.Pred s t <- termOfFormula fml
-                return $ Horn.PVar s t
-            Nothing -> return Horn.Bot
-        cbody <- forM body $ \case
+genClause :: Maybe LFormula -> [Either SValue LFormula] -> Horn.Clause
+genClause hd body = Horn.Clause chd cbody
+    where
+        chd = case hd of
+            Just fml ->
+                let Horn.Pred s t = termOfFormula fml in
+                Horn.PVar s t
+            Nothing -> Horn.Bot
+        cbody = flip map body $ \case
             Left sv -> atomOfValue sv
             Right v -> termOfFormula v
-        return (chd,cbody)
-    return $ Horn.Clause chd (cbody ++ extra)
     
-termOfFormula :: MonadId m => LFormula -> WriterT [Horn.Term] m Horn.Term
-termOfFormula (Formula meta i vs) = do
-    ts <- mapM termOfValue vs
-    return $ Horn.Pred ("p_"++ smeta ++ "[" ++ show i ++ ":0]") ts
+termOfFormula :: LFormula -> Horn.Term
+termOfFormula (Formula meta i vs) = 
+    Horn.Pred ("p_"++ smeta ++ "[" ++ show i ++ ":0]") ts
     where
+    ts = map termOfValue vs
     Meta l accessors = meta
     smeta = concat (intersperse "_" (l : reverse accessors))
 
 -- assume that the value has type int/bool
-termOfValue :: MonadId m => SValue -> WriterT [Horn.Term] m Horn.Term
+termOfValue :: SValue -> Horn.Term
 termOfValue = \case
-    SVar x -> pure $ Horn.Var (ML.name x)
-    Int i -> pure $ Horn.Int i
-    Bool b -> pure $ Horn.Bool b
-    Add v1 v2 -> liftA2 Horn.Add (termOfValue v1) (termOfValue v2)
-    Sub v1 v2 -> liftA2 Horn.Sub (termOfValue v1) (termOfValue v2)
-    Eq v1 v2 -> liftA2 Horn.Eq (termOfValue v1) (termOfValue v2)
-    Lt v1 v2 -> liftA2 Horn.Lt (termOfValue v1) (termOfValue v2)
-    Lte v1 v2 -> liftA2 Horn.Lte (termOfValue v1) (termOfValue v2)
-    Not v -> fmap Horn.Not (termOfValue v)
-    And v1 v2 -> liftA2 Horn.And (termOfValue v1) (termOfValue v2)
-    Or  v1 v2 -> liftA2 Horn.Or  (termOfValue v1) (termOfValue v2)
+    SVar x -> Horn.Var (ML.name x)
+    Int i -> Horn.Int i
+    Bool b -> Horn.Bool b
+    Add v1 v2 -> Horn.Add (termOfValue v1) (termOfValue v2)
+    Sub v1 v2 -> Horn.Sub (termOfValue v1) (termOfValue v2)
+    Eq v1 v2 -> Horn.Eq (termOfValue v1) (termOfValue v2)
+    Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
+    Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
+    Not v -> Horn.Not (termOfValue v)
+    And v1 v2 -> Horn.And (termOfValue v1) (termOfValue v2)
+    Or  v1 v2 -> Horn.Or  (termOfValue v1) (termOfValue v2)
     v -> error $ "termOfValue: unexpected value: " ++ show v
 
 -- assume the value has type bool
-atomOfValue :: MonadId m => SValue -> WriterT [Horn.Term] m Horn.Term
+atomOfValue :: SValue -> Horn.Term
 atomOfValue = \case
     SVar x -> case ML.getType x of
-        ML.TBool -> pure $ Horn.Var (ML.name x)
+        ML.TBool -> Horn.Var (ML.name x)
         _ -> error $ "atomOfValue: unexpected value: " ++ show x
-    Bool b -> pure $ Horn.Bool b
-    Eq v1 v2 -> liftA2 Horn.Eq (termOfValue v1) (termOfValue v2)
-    Lt v1 v2 -> liftA2 Horn.Lt (termOfValue v1) (termOfValue v2)
-    Lte v1 v2 -> liftA2 Horn.Lte (termOfValue v1) (termOfValue v2)
-    Not v -> fmap Horn.Not (atomOfValue v)
-    And v1 v2 -> liftA2 Horn.And (atomOfValue v1) (atomOfValue v2)
-    Or  v1 v2 -> liftA2 Horn.Or  (atomOfValue v1) (atomOfValue v2)
+    Bool b -> Horn.Bool b
+    Eq v1 v2 -> Horn.Eq (termOfValue v1) (termOfValue v2)
+    Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
+    Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
+    Not v -> Horn.Not (atomOfValue v)
+    And v1 v2 -> Horn.And (atomOfValue v1) (atomOfValue v2)
+    Or  v1 v2 -> Horn.Or  (atomOfValue v1) (atomOfValue v2)
     v -> error $ "atomOfValue: unexpected value: " ++ show v
 
 -- assume that v is a decomposed value

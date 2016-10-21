@@ -190,7 +190,6 @@ doit = do
                         Nothing -> liftIO $ putStrLn "UnSafe!!"
                         Just (clauses, (rtyAssoc,rpostAssoc)) -> do
                             let file_hcs = printf "%s_%d.hcs" path k
-                            liftIO $ putStr $ show (Horn.HCCS clauses)
                             liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
                             let opts = hornOption conf
                             let cmd = printf "%s %s -print-hccs-solution %s %s" 
