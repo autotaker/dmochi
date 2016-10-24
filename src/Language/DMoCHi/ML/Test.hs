@@ -52,12 +52,16 @@ instance Show MainError where
     show (BooleanError s) = "Boolean: " ++ s
     show Debugging = "Debugging"
 
-data Flag = Help | HCCS HCCSSolver | CEGARLimit Int deriving Eq
+data Flag = Help 
+          | HCCS HCCSSolver 
+          | CEGARLimit Int 
+          | AccErrTraces deriving Eq
 data HCCSSolver = IT | GCH  deriving Eq
 
 data Config = Config { targetProgram :: FilePath
                      , hornOption :: String
-                     , cegarLimit :: Int }
+                     , cegarLimit :: Int
+                     , accErrTraces :: Bool }
 
 
 getHCCSSolver :: IO FilePath
@@ -67,7 +71,8 @@ getHCCSSolver = return "rcaml.opt"
 defaultConfig :: FilePath -> Config
 defaultConfig path = Config { targetProgram = path
                             , hornOption = ""
-                            , cegarLimit = 20 }
+                            , cegarLimit = 20
+                            , accErrTraces = False }
 
 run :: IO ()
 run = do
@@ -80,7 +85,8 @@ run = do
 options :: [ OptDescr Flag ]
 options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
           , Option [] ["hccs"] (ReqArg parseSolver "it|gch") "Set hccs solver"
-          , Option ['l'] ["limit"] (ReqArg (CEGARLimit . read) "N") "Set CEGAR round limit (default = 20)" ]
+          , Option ['l'] ["limit"] (ReqArg (CEGARLimit . read) "N") "Set CEGAR round limit (default = 20)"
+          , Option [] ["acc-traces"] (NoArg AccErrTraces) "Accumrate error traces" ]
     where
     parseSolver "it" = HCCS IT
     parseSolver "gch" = HCCS GCH
@@ -105,7 +111,8 @@ parseArgs = doit
             foldl (\acc opt -> case opt of
                      HCCS IT -> acc { hornOption = hornOption acc ++ "-hccs it" }
                      HCCS GCH -> acc { hornOption = hornOption acc ++ "-hccs gch" }
-                     CEGARLimit l -> acc { cegarLimit = l } ) 
+                     CEGARLimit l -> acc { cegarLimit = l }
+                     AccErrTraces -> acc { accErrTraces = True } ) 
                   (defaultConfig file) opts
         (opts, [], []) -> die ["No target specified\n"]
         (opts, files, []) -> die ["Multiple targets Specified\n"]
@@ -191,7 +198,8 @@ doit = do
                             Nothing -> return Unsafe
                             Just (clauses, (rtyAssoc,rpostAssoc)) -> do
                                 let file_hcs = printf "%s_%d.hcs" path k
-                                liftIO $ writeFile file_hcs $ show (Horn.HCCS clauses)
+                                let hcs' = if accErrTraces conf then clauses ++ hcs else clauses
+                                liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
                                 let opts = hornOption conf
                                 let cmd = printf "%s %s -print-hccs-solution %s %s" 
                                                  hccsSolver opts (file_hcs ++ ".ans") file_hcs
@@ -201,7 +209,8 @@ doit = do
                                 solution  <- case parseRes of
                                     Left err -> throwError $ ParseFailed err
                                     Right p  -> return p
-                                let typeMap' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
+                                let typeMap' | accErrTraces conf = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
+                                             | otherwise = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
                                 return $ Refine (typeMap', clauses ++ hcs)
                     Nothing -> return Safe
             case res of
