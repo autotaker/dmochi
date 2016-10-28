@@ -2,6 +2,8 @@ let make_array : [int] -> int = fun n -> n;;
 let arraysize : [int] -> int = fun src -> src;;
 let update : [int, int, int] -> int = fun des i x -> assert (0 <= i && i < des);;
 let sub : [int,int] -> int = fun src i -> assert( 0 <= i && i < src);;
+let div : [int, int] -> int = fun x y -> let r = * in r;;
+(*
 let div2 : [int] -> int =
     fun x -> 
         if x >= 0 then 
@@ -10,13 +12,13 @@ let div2 : [int] -> int =
         else
             let r = * in
             assume x <= r && r <= 0; r;;
-
+*)
 let bs_aux : [int,int,int,int] -> int =
     fun key vec l u ->
     if u < l
     then -1
     else
-        let m = l + div2 (u - l) in
+        let m = l + div (u - l) 2 in
         let x = sub vec m in
         if x < key then bs_aux key vec (m + 1) u
         else if x > key then bs_aux key vec l (m - 1)

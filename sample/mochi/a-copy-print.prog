@@ -20,9 +20,9 @@ let bcopy : [int,([int] -> int), ([int] -> int), int] -> [int] -> int =
              let r = bcopy m src des (i + 1) in
              r;;
 
-let print_array : [([int] -> int)] -> [int,([int] -> int), int] -> int =
-    fun des -> fun m array i ->
-        let print_array = print_array des in
+let print_array : [int, ([int] -> int)] -> [int,([int] -> int), int] -> int =
+    fun m1 des -> fun m array i ->
+        let print_array = print_array des m1 in
         if i >= m then 
             0
         else let v = des i in
@@ -33,7 +33,7 @@ let print_array : [([int] -> int)] -> [int,([int] -> int), int] -> int =
 let f : [int, ([int] -> int), ([int] -> int)] -> int =
     fun m src des ->
         let array = bcopy m src des 0 in
-        let print_array = print_array des in
+        let print_array = print_array m des in
         let r = print_array m array 0 in
         r;;
         
