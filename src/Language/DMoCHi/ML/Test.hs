@@ -193,7 +193,8 @@ doit = do
                 r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
                 case r of
                     Just trace -> measure "Refinement" $ do
-                        refine <- Refine.refineCGen normalizedProgram trace
+                        let traceFile = printf "%s_%d.trace.dot" path k
+                        refine <- Refine.refineCGen normalizedProgram traceFile trace
                         case refine of
                             Nothing -> return Unsafe
                             Just (clauses, (rtyAssoc,rpostAssoc)) -> do

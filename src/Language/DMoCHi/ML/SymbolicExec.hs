@@ -5,6 +5,9 @@ import           Control.Applicative
 import           Control.Monad.Writer
 import           Control.Monad.State.Strict
 import qualified Data.Map as M
+import qualified Language.Dot as Dot
+import           Text.Printf
+import           Data.List(intersperse)
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
@@ -85,8 +88,8 @@ instance ML.HasType SValue where
 
 
 instance Show SValue where
-    showsPrec d (SVar x) = 
-        showParen (d >= 3) $ showString (ML.name x) . showString " : " . shows (ML.getType x)
+    showsPrec d (SVar x) | d >= 3 = showString (ML.name x)
+                         | otherwise = showString (ML.name x) . showString " : " . shows (ML.getType x)
     showsPrec _ (Int i) = shows i
     showsPrec _ (Bool b) = shows b
     showsPrec _ (P v1 v2) = 
@@ -116,9 +119,16 @@ instance ML.HasType Closure where
 
 instance Show Closure where
     showsPrec d (Cls i x _) = showParen (d > app_prec) $
-        showString "Closure " . showsPrec (app_prec+1) (ML.ident i) . showChar ' ' . showsPrec (app_prec + 1) x
+        showString "Cls " . showsPrec (app_prec+1) (ML.ident i) . showChar ' ' . showsPrec (app_prec + 1) x
         where
         app_prec = 10
+
+data CompTree = CompTree { expr :: ML.Exp
+                         , subTrees :: [(Int,CompTreeInfo,CompTree)] }
+data CompTreeInfo = InfoBind [(Id,SValue)]
+                  | InfoAssume SValue
+                  | InfoNone
+
 type Env = M.Map Id SValue
 type Id = ML.Id
 
@@ -164,42 +174,53 @@ fromSValue = \case
         ML.Atomic $ ML.Op (f av1)
     
 
-symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log)
-symbolicExec prog trace = 
-    runWriterT $ evalStateT (genEnv >>= (\genv -> do
-        r <- eval (CallId 0) genv (ML.mainTerm prog)
+leaf :: ML.Exp -> CompTree
+leaf e = CompTree e []
+
+symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log, CompTree)
+symbolicExec prog trace = do
+    ((m,tree),log) <- runWriterT $ evalStateT (genEnv >>= (\genv -> do
+        (t,r) <- eval (CallId 0) genv (ML.mainTerm prog)
         case r of
             Just sv -> error "symbolicExec: This error trace cannot reach to any failure!"
-            Nothing -> return genv)) (S 1 0 trace)
+            Nothing -> return (genv,t))) (S 1 0 trace)
+    return (m,log,tree)
     where
-    -- preprocessing
     genEnv = mfix $ \genv -> do
         es <- forM (ML.functions prog) $ \(f, fdef) -> do
             c <- genClosure (CallId 0) fdef genv
             return (f,C c)
         return $ M.fromList es
-    eval :: CallId -> Env -> ML.Exp -> M m (Maybe SValue)
+    eval :: CallId -> Env -> ML.Exp -> M m (CompTree, Maybe SValue)
     eval callSite env _e = case _e of
         ML.Value v -> do
             sv <- evalV callSite env v 
-            return $ Just sv
+            return $ (leaf _e, Just sv)
         ML.Let _ x lv e -> do
-            r <- evalLV callSite env lv
+            (info,t1,r) <- evalLV callSite env lv
             case r of
-                Just sv -> eval callSite (M.insert x sv env) e
-                Nothing -> return Nothing
-        -- ML.Fun fdef -> Just . C <$> genClosure callSite fdef env
+                Just sv -> do
+                    (t2,r) <- eval callSite (M.insert x sv env) e
+                    let t = CompTree _e [(1,info,t1),(2,InfoBind [(x,sv)],t2)]
+                    return (t,r)
+                Nothing -> do
+                    let t = CompTree _e [(1,info,t1)]
+                    return (t, Nothing)
         ML.Assume _ v e -> do
-            constrain (evalA env v)
-            eval callSite env e
-        ML.Fail _ -> return Nothing
+            let phi = evalA env v
+            constrain phi
+            (t,r) <- eval callSite env e
+            return (CompTree _e [(1,InfoAssume phi,t)],r)
+        ML.Fail _ -> return (leaf _e,Nothing)
         ML.Branch _ i e1 e2 -> do
             b <- consume
             branch (BranchInfo callSite i b)
-            if b then
-                eval callSite env e1
-            else
-                eval callSite env e2
+            if b then do
+                (t,r) <- eval callSite env e1
+                return (CompTree _e [(1,InfoNone,t)],r)
+            else do
+                (t,r) <- eval callSite env e2
+                return (CompTree _e [(2,InfoNone,t)],r)
 
     evalV :: CallId -> Env -> ML.Value -> M m SValue
     evalV _ env (ML.Atomic av) = pure $ evalA env av
@@ -224,9 +245,9 @@ symbolicExec prog trace =
             ML.OpSnd _ v -> 
                 let P _ sv = evalA env v in sv
             ML.OpNot v1 -> Not (evalA env v1)
-    evalLV :: CallId -> Env -> ML.LetValue -> M m (Maybe SValue)
+    evalLV :: CallId -> Env -> ML.LetValue -> M m (CompTreeInfo, CompTree,Maybe SValue)
     evalLV callSite env = \case 
-        ML.LValue v -> pure $ Just (evalA env v)
+        ML.LValue v -> pure $ (InfoNone, leaf (ML.Value (ML.Atomic v)), Just (evalA env v))
         ML.LApp _ label f vs -> do
             svs <- mapM (evalV callSite env) vs
             let C (Cls fdef clsId env') = env M.! f
@@ -234,16 +255,19 @@ symbolicExec prog trace =
                 e0 = ML.body fdef
             j <- newCall label callSite clsId
             let env'' = foldr (uncurry M.insert) env' $ zip xs svs
-            r <- eval j env'' e0
+            let info = InfoBind (zip xs svs ++ M.toList env')
+            (t,r) <- eval j env'' e0
             ret_cid <- callCounter <$> get
             retval (ReturnInfo j svs r (CallId ret_cid))
-            return r
+            return (info,t,r)
         -- ML.LFun fdef -> Just . C <$> genClosure callSite fdef env
         ML.LExp label e -> do
-            r <- eval callSite env e
+            (t,r) <- eval callSite env e
             letexp (LetExpInfo callSite label r)
-            return r
-        ML.LRand -> Just . SVar . ML.Id ML.TInt <$> freshId "rand"
+            return (InfoNone,t,r)
+        ML.LRand -> do
+            r <- Just . SVar . ML.Id ML.TInt <$> freshId "rand"
+            return (InfoNone,leaf (ML.Value (ML.Atomic (ML.Var (ML.Id ML.TInt "*")))), r)
 
     -- utilities
     constrain :: Constraint -> M m ()
@@ -270,3 +294,37 @@ symbolicExec prog trace =
         b <- head . cTrace <$> get
         modify pop
         return b
+
+renderCompTree :: CompTree -> String
+renderCompTree t = Dot.renderDot $ Dot.Graph Dot.StrictGraph Dot.DirectedGraph Nothing stmts
+    where
+    stmts = execWriter (evalStateT (doit t) 0)
+    name s = Dot.NameId s
+    doit = fix (\go t -> do
+        let e = expr t
+            ts = subTrees t
+        i <- get
+        put (i + 1)
+        let nodeId = Dot.NodeId (Dot.IntegerId i) Nothing
+            value = Dot.StringId $ takeWhile (/='\n') $ show $ ML.pprintE e
+            shape = name $ if null ts then "ellipse" else "box"
+            attrs = [Dot.AttributeSetValue (name "label") value
+                    ,Dot.AttributeSetValue (name "shape") shape]
+        tell [Dot.NodeStatement nodeId attrs]
+
+        forM_ ts $ \(i,info,ti) -> do
+            vi <- go ti
+            let nodeId' = Dot.NodeId (Dot.IntegerId vi) Nothing
+            let edge = [Dot.ENodeId Dot.NoEdge nodeId
+                       ,Dot.ENodeId Dot.DirectedEdge nodeId']
+                attrs = case info of
+                        InfoBind binds -> 
+                            let s = "{ " ++ concat (intersperse "; " [ 
+                                        printf "%s = %s" (ML.name x) (show sv) | (x,sv) <- binds ]) ++ " }" in
+                            [Dot.AttributeSetValue (name "label") (Dot.StringId s)]
+                        InfoAssume sv -> 
+                            [Dot.AttributeSetValue (name "label") (Dot.StringId (show sv))]
+                        InfoNone -> []
+            tell [Dot.EdgeStatement edge attrs]
+        return i)
+

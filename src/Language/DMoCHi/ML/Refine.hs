@@ -191,10 +191,11 @@ type W m a = WriterT ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])) m a
 
 
 refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m) => 
-              ML.Program -> Trace -> 
+              ML.Program -> FilePath -> Trace -> 
               m (Maybe ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])))
-refineCGen prog trace = do
-    (genv, (consts,calls,closures,returns,(branches,letexps))) <- symbolicExec prog trace
+refineCGen prog traceFile trace = do
+    (genv, (consts,calls,closures,returns,(branches,letexps)), compTree) <- symbolicExec prog trace
+    liftIO $ writeFile traceFile (renderCompTree compTree)
     liftIO $ print consts
     isFeasible <- liftIO $ SMT.sat (map fromSValue consts)
     if isFeasible then
