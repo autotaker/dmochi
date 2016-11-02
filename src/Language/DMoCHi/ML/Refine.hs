@@ -54,17 +54,77 @@ instance Show LFormula where
             smeta = "{" ++ concat (intersperse "." (l : reverse accessors))++ "}" in
         printf "p_%s[%d:%s](%s)" smeta i (show path) s
 
-type RTypeGen m = (String -> [Id] -> SValue -> m RType,          -- Refinement type generator for values
-                   String -> CompTreePath -> [Id] -> Maybe SValue -> m RPostType -- Refinement type generator for let expressions
+type RTypeGen m = (String -> [Id] -> Accessor -> m RType,          -- Refinement type generator for values
+                   String -> CompTreePath -> [Id] -> Maybe Accessor -> m RPostType -- Refinement type generator for let expressions
                    )
 
 genRTypeFactory :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> RTypeGen m
 genRTypeFactory calls closures returns = (genRType, genRPostType)
     where
+    clsTbl :: IM.IntMap ClosureInfo
+    clsTbl = IM.fromList [ (unClosureId (clsId (closure i)), i) | i <- closures ]
+    rtnTbl :: IM.IntMap ReturnInfo
+    rtnTbl = IM.fromList [ (unCallId (rcallId i), i) | i <- returns ]
+    callTbl :: IM.IntMap CallInfo
+    callTbl = IM.fromList [ (unCallId (callId i), i) | i <- calls ]
+    clsLookup :: ClosureId -> ClosureInfo
+    clsLookup j = clsTbl IM.! unClosureId j
+    rtnLookup :: CallId -> ReturnInfo
+    rtnLookup j = rtnTbl IM.! unCallId j
+    callLookup :: CallId -> CallInfo
+    callLookup j = callTbl IM.! unCallId j
+    isBase x = case ML.getType x of 
+        (ML.TFun _ _) -> False
+        _ -> True
+    flatten (SVar x) env | isBase x  = (SVar x) : env
+                         | otherwise = env
+    flatten (P v1 v2) env = flatten v1 (flatten v2 env)
+    push = flatten . decompose
+    meta_add (Meta i l) s = Meta i (s:l)
+
+    genRType label env = gen (Meta label []) (foldr push [] env)
+    genRPostType label path = genPost (Meta label []) path . foldr push []
+
+    gen meta env acsr =
+        case ML.getType acsr of
+            ML.TBool -> return RBool
+            ML.TInt  -> return RInt
+            ML.TPair ty1 ty2 -> RPair <$> gen meta env (AFst acsr) <*> gen meta env (ASnd acsr)
+            ML.TFun ty_args ty_ret -> do
+                let cs = [ info | info <- calls, acsr `elem` callAccessors info ]
+                if null cs then
+                    return (RFun IM.empty)
+                else do
+                    let cls = closure (clsLookup (calleeId (head cs)))
+                    let xs = ML.args (clsBody cls)
+                    let env' = foldl' (flip push) env xs
+                    fmap (RFun . IM.fromList) $ forM cs $ \info -> do
+                        let j = callId info
+                            path = callContext info
+                            ReturnInfo _ _ mv = rtnLookup j
+                        arg_tys <- forM (zip [(0::Int)..] xs) $ \(i,xi) ->
+                            gen (meta_add meta ("pre_" ++ show i)) env' (AVar j xi)
+                        p1 <- freshInt
+                        let rv = retValue $ rtnLookup j
+                        posTy <- genPost (meta_add meta "post") path env' (fmap (const (ARet j ty_ret)) rv)
+                        return (unCallId j, RFunAssoc xs arg_tys (Formula (meta_add meta "pre") p1 path env') posTy)
+    genPost meta path env Nothing = return RPostTypeFailure
+    genPost meta path env (Just acsr) = do
+        rj <- ML.Id (ML.getType acsr) <$> freshId "r"
+        let env' = push rj env
+        pty <- gen meta env' acsr
+        p0 <- freshInt
+        return $ RPostType rj pty (Formula meta p0 path env')
+                                                           
+
+{-
+genRTypeFactory :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> RTypeGen m
+genRTypeFactory calls closures returns = (genRType, genRPostType)
+    where
     genRType :: MonadId m => String -> [Id] -> SValue -> m RType
-    genRType label = gen (0,maxBound) (Meta label []) . foldr push []
+    genRType label = gen 0 (Meta label []) . foldr push []
     genRPostType :: MonadId m => String -> CompTreePath -> [Id] -> Maybe SValue -> m RPostType
-    genRPostType label path = genPost (0,maxBound) (Meta label []) path . foldr push []
+    genRPostType label path = genPost 0 (Meta label []) path . foldr push []
     rtnTbl = IM.fromList [ (unCallId (rcallId info),info) | info <- returns ]
     meta_add (Meta i l) s = Meta i (s:l)
     gen _ _ _ (SVar x) = case ML.getType x of
@@ -83,19 +143,18 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
     gen _ _ _ (And _ _) = pure RBool
     gen _ _ _ (Or _ _) = pure RBool
     gen _ _ _ (Not _) = pure RBool
-    gen lim meta env (C (Cls fdef i _)) = do  
+    gen lim meta env (C (Cls fdef i _ acsrs)) = do  
         let cs = [ (callId info, callContext info)
                                | info <- calls, 
                                  calleeId info == i,
-                                 unCallId (callId info) > fst lim
-                                 -- unCallId (callId info) < snd lim
+                                 unCallId (callId info) > lim
                                  ] -- TODO Improve Impl
             xs  = ML.args fdef
             ML.TFun ty_args ty_ret = ML.getType fdef
         as <- forM cs $ \(j,path) -> do
-            let ReturnInfo _ arg_vs mv ret_cid = rtnTbl IM.! (unCallId j)
-            let xsj = [ ML.Id ty_arg (ML.name x) | (x,ty_arg) <- zip xs ty_args ]
-            let lim' = (unCallId j, unCallId ret_cid)
+            let ReturnInfo _ arg_vs mv = rtnTbl IM.! (unCallId j)
+            let xsj = xs -- [ ML.Id ty_arg (ML.name x) | (x,ty_arg) <- zip xs ty_args ]
+            let lim' = unCallId j
             let env' = (foldl' (flip push) env xsj)
             arg_tys <- forM (zip [(0::Int)..] arg_vs) $ \(i,arg_v) -> 
                             gen lim' (meta_add meta ("pre_"++show i)) env' arg_v
@@ -119,6 +178,7 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
                          | otherwise = env
     flatten (P v1 v2) env = flatten v1 (flatten v2 env)
     push = flatten . decompose
+    -}
 
 {-
 evalRType :: M.Map Id (RType,SValue) -> ML.Value -> (RType,SValue)
@@ -221,13 +281,13 @@ refineCGen prog traceFile contextSensitive trace = do
         let callTbl :: M.Map (CallId,Int) CallId
             callTbl = M.fromList [ ((pcallId info,callLabel info),callId info)| info <- calls ]
             closureMap :: M.Map (CallId,Int) ClosureId
-            closureMap = M.fromList [ ((cCallId info,label info),closureId info)| info <- closures ]
+            closureMap = M.fromList [ ((cCallId info,label info),clsId $ closure info)| info <- closures ]
             branchMap :: M.Map (CallId,Int) Bool
             branchMap = M.fromList [ ((bCallId info,branchId info),direction info) | info <- branches ]
             letMap :: M.Map (CallId, Int) (CompTreePath, Maybe SValue)
             letMap = M.fromList [ ((lCallId info,lLabel info),(lContext info,evalValue info)) | info <- letexps ]
         genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,v) -> do
-            ty <- gen (ML.name f) [] v
+            ty <- gen (ML.name f) [] (AVar (CallId 0) f)
             return (f,(ty,decompose f))
         dump "RefineEnv" (M.assocs genv')
 
@@ -292,7 +352,7 @@ refineCGen prog traceFile contextSensitive trace = do
 -}
                 ML.Let _ x (ML.LExp label e') e -> do
                     let (path,letv) = letMap M.! (callSite, label)
-                    tau' <- genP (ML.name x ++ "_" ++ show label) path (M.keys env) letv
+                    tau' <- genP (ML.name x ++ "_" ++ show label) path (M.keys env) (fmap (const (AVar callSite x)) letv)
                     addExpBinding label tau'
                     check env cs callSite e' tau'
                     case tau' of
@@ -341,10 +401,12 @@ refineCGen prog traceFile contextSensitive trace = do
             checkFunDef fname env cs callSite fdef@(ML.FunDef label xs e0) mtheta = do
                 theta@(RFun fassoc) <- case mtheta of 
                     Just it -> return it
-                    Nothing -> 
+                    Nothing -> error "checkFunDef unsupported"
+                    {-
                         let clsId = closureMap M.! (callSite,label)
                             meta  = fname++ "_" ++ show label in
-                        gen meta (M.keys env) (C (Cls fdef clsId undefined))
+                        gen meta (M.keys env) (C (Cls fdef clsId undefined []))
+                        -}
                 forM_ (IM.assocs fassoc) $ \(j,ty_f) -> do
                     let xsj = argNames ty_f
                         ty_xsj = argTypes ty_f

@@ -33,18 +33,18 @@ data CallInfo = CallInfo { calleeId :: ClosureId   -- 呼び出されたクロ�
                          , pcallId  :: CallId   -- 親関数呼び出しの識別子
                          , callId   :: CallId   -- 関数呼び出しの識別子
                          , callContext :: CompTreePath -- 関数呼び出しの計算木での位置
+                         , callAccessors :: [Accessor] -- accessors affected by the call  
                      } deriving Show
 
 -- クロージャ生成の情報
 data ClosureInfo = ClosureInfo { label :: Int -- 対応する関数定義のラベル
-                               , closureId :: ClosureId -- 生成されたクロージャの識別子
+                               , closure :: Closure -- 生成されたクロージャ
                                , cCallId :: CallId -- クロージャ生成時の関数呼び出し識別子
                                } deriving Show
 -- 関数返り値の情報
 data ReturnInfo = ReturnInfo { rcallId :: CallId -- 関数呼び出しの識別子
                              , argValues :: [SValue] -- 引数
                              , retValue :: Maybe SValue -- 返り値(ないときはfailを表す)
-                             , retCallId :: CallId -- 関数呼び出し終了時のCallId(exclusive)
                              } deriving Show
 
 -- Let式の評価結果情報
@@ -76,7 +76,32 @@ data SValue = SVar Id
             | Not SValue
             | C Closure
 
-data Closure = Cls ML.FunDef ClosureId {- Ident -} Env
+data Closure = Cls { clsBody :: ML.FunDef
+                   , clsId :: ClosureId {- Ident -} 
+                   , clsEnv :: Env 
+                   , clsAccessors :: [Accessor] }
+
+data Accessor = AVar CallId Id 
+              | ARet CallId ML.Type
+              | AFst Accessor
+              | ASnd Accessor
+              deriving Eq
+
+instance Show Accessor where
+    show (AVar j x) = printf "%s[%d]" (ML.name x) (unCallId j)
+    show (ARet j _)   = printf "<ret>[%d]" (unCallId j)
+    show (AFst v)   = show v ++ ".fst"
+    show (ASnd v)   = show v ++ ".snd"
+
+instance ML.HasType Accessor where
+    getType (AVar _ x) = ML.getType x
+    getType (ARet _ ty) = ty
+    getType (AFst v) = 
+        let ML.TPair a _ = ML.getType v in a
+    getType (ASnd v) = 
+        let ML.TPair _ b = ML.getType v in b
+
+
 
 instance ML.HasType SValue where
     getType (SVar x)  = ML.getType x
@@ -121,10 +146,10 @@ instance Show SValue where
                        
 
 instance ML.HasType Closure where
-    getType (Cls fdef _ _) = ML.getType fdef
+    getType = ML.getType . clsBody
 
 instance Show Closure where
-    showsPrec d (Cls i x _) = showParen (d > app_prec) $
+    showsPrec d (Cls i x _ _) = showParen (d > app_prec) $
         showString "Cls " . showsPrec (app_prec+1) (ML.ident i) . showChar ' ' . showsPrec (app_prec + 1) x
         where
         app_prec = 10
@@ -183,6 +208,17 @@ fromSValue = \case
 leaf :: ML.Exp -> CompTree
 leaf e = CompTree e []
 
+bindCls :: CallId -> Id -> SValue -> SValue
+bindCls = (.) bindClsA . AVar
+
+bindClsR :: CallId -> SValue -> SValue
+bindClsR j sv = bindClsA (ARet j (ML.getType sv)) sv
+
+bindClsA :: Accessor -> SValue -> SValue
+bindClsA acsr (C cls) = C cls{ clsAccessors = acsr : clsAccessors cls }
+bindClsA acsr (P v1 v2) = P (bindClsA (AFst acsr) v1) (bindClsA (ASnd acsr) v2)
+bindClsA acsr v = v
+
 symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log, CompTree)
 symbolicExec prog trace = do
     ((m,tree),log) <- runWriterT $ evalStateT (genEnv >>= (\genv -> do
@@ -195,7 +231,7 @@ symbolicExec prog trace = do
     genEnv = mfix $ \genv -> do
         es <- forM (ML.functions prog) $ \(f, fdef) -> do
             c <- genClosure (CallId 0) fdef genv
-            return (f,C c)
+            return (f,bindCls (CallId 0) f (C c))
         return $ M.fromList es
     eval :: CallId -> Env -> CompTreePath -> ML.Exp -> M m (CompTree, Maybe SValue)
     eval callSite env path _e = case _e of
@@ -204,7 +240,7 @@ symbolicExec prog trace = do
             return $ (leaf _e, Just sv)
         ML.Let _ x lv e -> do
             (info,t1,r) <- evalLV callSite env (1:path) lv
-            case r of
+            case fmap (bindCls callSite x) r of
                 Just sv -> do
                     (t2,r) <- eval callSite (M.insert x sv env) (2:path) e
                     let t = CompTree _e [(1,info,t1),(2,InfoBind [(x,sv)],t2)]
@@ -256,16 +292,17 @@ symbolicExec prog trace = do
         ML.LValue v -> pure $ (InfoNone, leaf (ML.Value (ML.Atomic v)), Just (evalA env v))
         ML.LApp _ label f vs -> do
             svs <- mapM (evalV callSite env) vs
-            let C (Cls fdef clsId env') = env M.! f
+            let C (Cls fdef clsId env' acsrs) = env M.! f
             let xs = ML.args fdef
                 e0 = ML.body fdef
-            j <- newCall label callSite path clsId
-            let env'' = foldr (uncurry M.insert) env' $ zip xs svs
+            j <- newCall label callSite path clsId acsrs
+            let as = [ (x, bindCls j x sv) | (x,sv) <- zip xs svs ]
+            let env'' = foldr (uncurry M.insert) env' as
             let info = InfoBind (zip xs svs ++ M.toList env')
             (t,r) <- eval j env'' path e0
-            ret_cid <- callCounter <$> get
-            retval (ReturnInfo j svs r (CallId ret_cid))
-            return (info,t,r)
+            let r' = fmap (bindClsR j) r
+            retval (ReturnInfo j svs r')
+            return (info,t,r')
         -- ML.LFun fdef -> Just . C <$> genClosure callSite fdef env
         ML.LExp label e -> do
             (t,r) <- eval callSite env path e
@@ -283,18 +320,19 @@ symbolicExec prog trace = do
     retval :: ReturnInfo -> M m ()
     retval c = tell ([],[],[],[c],([],[]))
     letexp c = tell ([],[],[],[],([],[c]))
-    newCall :: Int -> CallId -> CompTreePath -> ClosureId -> M m CallId
-    newCall i pcall path clsId = do
+    newCall :: Int -> CallId -> CompTreePath -> ClosureId -> [Accessor] -> M m CallId
+    newCall i pcall path clsId acsrs = do
         j <- callCounter <$> get
         modify incrCall
-        tell ([],[CallInfo clsId i pcall (CallId j) path],[],[],([],[]))
+        tell ([],[CallInfo clsId i pcall (CallId j) path acsrs],[],[],([],[]))
         return (CallId j)
     genClosure :: CallId -> ML.FunDef -> Env -> M m Closure
     genClosure callSite fdef env = do
         j <- clsCounter <$> get
         modify incrCls
-        tell ([],[],[ClosureInfo (ML.ident fdef) (ClosureId j) callSite],[],([],[]))
-        return (Cls fdef (ClosureId j) env)
+        let cls = (Cls fdef (ClosureId j) env [])
+        tell ([],[],[ClosureInfo (ML.ident fdef) cls callSite],[],([],[]))
+        return cls
     consume :: M m Bool
     consume = do
         b <- head . cTrace <$> get
