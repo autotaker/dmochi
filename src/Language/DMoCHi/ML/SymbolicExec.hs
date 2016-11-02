@@ -7,7 +7,9 @@ import           Control.Monad.State.Strict
 import qualified Data.Map as M
 import qualified Language.Dot as Dot
 import           Text.Printf
-import           Data.List(intersperse)
+import           Data.List(intersperse,foldl')
+import           Data.Int
+import           Data.Bits
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
@@ -30,6 +32,7 @@ data CallInfo = CallInfo { calleeId :: ClosureId   -- 呼び出されたクロ�
                          , callLabel :: Int     -- 対応する関数呼び出しのラベル
                          , pcallId  :: CallId   -- 親関数呼び出しの識別子
                          , callId   :: CallId   -- 関数呼び出しの識別子
+                         , callContext :: CompTreePath -- 関数呼び出しの計算木での位置
                      } deriving Show
 
 -- クロージャ生成の情報
@@ -48,6 +51,7 @@ data ReturnInfo = ReturnInfo { rcallId :: CallId -- 関数呼び出しの識別�
 data LetExpInfo = LetExpInfo { lCallId :: CallId -- 評価時の親関数呼び出し識別子
                              , lLabel :: Int -- 呼び出されたlet式のラベル
                              , evalValue :: Maybe SValue -- 評価結果(ないときはfailを表す)
+                             , lContext :: CompTreePath
                              } deriving Show
 
 -- 分岐情報
@@ -55,6 +59,7 @@ data BranchInfo = BranchInfo { bCallId   :: CallId,
                                branchId  :: Int,
                                direction :: Bool} deriving Show
 
+type CompTreePath = [Int]
 
 -- Symbolic Values
 data SValue = SVar Id
@@ -70,6 +75,8 @@ data SValue = SVar Id
             | Or SValue SValue
             | Not SValue
             | C Closure
+
+data Closure = Cls ML.FunDef ClosureId {- Ident -} Env
 
 instance ML.HasType SValue where
     getType (SVar x)  = ML.getType x
@@ -112,7 +119,6 @@ instance Show SValue where
         showParen (d >= 8) $ (showString "not ") . showsPrec 8 v1
     showsPrec d (C cls) = showsPrec d cls
                        
-data Closure = Cls ML.FunDef ClosureId {- Ident -} Env
 
 instance ML.HasType Closure where
     getType (Cls fdef _ _) = ML.getType fdef
@@ -180,7 +186,7 @@ leaf e = CompTree e []
 symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log, CompTree)
 symbolicExec prog trace = do
     ((m,tree),log) <- runWriterT $ evalStateT (genEnv >>= (\genv -> do
-        (t,r) <- eval (CallId 0) genv (ML.mainTerm prog)
+        (t,r) <- eval (CallId 0) genv [] (ML.mainTerm prog)
         case r of
             Just sv -> error "symbolicExec: This error trace cannot reach to any failure!"
             Nothing -> return (genv,t))) (S 1 0 trace)
@@ -191,16 +197,16 @@ symbolicExec prog trace = do
             c <- genClosure (CallId 0) fdef genv
             return (f,C c)
         return $ M.fromList es
-    eval :: CallId -> Env -> ML.Exp -> M m (CompTree, Maybe SValue)
-    eval callSite env _e = case _e of
+    eval :: CallId -> Env -> CompTreePath -> ML.Exp -> M m (CompTree, Maybe SValue)
+    eval callSite env path _e = case _e of
         ML.Value v -> do
             sv <- evalV callSite env v 
             return $ (leaf _e, Just sv)
         ML.Let _ x lv e -> do
-            (info,t1,r) <- evalLV callSite env lv
+            (info,t1,r) <- evalLV callSite env (1:path) lv
             case r of
                 Just sv -> do
-                    (t2,r) <- eval callSite (M.insert x sv env) e
+                    (t2,r) <- eval callSite (M.insert x sv env) (2:path) e
                     let t = CompTree _e [(1,info,t1),(2,InfoBind [(x,sv)],t2)]
                     return (t,r)
                 Nothing -> do
@@ -209,17 +215,17 @@ symbolicExec prog trace = do
         ML.Assume _ v e -> do
             let phi = evalA env v
             constrain phi
-            (t,r) <- eval callSite env e
+            (t,r) <- eval callSite env (1:path) e
             return (CompTree _e [(1,InfoAssume phi,t)],r)
         ML.Fail _ -> return (leaf _e,Nothing)
         ML.Branch _ i e1 e2 -> do
             b <- consume
             branch (BranchInfo callSite i b)
             if b then do
-                (t,r) <- eval callSite env e1
+                (t,r) <- eval callSite env (1:path) e1
                 return (CompTree _e [(1,InfoNone,t)],r)
             else do
-                (t,r) <- eval callSite env e2
+                (t,r) <- eval callSite env (2:path) e2
                 return (CompTree _e [(2,InfoNone,t)],r)
 
     evalV :: CallId -> Env -> ML.Value -> M m SValue
@@ -245,25 +251,25 @@ symbolicExec prog trace = do
             ML.OpSnd _ v -> 
                 let P _ sv = evalA env v in sv
             ML.OpNot v1 -> Not (evalA env v1)
-    evalLV :: CallId -> Env -> ML.LetValue -> M m (CompTreeInfo, CompTree,Maybe SValue)
-    evalLV callSite env = \case 
+    evalLV :: CallId -> Env -> CompTreePath -> ML.LetValue -> M m (CompTreeInfo, CompTree,Maybe SValue)
+    evalLV callSite env path = \case 
         ML.LValue v -> pure $ (InfoNone, leaf (ML.Value (ML.Atomic v)), Just (evalA env v))
         ML.LApp _ label f vs -> do
             svs <- mapM (evalV callSite env) vs
             let C (Cls fdef clsId env') = env M.! f
             let xs = ML.args fdef
                 e0 = ML.body fdef
-            j <- newCall label callSite clsId
+            j <- newCall label callSite path clsId
             let env'' = foldr (uncurry M.insert) env' $ zip xs svs
             let info = InfoBind (zip xs svs ++ M.toList env')
-            (t,r) <- eval j env'' e0
+            (t,r) <- eval j env'' path e0
             ret_cid <- callCounter <$> get
             retval (ReturnInfo j svs r (CallId ret_cid))
             return (info,t,r)
         -- ML.LFun fdef -> Just . C <$> genClosure callSite fdef env
         ML.LExp label e -> do
-            (t,r) <- eval callSite env e
-            letexp (LetExpInfo callSite label r)
+            (t,r) <- eval callSite env path e
+            letexp (LetExpInfo callSite label r path)
             return (InfoNone,t,r)
         ML.LRand -> do
             r <- Just . SVar . ML.Id ML.TInt <$> freshId "rand"
@@ -277,11 +283,11 @@ symbolicExec prog trace = do
     retval :: ReturnInfo -> M m ()
     retval c = tell ([],[],[],[c],([],[]))
     letexp c = tell ([],[],[],[],([],[c]))
-    newCall :: Int -> CallId -> ClosureId -> M m CallId
-    newCall i pcall clsId = do
+    newCall :: Int -> CallId -> CompTreePath -> ClosureId -> M m CallId
+    newCall i pcall path clsId = do
         j <- callCounter <$> get
         modify incrCall
-        tell ([],[CallInfo clsId i pcall (CallId j)],[],[],([],[]))
+        tell ([],[CallInfo clsId i pcall (CallId j) path],[],[],([],[]))
         return (CallId j)
     genClosure :: CallId -> ML.FunDef -> Env -> M m Closure
     genClosure callSite fdef env = do
@@ -321,10 +327,17 @@ renderCompTree t = Dot.renderDot $ Dot.Graph Dot.StrictGraph Dot.DirectedGraph N
                         InfoBind binds -> 
                             let s = "{ " ++ concat (intersperse "; " [ 
                                         printf "%s = %s" (ML.name x) (show sv) | (x,sv) <- binds ]) ++ " }" in
-                            [Dot.AttributeSetValue (name "label") (Dot.StringId s)]
+                            [Dot.AttributeSetValue (name "label") (Dot.StringId (show i ++ ", " ++ s))]
                         InfoAssume sv -> 
-                            [Dot.AttributeSetValue (name "label") (Dot.StringId (show sv))]
-                        InfoNone -> []
+                            [Dot.AttributeSetValue (name "label") (Dot.StringId (show i ++ ", " ++ show sv))]
+                        InfoNone -> 
+                            [Dot.AttributeSetValue (name "label") (Dot.StringId (show i))]
             tell [Dot.EdgeStatement edge attrs]
         return i)
+
+hashPath :: CompTreePath -> Int32
+hashPath path = fromIntegral (h .&. 0x7fffffff)
+    where
+    h :: Int64
+    h = foldl' (\cur x -> cur * 3 + (fromIntegral x)) 0 path
 

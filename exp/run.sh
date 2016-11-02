@@ -17,8 +17,9 @@ TOHORS=tohors
 HORSAT=../../horsat-1.01/horsat
 HORSAT2=../../horsat2-0.92/horsat2
 
-TIMEOUT=30
+TIMEOUT=60
 TIMEOUT_CMD=timeout
+
 
 if [ ! -e work ]; then
     mkdir work
@@ -31,7 +32,7 @@ fi
 set -x
 
 if [ ! -v DMOCHI_FLAG ]; then
-    DMOCHI_FLAG="--hccs gch"
+    DMOCHI_FLAG="--hccs gch --context-sensitive"
 fi
 
 for testcase in $TESTS

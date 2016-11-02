@@ -1,5 +1,6 @@
 module Language.DMoCHi.ML.HornClause where
 import Data.List(intersperse)
+import Language.DMoCHi.ML.Syntax.Type
 
 newtype HCCS = HCCS { clauses :: [Clause] }
 
@@ -10,7 +11,7 @@ type Body = [Term]
 
 data Term = Bool Bool
           | Int Integer
-          | Var String
+          | Var Id
           | Pred String [Term]
           | Add Term Term
           | Sub Term Term
@@ -41,7 +42,8 @@ instance Show Term where
     showsPrec _ (Bool True) = showString "true"
     showsPrec _ (Bool False) = showString "false"
     showsPrec _ (Int i) = shows i
-    showsPrec _ (Var x) = showString x
+    -- showsPrec d (Var x) = showParen (d >= 1) (showString (name x) . showChar ':' . showsPrec 0 (getType x))
+    showsPrec _ (Var x) = showString (name x)
     -- showsPrec _ (Pair t1 t2) = showParen True $ shows t1 . showChar ',' . showChar ' ' . shows t2
     showsPrec _ (Pred p []) = showString "top"
     showsPrec _ (Pred p ps) = 

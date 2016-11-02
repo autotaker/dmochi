@@ -5,8 +5,9 @@ import System.Process(callCommand)
 import System.Exit
 import System.Console.GetOpt
 import Control.Monad.Except
+import Data.Monoid
 import Text.Parsec(ParseError)
-import Text.PrettyPrint
+import Text.PrettyPrint hiding((<>))
 import Text.Printf
 
 import qualified Language.DMoCHi.Boolean.Syntax as B
@@ -55,13 +56,15 @@ instance Show MainError where
 data Flag = Help 
           | HCCS HCCSSolver 
           | CEGARLimit Int 
-          | AccErrTraces deriving Eq
+          | AccErrTraces 
+          | ContextSensitive deriving Eq
 data HCCSSolver = IT | GCH  deriving Eq
 
 data Config = Config { targetProgram :: FilePath
                      , hornOption :: String
                      , cegarLimit :: Int
-                     , accErrTraces :: Bool }
+                     , accErrTraces :: Bool
+                     , contextSensitive :: Bool }
 
 
 getHCCSSolver :: IO FilePath
@@ -72,7 +75,8 @@ defaultConfig :: FilePath -> Config
 defaultConfig path = Config { targetProgram = path
                             , hornOption = ""
                             , cegarLimit = 20
-                            , accErrTraces = False }
+                            , accErrTraces = False
+                            , contextSensitive = False }
 
 run :: IO ()
 run = do
@@ -86,7 +90,8 @@ options :: [ OptDescr Flag ]
 options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
           , Option [] ["hccs"] (ReqArg parseSolver "it|gch") "Set hccs solver"
           , Option ['l'] ["limit"] (ReqArg (CEGARLimit . read) "N") "Set CEGAR round limit (default = 20)"
-          , Option [] ["acc-traces"] (NoArg AccErrTraces) "Accumrate error traces" ]
+          , Option [] ["acc-traces"] (NoArg AccErrTraces) "Accumrate error traces"
+          , Option [] ["context-sensitive"] (NoArg ContextSensitive) "Enable context sensitive predicate discovery, this also enables --acc-traces flag" ]
     where
     parseSolver "it" = HCCS IT
     parseSolver "gch" = HCCS GCH
@@ -112,7 +117,8 @@ parseArgs = doit
                      HCCS IT -> acc { hornOption = hornOption acc ++ "-hccs it" }
                      HCCS GCH -> acc { hornOption = hornOption acc ++ "-hccs gch" }
                      CEGARLimit l -> acc { cegarLimit = l }
-                     AccErrTraces -> acc { accErrTraces = True } ) 
+                     AccErrTraces -> acc { accErrTraces = True }
+                     ContextSensitive -> acc { accErrTraces = True, contextSensitive = True } ) 
                   (defaultConfig file) opts
         (opts, [], []) -> die ["No target specified\n"]
         (opts, files, []) -> die ["Multiple targets Specified\n"]
@@ -170,8 +176,8 @@ doit = do
         return normalizedProgram
 
     (typeMap0, fvMap) <- PAbst.initTypeMap normalizedProgram
-    let cegar _ k hcs | k >= cegarLimit conf = return ()
-        cegar typeMap k hcs = do
+    let cegar _ k _  | k >= cegarLimit conf = return ()
+        cegar typeMap k (rtyAssoc0,rpostAssoc0,hcs) = do
             res <- measure (printf "CEGAR-%d" k) $ do
                 liftIO $ putStrLn "Predicate Abstracion"
                 boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg typeMap normalizedProgram
@@ -194,12 +200,15 @@ doit = do
                 case r of
                     Just trace -> measure "Refinement" $ do
                         let traceFile = printf "%s_%d.trace.dot" path k
-                        refine <- Refine.refineCGen normalizedProgram traceFile trace
+                        refine <- Refine.refineCGen normalizedProgram traceFile (contextSensitive conf) trace
                         case refine of
                             Nothing -> return Unsafe
-                            Just (clauses, (rtyAssoc,rpostAssoc)) -> do
+                            Just (clauses, assoc) -> do
                                 let file_hcs = printf "%s_%d.hcs" path k
                                 let hcs' = if accErrTraces conf then clauses ++ hcs else clauses
+                                let (rtyAssoc,rpostAssoc) = 
+                                        if accErrTraces conf then assoc <> (rtyAssoc0,rpostAssoc0)
+                                                             else assoc
                                 liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
                                 let opts = hornOption conf
                                 let cmd = printf "%s %s -print-hccs-solution %s %s" 
@@ -212,14 +221,14 @@ doit = do
                                     Right p  -> return p
                                 let typeMap' | accErrTraces conf = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
                                              | otherwise = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
-                                return $ Refine (typeMap', clauses ++ hcs)
+                                return $ Refine (typeMap', clauses ++ hcs, rtyAssoc, rpostAssoc)
                     Nothing -> return Safe
             case res of
                 Safe -> liftIO $ putStrLn "Safe!"
                 Unsafe -> liftIO $ putStrLn "Unsafe!"
-                Refine (typeMap', hcs') ->
-                    cegar typeMap' (k+1) hcs'
-    cegar typeMap0 0 []
+                Refine (typeMap', hcs', rtyAssoc, rpostAssoc) ->
+                    cegar typeMap' (k+1) (rtyAssoc,rpostAssoc,hcs')
+    cegar typeMap0 0 ([],[],[])
 
                 {-
     let t_input          = f $ diffUTCTime t_input_end t_input_begin

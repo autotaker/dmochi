@@ -22,7 +22,7 @@ let bcopy : [int,([int] -> int), ([int] -> int), int] -> [int] -> int =
 
 let print_array : [int, ([int] -> int)] -> [int,([int] -> int), int] -> int =
     fun m1 des -> fun m array i ->
-        let print_array = print_array des m1 in
+        let print_array = print_array m1 des in
         if i >= m then 
             0
         else let v = des i in
