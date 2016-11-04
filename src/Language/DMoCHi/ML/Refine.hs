@@ -473,8 +473,10 @@ termOfFormula :: LFormula -> Horn.Term
 termOfFormula (Formula meta i path vs) = 
     Horn.Pred (printf "p_%s[%d:%d]" smeta i (hashPath path)) ts
     where
+    {- 
     annot (SVar x) | ML.getType x == ML.TInt = Add (SVar x) (Int 0)
                    | ML.getType x == ML.TBool = And (SVar x) (Bool True)
+                   -}
     annot v = v
     ts = map (termOfValue.annot) vs
     Meta l accessors = meta

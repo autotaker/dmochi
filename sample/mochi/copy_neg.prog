@@ -1,0 +1,11 @@
+let copy : [bool,int] -> int = fun b n ->
+    if n < 0 then - copy b (-n) else
+    if n = 0 then 0 else
+    if b then copy b (n - 1) + 1
+    else copy b (n - 1) - 1;;
+
+let n = * in
+let x = copy true n in
+let y = copy false x in
+assert(n = - y)
+  

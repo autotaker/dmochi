@@ -1,0 +1,17 @@
+let loop : [int, int,int,int] -> (int * (int * int)) =
+    fun n x y z ->
+        if x >= n then 
+            (x, (y, z))
+        else if y >= n then 
+            loop n (x + 1) 0 z 
+        else if z >= n then loop n x (y + 1) 0 
+        else loop n x y (z + 1);;
+
+let n = * in
+assume n > 0;
+let r = loop n 0 0 0 in
+let x = r.fst in
+let p = r.snd in
+let y = p.fst in
+let z = p.snd in
+assert( x = n && y = 0 && z = 0 )
