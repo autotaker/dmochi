@@ -40,6 +40,7 @@ import           Paths_dmochi
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
+               | RefinementFailed ParseError
                | AlphaFailed AlphaError
                | IllTyped Typed.TypeError 
                | Debugging
@@ -50,6 +51,7 @@ instance Show MainError where
     show (ParseFailed err) = "ParseFailed: " ++ show err
     show (AlphaFailed err) = "AlphaFailed: " ++ show err
     show (IllTyped err)    = "IllTyped: " ++ show err
+    show (RefinementFailed err)    = "RefinementFailed: " ++ show err
     show (BooleanError s) = "Boolean: " ++ s
     show Debugging = "Debugging"
 
@@ -83,7 +85,7 @@ run = do
     hSetBuffering stdout NoBuffering
     m <- measure "Total" $ runFreshT $ runExceptT doit
     case m of
-        Left err -> print err >> exitFailure
+        Left err -> putStr "Error: " >> print err >> exitFailure
         Right _ -> return ()
         
 options :: [ OptDescr Flag ]
@@ -217,7 +219,7 @@ doit = do
                                 parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
                                 liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
                                 solution  <- case parseRes of
-                                    Left err -> throwError $ ParseFailed err
+                                    Left err -> throwError $ RefinementFailed err
                                     Right p  -> return p
                                 let typeMap' | accErrTraces conf = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
                                              | otherwise = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap

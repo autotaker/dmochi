@@ -9,6 +9,7 @@ import qualified Data.Map as M
 import Data.Graph
 import Data.Tree
 import Control.Monad
+import Control.Applicative
 import Data.Array
 import Text.Printf
 import Control.Monad.IO.Class
@@ -181,7 +182,7 @@ simplify (Value v) = Value v
 simplify (Let ty x (LExp l e0) e) = 
     let e0' = simplify e0
         e'  = simplify e
-    in case straight e0' (\lv -> Let ty x lv e') of
+    in case straight e0' ty (\lv -> Let ty x lv e') of
         Just e'' -> e''
         Nothing  -> Let ty x (LExp l e0') e'
 simplify (Let ty x (LFun fdef) e) =
@@ -193,13 +194,21 @@ simplify (Fail ty) = Fail ty
 simplify (Fun fdef) = Fun fdef{ body = simplify $ body fdef }
 simplify (Branch ty l e1 e2) = Branch ty l (simplify e1) (simplify e2)
 
-straight :: Exp -> (LetValue -> Exp) -> Maybe Exp
-straight (Value v) cont = Just (cont (LValue v))
-straight (Let ty x lv e) cont = Let ty x lv <$> straight e cont
-straight (Assume ty v e) cont = Assume ty v <$> straight e cont
-straight (Fail ty) cont = Nothing
-straight (Fun fdef) cont = Just (cont (LFun fdef))
-straight (Branch _ _ _ _) cont = Nothing
+straight :: Exp -> Type -> (LetValue -> Exp) -> Maybe Exp
+straight (Value v) ty cont = Just (cont (LValue v))
+straight (Let _ x lv e) ty cont = Let ty x lv <$> straight e ty cont
+straight (Assume _ v e) ty cont = Assume ty v <$> straight e ty cont
+straight (Fail _) ty cont = Nothing
+straight (Fun fdef) ty cont = Just (cont (LFun fdef))
+straight (Branch _ l e1 e2) ty cont = 
+    Branch ty l <$> straightFail e1 ty <*> straight e2 ty cont <|>
+    Branch ty l <$> straight e1 ty cont <*> straightFail e2 ty
+
+straightFail :: Exp -> Type -> Maybe Exp
+straightFail (Fail _) ty = Just (Fail ty)
+straightFail (Let _ l lv e) ty = Let ty l lv <$> straightFail e ty
+straightFail (Assume _ lv e) ty = Assume ty lv <$> straightFail e ty
+straightFail _ _ = Nothing
 
 -- redundant let-expression elimination
 elimRedundantF :: FunDef -> FunDef
