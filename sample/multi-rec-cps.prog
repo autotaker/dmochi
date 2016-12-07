@@ -1,0 +1,18 @@
+let sum : [int, int, ([int] -> int)] -> int =
+    fun x n k ->
+        let k1 : [int] -> int = fun m ->
+            if n = 0 then k 0 
+            else 
+                let k2 : [int] -> int = fun r -> k (r + m) in
+                sum x (n - 1) k2 in 
+        if x = 0 then k1 n else k1 (-n);;
+
+let x = * in
+let m = * in
+let k : [int] -> int =
+    fun r -> 
+        if r < 0 then 
+            assert( - r >= m ) 
+        else
+            assert( r >= m ) in
+sum x m k;;
