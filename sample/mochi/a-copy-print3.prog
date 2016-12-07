@@ -1,0 +1,45 @@
+let make_array : [int] -> [int] -> int =
+    fun n -> fun i ->
+        if 0 <= i && i < n then 0 else Fail;;
+
+let update : [int, int, ([int] -> int), int] -> [int] -> int =
+    fun i n des x ->
+        let v = des i in
+        let res : [int] -> int = 
+            fun j -> 
+                if 0 <= j && j < n then
+                  if i = j then x else let r = des j in r
+                else Fail
+        in res;;
+
+let print_int : [int] -> int = fun i -> 0;;
+
+let bcopy : [int,([int] -> int), ([int] -> int), int] -> [int] -> int =
+    fun m src des i ->
+        if i >= m then
+            des
+        else let v = src i in
+             let des = update i m des v in
+             bcopy m src des (i + 1);;
+
+let print_array : [int,([int] -> int), int] -> int =
+    fun m array i ->
+        if i >= m then 
+            0
+        else let v = array i in
+             let r1 = print_int v in
+             let r2 = print_array m array (i + 1) in
+             r2;;
+
+let f : [int, ([int] -> int), ([int] -> int)] -> int =
+    fun m src des ->
+        let array = bcopy m src des 0 in
+        print_array m array 0;;
+        
+let n = * in
+let array1 = make_array n in
+let array2 = make_array n in
+assume n > 0;
+let r = f n array1 array2 in
+r
+

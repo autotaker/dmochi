@@ -42,6 +42,7 @@ library
                        Language.DMoCHi.ML.PredicateAbstraction,
                        Language.DMoCHi.ML.TypeCheck,
                        Language.DMoCHi.ML.SymbolicExec,
+                       Language.DMoCHi.ML.InteractiveCEGen,
                        Language.DMoCHi.ML.Refine,
                        Language.DMoCHi.ML.Inline,
                        Language.DMoCHi.ML.ElimUnreachable,

@@ -163,7 +163,20 @@ data CompTreeInfo = InfoBind [(Id,SValue)]
 type Env = M.Map Id SValue
 type Id = ML.Id
 
-type Log = ([Constraint],[CallInfo],[ClosureInfo],[ReturnInfo],([BranchInfo],[LetExpInfo]))
+-- type Log = ([Constraint],[CallInfo],[ClosureInfo],[ReturnInfo],([BranchInfo],[LetExpInfo]))
+
+data Log = Log { logCnstr :: [Constraint]
+               , logCall :: [CallInfo]
+               , logClosure :: [ClosureInfo]
+               , logReturn :: [ReturnInfo]
+               , logBranch  :: [BranchInfo]
+               , logLetExp :: [LetExpInfo] }
+               deriving (Show)
+
+instance Monoid Log where
+    mappend (Log a1 a2 a3 a4 a5 a6) (Log b1 b2 b3 b4 b5 b6) = 
+        Log (a1 <> b1) (a2 <> b2) (a3 <> b3) (a4 <> b4) (a5 <> b5) (a6 <> b6)
+    mempty = Log [] [] [] [] [] []
 
 type M m a = StateT S (WriterT Log m) a
 data S = S { callCounter :: !Int
@@ -222,10 +235,8 @@ bindClsA acsr v = v
 symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log, CompTree)
 symbolicExec prog trace = do
     ((m,tree),log) <- runWriterT $ evalStateT (genEnv >>= (\genv -> do
-        (t,r) <- eval (CallId 0) genv [] (ML.mainTerm prog)
-        case r of
-            Just sv -> error "symbolicExec: This error trace cannot reach to any failure!"
-            Nothing -> return (genv,t))) (S 1 0 trace)
+        (t,_) <- eval (CallId 0) genv [] (ML.mainTerm prog)
+        return (genv,t))) (S 1 0 trace)
     return (m,log,tree)
     where
     genEnv = mfix $ \genv -> do
@@ -255,14 +266,17 @@ symbolicExec prog trace = do
             return (CompTree _e [(1,InfoAssume phi,t)],r)
         ML.Fail _ -> return (leaf _e,Nothing)
         ML.Branch _ i e1 e2 -> do
-            b <- consume
-            branch (BranchInfo callSite i b)
-            if b then do
-                (t,r) <- eval callSite env (1:path) e1
-                return (CompTree _e [(1,InfoNone,t)],r)
-            else do
-                (t,r) <- eval callSite env (2:path) e2
-                return (CompTree _e [(2,InfoNone,t)],r)
+            mb <- consume
+            case mb of
+                Just b -> do
+                    branch (BranchInfo callSite i b)
+                    if b then do
+                        (t,r) <- eval callSite env (1:path) e1
+                        return (CompTree _e [(1,InfoNone,t)],r)
+                    else do
+                        (t,r) <- eval callSite env (2:path) e2
+                        return (CompTree _e [(2,InfoNone,t)],r)
+                Nothing -> return (CompTree _e [], Nothing)
 
     evalV :: CallId -> Env -> ML.Value -> M m SValue
     evalV _ env (ML.Atomic av) = pure $ evalA env av
@@ -314,30 +328,31 @@ symbolicExec prog trace = do
 
     -- utilities
     constrain :: Constraint -> M m ()
-    constrain c = tell ([c],[],[],[],([],[]))
+    constrain c = tell (Log [c] [] [] [] [] [])
     branch :: BranchInfo -> M m ()
-    branch c = tell ([],[],[],[],([c],[]))
+    branch c = tell (Log [] [] [] [] [c] [])
     retval :: ReturnInfo -> M m ()
-    retval c = tell ([],[],[],[c],([],[]))
-    letexp c = tell ([],[],[],[],([],[c]))
+    retval c = tell (Log [] [] [] [c] [] [])
+    letexp c = tell (Log [] [] [] [] [] [c])
     newCall :: Int -> CallId -> CompTreePath -> ClosureId -> [Accessor] -> M m CallId
     newCall i pcall path clsId acsrs = do
         j <- callCounter <$> get
         modify incrCall
-        tell ([],[CallInfo clsId i pcall (CallId j) path acsrs],[],[],([],[]))
+        tell (Log [] [CallInfo clsId i pcall (CallId j) path acsrs] [] [] [] [])
         return (CallId j)
     genClosure :: CallId -> ML.FunDef -> Env -> M m Closure
     genClosure callSite fdef env = do
         j <- clsCounter <$> get
         modify incrCls
         let cls = (Cls fdef (ClosureId j) env [])
-        tell ([],[],[ClosureInfo (ML.ident fdef) cls callSite],[],([],[]))
+        tell (Log [] [] [ClosureInfo (ML.ident fdef) cls callSite] [] [] [])
         return cls
-    consume :: M m Bool
+    consume :: M m (Maybe Bool)
     consume = do
-        b <- head . cTrace <$> get
-        modify pop
-        return b
+        l <- cTrace <$> get
+        case l of
+            (b:_) -> modify pop >> return (Just b)
+            [] -> return Nothing
 
 renderCompTree :: CompTree -> String
 renderCompTree t = Dot.renderDot $ Dot.Graph Dot.StrictGraph Dot.DirectedGraph Nothing stmts

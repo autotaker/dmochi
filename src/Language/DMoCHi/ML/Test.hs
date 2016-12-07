@@ -30,6 +30,7 @@ import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
+import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
 import           Language.DMoCHi.Boolean.Test 
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
@@ -59,14 +60,17 @@ data Flag = Help
           | HCCS HCCSSolver 
           | CEGARLimit Int 
           | AccErrTraces 
-          | ContextSensitive deriving Eq
+          | ContextSensitive 
+          | Interactive
+          deriving Eq
 data HCCSSolver = IT | GCH  deriving Eq
 
 data Config = Config { targetProgram :: FilePath
                      , hornOption :: String
                      , cegarLimit :: Int
                      , accErrTraces :: Bool
-                     , contextSensitive :: Bool }
+                     , contextSensitive :: Bool
+                     , interactive :: Bool }
 
 
 getHCCSSolver :: IO FilePath
@@ -78,7 +82,8 @@ defaultConfig path = Config { targetProgram = path
                             , hornOption = ""
                             , cegarLimit = 20
                             , accErrTraces = False
-                            , contextSensitive = False }
+                            , contextSensitive = False
+                            , interactive = False }
 
 run :: IO ()
 run = do
@@ -93,7 +98,9 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
           , Option [] ["hccs"] (ReqArg parseSolver "it|gch") "Set hccs solver"
           , Option ['l'] ["limit"] (ReqArg (CEGARLimit . read) "N") "Set CEGAR round limit (default = 20)"
           , Option [] ["acc-traces"] (NoArg AccErrTraces) "Accumrate error traces"
-          , Option [] ["context-sensitive"] (NoArg ContextSensitive) "Enable context sensitive predicate discovery, this also enables --acc-traces flag" ]
+          , Option [] ["context-sensitive"] (NoArg ContextSensitive) 
+                   "Enable context sensitive predicate discovery, this also enables --acc-traces flag"
+          , Option [] ["interactive"] (NoArg Interactive) "interactive counterexample generation" ]
     where
     parseSolver "it" = HCCS IT
     parseSolver "gch" = HCCS GCH
@@ -120,7 +127,8 @@ parseArgs = doit
                      HCCS GCH -> acc { hornOption = hornOption acc ++ "-hccs gch" }
                      CEGARLimit l -> acc { cegarLimit = l }
                      AccErrTraces -> acc { accErrTraces = True }
-                     ContextSensitive -> acc { accErrTraces = True, contextSensitive = True } ) 
+                     ContextSensitive -> acc { accErrTraces = True, contextSensitive = True }
+                     Interactive -> acc { interactive = True } ) 
                   (defaultConfig file) opts
         (opts, [], []) -> die ["No target specified\n"]
         (opts, files, []) -> die ["Multiple targets Specified\n"]
@@ -202,6 +210,9 @@ doit = do
                 case r of
                     Just trace -> measure "Refinement" $ do
                         let traceFile = printf "%s_%d.trace.dot" path k
+                        case interactive conf of
+                            True -> Refine.interactiveCEGen normalizedProgram traceFile trace
+                            False -> return trace
                         refine <- Refine.refineCGen normalizedProgram traceFile (contextSensitive conf) trace
                         case refine of
                             Nothing -> return Unsafe

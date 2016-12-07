@@ -255,7 +255,7 @@ refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m) =>
               ML.Program -> FilePath -> Bool -> Trace -> 
               m (Maybe ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])))
 refineCGen prog traceFile contextSensitive trace = do
-    (genv, (consts,calls,closures,returns,(branches,letexps)), compTree) <- symbolicExec prog trace
+    (genv, (Log consts calls closures returns branches letexps), compTree) <- symbolicExec prog trace
     liftIO $ writeFile traceFile (renderCompTree compTree)
     liftIO $ print consts
     isFeasible <- liftIO $ SMT.sat (map fromSValue consts)
