@@ -102,6 +102,10 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
                         let j = callId info
                             path = callContext info
                             ReturnInfo _ _ mv = rtnLookup j
+                        -- 変数スコープの例
+                        -- fの中でxが参照できたり、sの第一要素の中でsの第二要素が参照できることに注意
+                        -- { x : int, f : { y : int | P(y,x) } -> { r : int | Q(r,y,x) } | U(x) } -> 
+                        --      { s : ({ z : int | R(z,s,x) } -> { t : int | S(t,z,s,z) }) * int | T(x,s) }
                         arg_tys <- forM (zip [(0::Int)..] xs) $ \(i,xi) ->
                             gen (meta_add meta ("pre_" ++ show i)) env' (AVar j xi)
                         p1 <- freshInt
@@ -252,16 +256,22 @@ type W m a = WriterT ([(CompTreePath,Horn.Clause)],([(Int,RType)],[(Int,RPostTyp
 
 
 refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m) => 
-              ML.Program -> FilePath -> Bool -> Trace -> 
-              m (Maybe ([Horn.Clause],([(Int,RType)],[(Int,RPostType)])))
-refineCGen prog traceFile contextSensitive trace = do
+              ML.Program -> FilePath -> Bool -> Int -> Trace -> 
+              m (Maybe (Bool,([Horn.Clause],([(Int,RType)],[(Int,RPostType)]))))
+refineCGen prog traceFile contextSensitive foolThreshold trace = do
     (genv, (Log consts calls closures returns branches letexps), compTree) <- symbolicExec prog trace
     liftIO $ writeFile traceFile (renderCompTree compTree)
     liftIO $ print consts
-    isFeasible <- liftIO $ SMT.sat (map fromSValue consts)
+    let cs = map fromSValue consts
+    isFeasible <- liftIO $ SMT.sat cs
+    isFool <- if isFeasible then return False 
+                            else fmap not $ liftIO $ SMT.sat (take (length cs - foolThreshold) cs)
+    when isFool $ liftIO $ putStrLn "this error trace is fool"
+    let sortClauses :: [(CompTreePath,Horn.Clause)] -> [Horn.Clause]
+        sortClauses = map snd . sortBy (compare `on` (reverse . fst))
     if isFeasible then
         return Nothing
-    else fmap (Just.(first $ map snd . sortBy (compare `on` (reverse.fst)))) $ execWriterT $ do
+    else fmap (Just . (,) isFool . first sortClauses) $ execWriterT $ do
         let dump str l = liftIO $ do
                 putStrLn $ str ++ ":"
                 mapM_ (\v -> putStr "  " >> print v) l
@@ -562,14 +572,6 @@ substSValue subst _sv = case _sv of
     Int i       -> _sv
     Bool b      -> _sv
 
-updateFormula :: PAbst.Formula -> [PAbst.Formula] -> [PAbst.Formula]
-updateFormula phi fml = case phi of
-    ML.CBool _ -> fml
-    -- decompose boolean combinations
-    ML.Op (ML.OpAnd v1 v2) -> updateFormula v1 (updateFormula v2 fml)
-    ML.Op (ML.OpOr v1 v2) -> updateFormula v1 (updateFormula v2 fml)
-    _ | phi `elem` fml -> fml
-      | otherwise -> phi : fml
 
 -- penv :: i -> (xs,fml) s.t. P_{i} = \xs. fml
 -- env : mapping from variables in the formula to values in PType 
@@ -579,7 +581,7 @@ refineTermType penv env (RPostType r rty fml) (abst_r, abst_rty, abst_fml) = (ab
     env' = extendEnv r (ML.Var abst_r) env
     abst_rty' = refinePType penv env' rty abst_rty
     phi' = refineLFormula penv env' fml
-    abst_fml' = updateFormula phi' abst_fml
+    abst_fml' = PAbst.updateFormula phi' abst_fml
 refineTermType _ _ RPostTypeFailure termType = termType
 
 refinePType :: IM.IntMap ([Id], ML.AValue) -> M.Map String ML.AValue -> RType -> PAbst.PType -> PAbst.PType
@@ -595,7 +597,7 @@ refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
         env'  = foldr (uncurry extendEnv) env (zip (argNames as) (map ML.Var abst_xs))
         pre   = refineLFormula penv env' (preCond as)
         abst_ptys' = zipWith (refinePType penv env') (argTypes as) abst_ptys
-        pty_x' = (abst_xs, abst_ptys', updateFormula pre abst_fml)
+        pty_x' = (abst_xs, abst_ptys', PAbst.updateFormula pre abst_fml)
         pty_r' = refineTermType penv env' (resType as) pty_r
 
 refineLFormula :: IM.IntMap ([Id], ML.AValue) -> M.Map String ML.AValue -> LFormula -> PAbst.Formula

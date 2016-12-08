@@ -28,8 +28,8 @@ instance Eq PType where
         ty_1 == ty_2 && 
         ps_1 == map (substFormula subst1) ps_2 &&
         qs_1 == map (substFormula subst2) qs_2 &&
-        xsty_1 == xsty_2 &&
-        rty_1 == substPType subst1 rty_2
+        xsty_1 == map (substPType subst1) xsty_2 &&
+        rty_1 == substPType subst2 rty_2
         where
         subst1 = M.fromList $ zip xs_2 xs_1
         subst2 = M.insert r_2 r_1 subst1
@@ -197,19 +197,27 @@ toSortArg (_, tys, ps) = B.Tuple [B.Tuple $ map toSort tys, B.Tuple [B.Bool | _ 
 
 
 substTermType :: M.Map ML.Id ML.Id -> TermType -> TermType
-substTermType subst (x,pty,ps) = (x, substPType subst pty, map (substFormula subst) ps)
+substTermType subst (x,pty,ps) = (x, substPType subst' pty, map (substFormula subst') ps)
+    where
+    subst' = M.delete x subst
 
 substPType :: M.Map ML.Id ML.Id -> PType -> PType
 substPType subst = substVPType (fmap (ML.Atomic . ML.Var) subst)
 
 substVPType :: M.Map ML.Id ML.Value -> PType -> PType
-substVPType subst = go where
-    f = substVFormula subst
-    go PInt = PInt
-    go PBool = PBool
-    go (PPair t t1 t2) = PPair t (go t1) (go t2)
-    go (PFun ty (xs,ty_xs,ps) (r,ty_r,qs)) = 
-        PFun ty (xs,map go ty_xs,map f ps) (r,go ty_r, map f qs)
+substVPType subst PInt = PInt
+substVPType subst PBool = PBool
+substVPType subst (PPair t t1 t2) = 
+    PPair t (substVPType subst t1) (substVPType subst t2)
+substVPType subst (PFun ty (xs,ty_xs,ps) (r,ty_r,qs)) = 
+    PFun ty (xs,ty_xs',ps') (r,ty_r',qs')
+    where
+    subst1 = foldr M.delete subst xs
+    subst2 = M.delete r subst1
+    ty_xs' = map (substVPType subst1) ty_xs
+    ps' = map (substVFormula subst1) ps
+    ty_r' = substVPType subst2 ty_r
+    qs' = map (substVFormula subst2) qs
 
 substFormula :: M.Map ML.Id ML.Id -> Formula -> Formula
 substFormula subst = substVFormula (fmap (ML.Atomic . ML.Var) subst)
@@ -464,5 +472,43 @@ genPType ty@(ML.TFun ts t2) = do
     ty_xs <- mapM genPType ts
     ty_r <- genPType t2
     return $ PFun ty (xs, ty_xs, []) (r, ty_r, [])
-    
 
+updateFormula :: Formula -> [Formula] -> [Formula]
+updateFormula phi fml = case phi of
+    ML.CBool _ -> fml
+    -- decompose boolean combinations
+    ML.Op (ML.OpAnd v1 v2) -> updateFormula v1 (updateFormula v2 fml)
+    ML.Op (ML.OpOr v1 v2) -> updateFormula v1 (updateFormula v2 fml)
+    _ | phi `elem` fml -> fml
+      | otherwise -> phi : fml
+    
+mergeTypeMap :: TypeMap -> TypeMap -> TypeMap
+mergeTypeMap typeMap1 typeMap2 = IM.unionWith f typeMap1 typeMap2
+    where
+    f (Left pty1) (Left pty2) = Left $ mergePType pty1 pty2
+    f (Right tty1) (Right tty2) = Right $ mergeTermType tty1 tty2
+    f _ _ = error "merge type map: sort mismatch"
+
+mergePType :: PType -> PType -> PType
+mergePType PInt PInt = PInt
+mergePType PBool PBool = PBool
+mergePType (PPair ty1 pty_fst1 pty_snd1) (PPair ty2 pty_fst2 pty_snd2) 
+    | ty1 == ty2 = PPair ty1 (mergePType pty_fst1 pty_fst2) (mergePType pty_snd1 pty_snd2)
+mergePType (PFun ty1 (xs_1,xsty_1,ps_1) (r_1,rty_1,qs_1)) 
+           (PFun ty2 (xs_2,xsty_2,ps_2) (r_2,rty_2,qs_2))
+    | ty1 == ty2 = PFun ty1 (xs_1,xsty, ps) (r_1,rty,qs)
+        where
+        subst1 = M.fromList (zip xs_2 xs_1)
+        subst2 = M.insert r_2 r_1 subst1
+        xsty = zipWith mergePType xsty_1 (map (substPType subst1) xsty_2)
+        ps = foldr (updateFormula . substFormula subst1) ps_1 ps_2
+        rty = mergePType rty_1 (substPType subst2 rty_2)
+        qs = foldr (updateFormula . substFormula subst2) qs_1 qs_2 
+mergePType _ _ = error "mergePType: sort mismatch"   
+
+mergeTermType :: TermType -> TermType -> TermType
+mergeTermType (r_1,rty_1,qs_1) (r_2,rty_2,qs_2) = (r_1,rty,qs)
+    where
+    subst = M.singleton r_2 r_1
+    rty = mergePType rty_1 (substPType subst rty_2)
+    qs = foldr (updateFormula . substFormula subst) qs_1 qs_2
