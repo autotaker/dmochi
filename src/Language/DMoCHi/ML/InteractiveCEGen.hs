@@ -33,7 +33,7 @@ convertTrace !trace (op:ops) = case op of
     'C' -> convertTrace [] ops
     _ -> convertTrace trace ops
 
-interactiveCEGen :: (MonadIO m, MonadId m, MonadFix m) => ML.Program -> FilePath -> Trace -> m Trace
+interactiveCEGen :: (MonadIO m, MonadId m, MonadFix m) => ML.Program -> FilePath -> Trace -> m (Trace, Maybe Bool)
 interactiveCEGen prog path = loop
     where
     loop trace = do
@@ -45,7 +45,11 @@ interactiveCEGen prog path = loop
         s <- liftIO $ getLine
         case s of
             "OK" ->
-                return trace
+                return (trace, Nothing)
+            "FOOL" ->
+                return (trace, Just True)
+            "NONFOOL" ->
+                return (trace, Just False)
             _ -> do
                 let trace' = convertTrace trace s
                 loop trace'

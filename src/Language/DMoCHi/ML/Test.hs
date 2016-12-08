@@ -219,9 +219,9 @@ doit = do
                 case r of
                     Just trace -> measure "Refinement" $ do
                         let traceFile = printf "%s_%d.trace.dot" path k
-                        case interactive conf of
+                        (trace,isFoolI) <- case interactive conf of
                             True -> Refine.interactiveCEGen normalizedProgram traceFile trace
-                            False -> return trace
+                            False -> return (trace, Nothing)
                         refine <- Refine.refineCGen normalizedProgram 
                                                     traceFile 
                                                     (contextSensitive conf) 
@@ -230,7 +230,11 @@ doit = do
                             Nothing -> return Unsafe
                             Just (isFool,(clauses, assoc)) -> do
                                 let file_hcs = printf "%s_%d.hcs" path k
-                                if foolTraces conf && isFool then do
+                                let bf = case isFoolI of
+                                        Just b -> b
+                                        Nothing -> foolTraces conf && isFool
+                                if bf then do
+                                    liftIO $ putStrLn "Fool counterexample refinement"
                                     let hcs' = clauses
                                     liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
                                     let cmd = printf "%s -hccs it -print-hccs-solution %s %s" 
@@ -243,7 +247,7 @@ doit = do
                                         Left err -> throwError $ RefinementFailed err
                                         Right p  -> return p
                                     let typeMapFool' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMapFool
-                                    return $ Refine (typeMap, typeMapFool', hcs, rtyAssoc0, rpostAssoc)
+                                    return $ Refine (typeMap, typeMapFool', hcs, rtyAssoc0, rpostAssoc0)
                                 else do
                                     let hcs' = if accErrTraces conf then clauses ++ hcs else clauses
                                     let (rtyAssoc,rpostAssoc) = 
