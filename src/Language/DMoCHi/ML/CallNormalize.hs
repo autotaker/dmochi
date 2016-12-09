@@ -9,7 +9,7 @@ import Control.Monad.Trans
 import Control.Applicative
 
 normalize :: MonadId m => Program -> m Program
-normalize (Program fs e) = liftA2 Program (mapM normalizeF fs) (normalizeE e)
+normalize (Program fs syns e) = liftA2 (flip Program syns) (mapM normalizeF fs) (normalizeE e)
 
 normalizeF :: MonadId m => (Id,Type,Exp) -> m (Id,Type,Exp)
 normalizeF (x,ty,e) = (,,) x ty <$> normalizeE e

@@ -36,6 +36,7 @@ library
                        Language.DMoCHi.ML.SMT,
                        Language.DMoCHi.ML.PrettyPrint.UnTyped,
                        Language.DMoCHi.ML.Syntax.UnTyped,
+                       Language.DMoCHi.ML.DesugarSynonym,
                        Language.DMoCHi.ML.Alpha,
                        Language.DMoCHi.ML.CallNormalize,
                        Language.DMoCHi.ML.Parser,

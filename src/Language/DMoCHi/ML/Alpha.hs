@@ -18,7 +18,7 @@ instance Show AlphaError where
 type M m a = ReaderT (M.Map String String) m a
 
 alpha :: (MonadError AlphaError m,MonadId m,Applicative m) => Program -> m Program
-alpha (Program fs t0) = do
+alpha (Program fs syns t0) = do
     env <- M.fromList <$> mapM (\(x,_,_) -> (,) x <$> freshId x) fs
     when (M.size env /= length fs) $ do
         let fs' = map head $ filter ((>1).length) $ group $ sort $ map (\(x,_,_) -> x) fs
@@ -26,7 +26,7 @@ alpha (Program fs t0) = do
     flip runReaderT env $ do
         fs' <- forM fs $ \(x,p,e) -> (,,) <$> rename x <*> pure p <*> renameE e
         t0' <- renameE t0
-        return $ Program fs' t0'
+        return $ Program fs' syns t0'
 
 rename :: MonadError AlphaError m => String -> M m String
 rename x = do

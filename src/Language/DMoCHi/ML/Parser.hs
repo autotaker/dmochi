@@ -6,10 +6,12 @@ import Text.Parsec.Language(emptyDef)
 import Text.Parsec.String
 import Control.Applicative hiding((<|>),many,optional)
 import Language.DMoCHi.ML.Syntax.UnTyped
+import Data.Either
 
 reservedNames :: [String]
 reservedNames = ["let","rec","in","and","fun","not",
                  "if","then","else","true","false","assume","assert","fst","snd",
+                 "type",
                  "Fail","Main"]
 
 language :: P.LanguageDef st
@@ -45,6 +47,8 @@ comma :: Parser String
 comma = P.comma lexer
 commaSep :: Parser a -> Parser [a]
 commaSep = P.commaSep lexer
+commaSep1 :: Parser a -> Parser [a]
+commaSep1 = P.commaSep1 lexer
 natural :: Parser Integer
 natural = P.natural lexer
 semiSep :: Parser a -> Parser [a]
@@ -53,20 +57,38 @@ semiSep = P.semiSep lexer
 brackets :: Parser a -> Parser a
 brackets = P.brackets lexer
 
+typVar :: Parser Id
+typVar = char '\'' *> identifier
+
 parseProgramFromFile :: FilePath -> IO (Either ParseError Program)
 parseProgramFromFile = parseFromFile (whiteSpace >> progP)
 
 progP :: Parser Program
-progP = Program <$> many defP <*> exprP
+progP = uncurry Program . partitionEithers <$> many defP <*> exprP
 
-defP :: Parser (Id,Type,Exp)
-defP = try $ do
+defP :: Parser (Either (Id,Type,Exp) SynonymDef)
+defP = Right <$> synDefP <|> Left <$> funDefP 
+
+funDefP :: Parser (Id,Type,Exp)
+funDefP = try $ do
     x <- reserved "let" *> identifier
     ty <- colon *> typeP
     reservedOp "="
     t <- exprP
     optional (reservedOp ";;")
     return (x,ty,t)
+
+synDefP :: Parser SynonymDef
+synDefP = do
+    reserved "type"
+    tvs <- (\x -> [x]) <$> typVar 
+       <|> parens (commaSep1 typVar) 
+       <|> pure ([])
+    syn <- identifier
+    reservedOp "="
+    ty <- typeP
+    optional (reservedOp ";;")
+    return $ SynonymDef syn tvs ty
 
 exprP :: Parser Exp
 exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") <?> "expr" where
@@ -154,8 +176,19 @@ typeP = prim <|> func
     where
     base = TInt <$ reserved "int"
        <|> TBool <$ reserved "bool"
-       <|> parens typeP
-    prim = chainr1 base (TPair <$ reservedOp "*" )
+       <|> TVar <$> typVar
+       <|> TSyn [] <$> identifier
+       -- <|> parens typeP
+    syms = do
+        tys <- parens (commaSep1 typeP) <|> (\x -> [x]) <$> base
+        case tys of
+            [ty] -> do
+                ss <- many identifier
+                return $ foldl (\acc syn -> TSyn [acc] syn) ty ss
+            tys -> do
+                s:ss <- many1 identifier
+                return $ foldl (\acc syn -> TSyn [acc] syn) (TSyn tys s) ss
+    prim = chainr1 syms (TPair <$ reservedOp "*" )
     func = TFun <$> brackets arglist <*> (reservedOp "->" *> typeP)
     arglist = commaSep prim
 

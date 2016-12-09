@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFunctor, FlexibleContexts #-}
 module Language.DMoCHi.ML.Syntax.UnTyped(Exp(..)
                                         ,Program(..)
                                         ,Value(..)
@@ -6,8 +6,9 @@ module Language.DMoCHi.ML.Syntax.UnTyped(Exp(..)
                                         ,LetValue(..)
                                         ,Id
                                         ,Type(..)
+                                        ,SynName
+                                        ,SynonymDef(..)
                                         ) where
-import Language.DMoCHi.ML.Syntax.Type hiding(Id)
 
 data Exp = Value Value 
          | Let Id LetValue Exp 
@@ -16,8 +17,21 @@ data Exp = Value Value
          | Fail
          | Branch Exp Exp deriving(Show)
 
+type Id = String
+type SynName = String
+
 data Program = Program { functions :: [(Id,Type,Exp)] 
+                       , synonyms :: [SynonymDef]
                        , mainTerm  :: Exp }
+
+data SynonymDef = SynonymDef { synName :: SynName
+                             , typVars :: [Id]
+                             , synDef :: Type }
+
+data Type = TInt | TBool | TPair Type Type 
+          | TFun [Type] Type | TSyn [Type] SynName
+          | TVar Id
+          deriving(Eq,Show)
 
 data Value = Var Id
            | CInt Integer
@@ -46,4 +60,5 @@ data LetValue = LValue Value
               | LRand
               deriving(Show)
 
-type Id = String
+
+

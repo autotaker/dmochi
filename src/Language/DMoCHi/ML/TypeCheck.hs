@@ -7,31 +7,39 @@ import Language.DMoCHi.ML.Syntax.Typed
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
 import Text.PrettyPrint
 import Language.DMoCHi.ML.PrettyPrint.Typed 
+import qualified Language.DMoCHi.ML.PrettyPrint.UnTyped as U
 import Debug.Trace
 import Language.DMoCHi.Common.Id
+import Language.DMoCHi.ML.DesugarSynonym
+
 instance Show TypeError where
     show (UndefinedVariable s) = "UndefinedVariables: "++ s
     show (TypeMisMatch s t1 t2) = "TypeMisMatch: " ++ show t1 ++ " should be " ++ show t2 ++ ". context :" ++ s
     show (TypeMisMatchList s t1 t2) = "TypeMisMatch: " ++ show t1 ++ " should be " ++ show t2 ++ ". context :" ++ s
     show (TypeMisUse t1 t2)     = "TypeUse: " ++ show t1 ++ " should be in " ++ show t2
+    show (Synonym err) = "SynonymError: " ++ show err
     show (OtherError s)         = "OtherError: " ++ s
 
 type Env = M.Map String Type
+type SynEnv = M.Map U.SynName U.SynonymDef
 data TypeError = UndefinedVariable String 
                | TypeMisMatch String Type Type
                | TypeMisMatchList String [Type] [Type]
                | TypeMisUse   Type [Type]
+               | Synonym  SynonymError
                | OtherError String
 
-fromUnTyped :: (Applicative m,MonadError TypeError m, MonadId m) => U.Program -> m Program
-fromUnTyped (U.Program fs t) = do
-    fs' <- mapM (\(x,p,e) -> (,,) x <$> convertP p <*> pure e) fs
+
+fromUnTyped :: MonadId m => U.Program -> ExceptT TypeError m Program
+fromUnTyped (U.Program fs syns t) = do
+    synEnv <- withExceptT Synonym (desugarEnv syns)
+    fs' <- mapM (\(x,p,e) -> (,,) x <$> convertP synEnv p <*> pure e) fs
     let tenv = M.fromList [ (x,ty) | (x,ty,_) <- fs' ]
     fs'' <- forM fs' $ \(x,ty,U.Lambda y e) -> do
         let x' = Id ty x
-        fdef <- convertLambda tenv y e ty
+        fdef <- convertLambda synEnv tenv y e ty
         return (x',fdef) 
-    Program fs'' <$> convertE tenv TInt t
+    Program fs'' <$> convertE synEnv tenv TInt t
 
 {-
 toUnTyped :: Program -> U.Program
@@ -40,84 +48,68 @@ toUnTyped (Program fs t) = U.Program fs' t' where
     t'  = revE t
     -}
 
-shouldBe :: MonadError TypeError m => String -> Type -> Type -> m ()
+shouldBe :: Monad m => String -> Type -> Type -> ExceptT TypeError m ()
 shouldBe s t1 t2 | t1 == t2 = return ()
                  | otherwise = throwError (TypeMisMatch s t1 t2)
 
-shouldBeList :: MonadError TypeError m => String -> [Type] -> [Type] -> m ()
+shouldBeList :: Monad m => String -> [Type] -> [Type] -> ExceptT TypeError m ()
 shouldBeList s ts1 ts2 | ts1 == ts2 = return ()
                        | otherwise = throwError (TypeMisMatchList s ts1 ts2)
 
-shouldBeValue :: MonadError TypeError m => Value -> Type -> m ()
+shouldBeValue :: Monad m => Value -> Type -> ExceptT TypeError m ()
 shouldBeValue v t1 = shouldBe (render $ pprintV 0 v) (getType v) t1
 
-shouldBeIn :: MonadError TypeError m => Type -> [Type] -> m ()
+shouldBeIn :: Monad m => Type -> [Type] -> ExceptT TypeError m ()
 shouldBeIn t1 ts = 
     if t1 `elem` ts then return () else throwError (TypeMisUse t1 ts)
 
-shouldBePair :: MonadError TypeError m => String -> Type -> m (Type,Type)
+shouldBePair :: Monad m => String -> Type -> ExceptT TypeError m (Type,Type)
 shouldBePair _ (TPair t1 t2) = return (t1,t2)
 shouldBePair s _ = throwError (OtherError $ "expecting pair :" ++ s)
 
-convertP :: (Applicative m,MonadError TypeError m) => U.Type -> m Type
-convertP = pure 
-{-
-convertP = go M.empty where
-    base f env ty ps = 
-        f <$> mapM (\(x,p) -> do
-            p' <- convertV (M.insert x ty env) p
-            shouldBeValue p' TBool
-            return (Id ty x,p')) ps
-    go env (U.PInt ps) = base (const TInt) env TInt ps
-    go env (U.PBool ps) = base (const TBool) env TBool ps
-    go env (U.PPair p (x,f)) =  do
-        ty1 <- go env p
-        ty2 <- go (M.insert x ty1 env) f
-        return (TPair ty1 ty2)
-    go env (U.PFun p (x,f)) = do
-        ty1 <- go env p
-        ty2 <- go (M.insert x ty1 env) f
-        return (TFun ty1 ty2)
-        -}
+convertP :: Monad m => SynEnv -> U.Type -> ExceptT TypeError m Type
+convertP synEnv ty =
+    withExceptT Synonym (desugarType synEnv ty) >>= 
+    fix (\go ty -> case ty of
+        U.TInt -> return TInt
+        U.TBool -> return TBool
+        U.TPair ty1 ty2 -> TPair <$> go ty1 <*> go ty2
+        U.TFun tys ty -> TFun <$> mapM go tys <*> go ty
+        _ -> throwError $ OtherError $ "convertP: unsupported conversion: " ++ render (U.pprintT 0 ty))
 
-convertE :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> Type -> U.Exp -> m Exp
-convertE env ty _e = case _e of
+convertE :: MonadId m => SynEnv -> Env -> Type -> U.Exp -> ExceptT TypeError m Exp
+convertE synEnv env ty _e = case _e of
     U.Value v -> do
         v' <- convertV env v
         v' `shouldBeValue` ty
         return $ Value v'
     U.Let x lv e -> do
-        lv' <- convertLV env lv
+        lv' <- convertLV synEnv env lv
         let ty' = getType lv'
-        e' <- Let ty (Id ty' x) lv' <$> convertE (M.insert x ty' env) ty e
+        e' <- Let ty (Id ty' x) lv' <$> convertE synEnv (M.insert x ty' env) ty e
         return e'
     U.Assume v e -> do
         v' <- convertV env v
         shouldBeValue  v' TBool
-        Assume ty v' <$> convertE env ty e
+        Assume ty v' <$> convertE synEnv env ty e
     U.Lambda xs e -> do
-        fdef <- convertLambda env xs e ty
+        fdef <- convertLambda synEnv env xs e ty
         return $ Fun fdef
-        {-
-        f <- Id ty <$> freshId "f"
-        return $ Let ty f (LFun fdef) (Value (Var f))
-        -}
-                    
     U.Fail -> pure $ Fail ty
     U.Branch e1 e2 -> do
         i <- freshInt
-        Branch ty i <$> convertE env ty e1 <*> convertE env ty e2
+        Branch ty i <$> convertE synEnv env ty e1 <*> convertE synEnv env ty e2
 
-convertLambda :: (MonadError TypeError m, MonadId m) => Env -> [U.Id] -> U.Exp -> Type -> m FunDef
-convertLambda env args body (TFun ts t2) = do
+convertLambda :: (MonadId m) => SynEnv -> Env -> [U.Id] -> U.Exp -> Type -> ExceptT TypeError m FunDef
+convertLambda synEnv env args body (TFun ts t2) = do
     i <- freshInt
     let env' = foldr (uncurry M.insert) env (zip args ts)
-    FunDef i (zipWith Id ts args) <$> convertE env' t2 body
-convertLambda _ xs _ _ = throwError $ OtherError $ "Expecting function:" ++ show xs
+    FunDef i (zipWith Id ts args) <$> convertE synEnv env' t2 body
+convertLambda _ _ xs _ _ = throwError $ OtherError $ "Expecting function:" ++ show xs
 
 
-convertLV :: (Applicative m,MonadError TypeError m, MonadId m) => Env -> U.LetValue -> m (LetValue)
-convertLV env lv = case lv of
+convertLV :: (MonadId m) => SynEnv -> Env -> U.LetValue -> ExceptT TypeError m (LetValue)
+convertLV synEnv env lv = case lv of
     U.LValue v -> do
         v' <- convertV env v
         return $ LValue v'
@@ -135,36 +127,19 @@ convertLV env lv = case lv of
                         i <- freshInt
                         return $ LApp t2 i f' vs'
                     _ -> throwError $ OtherError $ "Expecting function" ++ f
-                        
-                        {-
-                (ty',xs) <- foldM (\(tf,acc) v -> 
-                    case tf of
-                        TFun t1 t2 -> do
-                            shouldBeValue v  t1
-                            x <- Id t2 <$> freshId "tmp"
-                            return (t2,x:acc)
-                        _ -> throwError $ OtherError $ "Excepting function" ++ show (f,vs)) (ty,[]) vs'
-                is <- replicateM (length vs) freshInt
-                let ys = reverse (tail xs)
-                    f' = Id ty f
-                    l = zipWith3 (\x y (i,v) -> (x,LApp (getType x) i y v)) ys (f':ys) (zip is vs')
-                    yn = last (f':ys)
-                    vn = last vs'
-                return $ (LApp ty' (last is) yn vn,l)
-            -}
             Nothing -> throwError $ UndefinedVariable f
     U.LExp ptyp (U.Lambda x e) -> do
-        ty <- convertP ptyp
-        fdef <- convertLambda env x e ty
+        ty <- convertP synEnv ptyp
+        fdef <- convertLambda synEnv env x e ty
         return (LFun fdef)
     U.LExp ptyp e -> do
-        ty <- convertP ptyp
+        ty <- convertP synEnv ptyp
         i <- freshInt
-        lv <- LExp i <$> convertE env ty e
+        lv <- LExp i <$> convertE synEnv env ty e
         return lv
                 
 
-convertV :: (Applicative m,MonadError TypeError m) => Env -> U.Value -> m Value
+convertV :: Monad m => Env -> U.Value -> ExceptT TypeError m Value
 convertV env v = case v of
     U.Var x -> case M.lookup x env of
         Just ty -> pure $ Var $ Id ty x

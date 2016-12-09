@@ -1,10 +1,33 @@
 module Language.DMoCHi.ML.PrettyPrint.UnTyped(pprintE
                              ,pprintV
+                             ,pprintT
                              ,pprintProgram
                              ,printProgram) where
 import Text.PrettyPrint
 import Language.DMoCHi.ML.Syntax.UnTyped
-import Language.DMoCHi.ML.Syntax.Type(pprintT)
+--import Language.DMoCHi.ML.Syntax.Type(pprintT)
+
+pprintT :: Int -> Type -> Doc
+pprintT _ TInt = text "int"
+pprintT _ TBool = text "bool"
+pprintT _ (TVar x) = text ('\'':x)
+pprintT assoc (TPair t1 t2) =
+    let d1 = pprintT 1 t1
+        d2 = pprintT 1 t2
+        d  = d1 <+> text "*" <+> d2
+    in if assoc <= 0 then d else parens d
+pprintT assoc (TFun ts t2) =
+    let d1 = brackets $ hsep $ punctuate comma (map (pprintT 0) ts)
+        d2 = pprintT 0 t2
+        d  = d1 <+> text "->" <+> d2
+    in if assoc == 0 then d else parens d
+pprintT _ (TSyn [] syn) = text syn
+pprintT assoc (TSyn tys syn) =
+    let darg = case tys of
+            [ty] -> pprintT 1 ty
+            tys  -> parens $ hsep $ punctuate comma (map (pprintT 0) tys)
+        d = darg <+> text syn
+    in if assoc <= 1 then d else parens d
 
 pprintE :: Exp -> Doc
 pprintE (Value v) = pprintV 0 v
@@ -72,12 +95,20 @@ pprintV assoc (Op op) =
 
 
 pprintProgram :: Program -> Doc
-pprintProgram (Program fs t) =
-    let d = vcat $ map (\(f,ty,e) -> 
-            text "let" <+> text f <+> colon <+> pprintT 0 ty <+> equals $+$
-            nest 4 (pprintE e <> text ";;")) fs in
+pprintProgram (Program fs syns t) =
     text "(* functions *)" $+$ 
-    d $+$ 
+    vcat (map (\(f,ty,e) -> 
+        text "let" <+> text f <+> colon <+> pprintT 0 ty <+> equals $+$
+        nest 4 (pprintE e <> text ";;")) fs) $+$
+    text "(* synonyms *)" $+$
+    vcat (map (\syn -> 
+        let dargs = case typVars syn of
+                [] -> empty
+                [x] -> text ('\'':x)
+                xs  -> parens $ hsep $ punctuate comma (map (text . ('\'':)) xs)
+        in
+        text "type" <+> dargs <+> text (synName syn) <+> equals 
+                    <+> pprintT 0 (synDef syn) <> text ";;") syns) $+$
     text "(*main*)" $+$
     pprintE t
 
