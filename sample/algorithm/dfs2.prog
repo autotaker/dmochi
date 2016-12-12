@@ -1,0 +1,84 @@
+type 'a array = int * ([] -> 'a);;
+type 'a list = bool * ([] -> (bool * 'a));;
+
+type graph = int list array;;
+
+let get : [int list array,int] -> int list =
+    fun array idx -> 
+        let n = array.fst in 
+        let f = array.snd in
+        let tmp : int = assert( 0 <= idx && idx < n ) in
+        f ();;
+
+let make_array : [int,int list] -> int list array =
+    fun size a ->
+        let f : [] -> int list = fun () -> a in
+        (size, f);;
+
+let update : [int list array,int,int list] -> int list array =
+    fun array idx value ->
+        let n = array.fst in
+        let f = array.snd in
+        let tmp : int = assert( 0 <= idx && idx < n ) in
+        let g : [] -> int list = fun () -> value <> f () in
+        (n, g);;
+
+let length : [int list array] -> int = fun a -> a.fst;;
+
+let nil : [] -> int list =
+    fun () -> 
+        let f : [] -> (bool * int) = fun () -> assume false; (false,0) in
+        (false,f);;
+
+let cons : [int, int list] -> int list =
+    fun x xs ->
+        let f = xs.snd in
+        let b = xs.fst in
+        let g : [] -> (bool * int) = fun () -> (b,x) <> f () in
+        (true, g);;
+
+(* add parameter n only for predicate discovery *)
+let iter : [int, ([int] -> int), int list] -> int =
+    fun n action xs ->
+        let b = xs.fst in
+        let f = xs.snd in
+        if b then
+            let node = f () in
+            let v = node.snd in
+            let r = action v in
+            let xs1 = (node.fst,f) in
+            iter n action xs1
+        else 0;;
+
+let dfs : [graph, int, ([] -> int)] -> int = 
+    fun g v vis ->
+        let pv = vis () in
+        if v = pv then 0
+        else
+            let vis1 : [] -> int = fun () -> v <> vis () in
+            let f : [int] -> int = fun nv -> dfs g nv vis1 in
+            iter (length g) f (get g v);;
+
+let build : [int,int] -> graph =
+    fun n m -> build_sub m 0 (make_array n (nil ()));;
+
+let build_sub : [int, int, graph] -> graph =
+    fun m i g ->
+        if i >= m then g
+        else 
+            let n = length g in
+            let v = * in
+            let w = * in
+            assume (0 <= v && v < n);
+            assume (0 <= w && w < n);
+            let xs = get g v in
+            let xs' = cons w xs in
+            build_sub m (i+1) (update g v xs');;
+
+let n = * in
+let m = * in
+assume n > 0;
+let g = build n m in
+let f : [] -> int = fun _ -> -1 in
+dfs g 0 f;;
+

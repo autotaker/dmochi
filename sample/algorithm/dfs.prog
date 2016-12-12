@@ -1,0 +1,50 @@
+type 'a array = int * ([] -> 'a);;
+
+type graph = int array;;
+
+let get : [int array,int] -> int =
+    fun array idx -> 
+        let n = array.fst in 
+        let f = array.snd in
+        let tmp : int = assert( 0 <= idx && idx < n ) in
+        f ();;
+
+let make_array : [int,int] -> int array =
+    fun size a ->
+        let f : [] -> int = fun () -> a in
+        (size, f);;
+
+let update : [int array,int,int] -> int array =
+    fun array idx value ->
+        let n = array.fst in
+        let f = array.snd in
+        let tmp : int = assert( 0 <= idx && idx < n ) in
+        let g : [] -> int = fun () -> value <> f () in
+        (n, g);;
+
+let dfs : [graph, int, ([] -> int)] -> int = 
+    fun g v vis ->
+        let pv = vis () in
+        if v = pv then 0
+        else
+            let nv = get g v in
+            let vis1 : [] -> int = fun () -> v <> vis () in
+            dfs g nv vis1;;
+
+let build : [int] -> graph =
+    fun n -> build_sub n 0 (make_array n 0);;
+
+let build_sub : [int, int, graph] -> graph =
+    fun n i g ->
+        if i >= n then g
+        else 
+            let v = * in
+            assume (0 <= v && v < n);
+            build_sub n (i+1) (update g i v);;
+
+let n = * in
+assume n > 0;
+let g = build n in
+let f : [] -> int = fun _ -> -1 in
+dfs g 0 f;;
+

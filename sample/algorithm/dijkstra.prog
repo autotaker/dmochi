@@ -1,0 +1,116 @@
+type 'a array = int * ([] -> 'a);;
+type 'a list = bool * ([] -> (bool * 'a));;
+type 'a queue = 'a list;;
+
+type graph = (int * int) list array;;
+
+
+let get : [(int * int) list array,int] -> (int * int) list =
+    fun array idx -> 
+        let n = array.fst in 
+        let f = array.snd in
+        let tmp : int = assert( 0 <= idx && idx < n ) in
+        f ();;
+
+let make_array : [int,(int * int) list] -> (int * int) list array =
+    fun size a ->
+        let f : [] -> (int * int) list = fun () -> a in
+        (size, f);;
+
+let update : [(int * int) list array,int,(int * int) list] -> (int * int) list array =
+    fun array idx value ->
+        let n = array.fst in
+        let f = array.snd in
+        let tmp : int = assert( 0 <= idx && idx < n ) in
+        let g : [] -> (int * int) list = fun () -> value <> f () in
+        (n, g);;
+
+let length : [(int * int) list array] -> int = fun a -> a.fst;;
+
+let nil : [] -> (int * int) list =
+    fun () -> 
+        let f : [] -> (bool * (int * int)) = fun () -> assume false; (false,(0,0)) in
+        (false,f);;
+
+let cons : [int * int, (int * int) list] -> (int * int) list =
+    fun x xs ->
+        let f = xs.snd in
+        let b = xs.fst in
+        let g : [] -> (bool * (int * int)) = fun () -> (b,x) <> f () in
+        (true, g);;
+
+let empty : [] -> (int * int) queue = fun () -> nil ();;
+
+let is_empty : [(int * int) queue] -> bool = fun q -> not q.fst;;
+
+let push : [int, int, (int * int) queue] -> (int * int) queue = 
+    fun k v queue -> cons (k,v) queue;;
+
+let pop : [(int * int) queue] -> (int * int) * (int * int) queue =
+    fun queue -> 
+        let b = queue.fst in
+        let f = queue.snd in
+        let tmp : int = assert b in
+        let node = f () in
+        (node.snd,(node.fst,f));;
+
+let fold : [int, ([int * int, (int * int) queue] -> (int * int) queue), (int * int) queue, (int * int) list] -> (int * int) queue =
+    fun n op acc xs ->
+        let b = xs.fst in
+        let f = xs.snd in
+        if b then
+            let node = f () in
+            let v = node.snd in
+            let acc1 = op v acc in
+            let xs1 = (node.fst,f) in
+            fold n op acc1 xs1
+        else acc;;
+
+let dijkstra : [graph, ([] -> int), (int * int) queue] -> int = 
+    fun g vis queue ->
+        let b = is_empty queue in
+        if b then
+            0
+        else
+            let p = pop queue in
+            let queue1 = p.snd in
+            let dv = p.fst in
+            let d = dv.fst in
+            let v = dv.snd in
+            let pv = vis () in
+            if v = pv then 0
+            else
+                let vis1 : [] -> int = fun () -> v <> vis () in
+                let f : [int * int, (int*int) queue] -> (int * int) queue = fun e acc -> 
+                    let nv = e.fst in
+                    let w  = e.snd in
+                    push (d + w) nv acc in
+                let queue2 = fold (length g) f queue1 (get g v) in
+                dijkstra g vis1 queue2;;
+
+let build : [int,int] -> graph =
+    fun n m -> build_sub m 0 (make_array n (nil ()));;
+
+let build_sub : [int, int, graph] -> graph =
+    fun m i g ->
+        if i >= m then g
+        else 
+            let n = length g in
+            let v = * in
+            let w = * in
+            let d = * in
+            assume (0 <= v && v < n);
+            assume (0 <= w && w < n);
+            assume (d >= 0);
+            let xs = get g v in
+            let xs' = cons (w,d) xs in
+            build_sub m (i+1) (update g v xs');;
+
+let n = * in
+let m = * in
+assume n > 0;
+let g = build n m in
+let f : [] -> int = fun _ -> -1 in
+let queue = push 0 0 (empty ()) in
+dijkstra g f queue;;
+
