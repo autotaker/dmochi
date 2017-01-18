@@ -9,6 +9,7 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , size
                                         , freeVariables
                                         , normalize
+                                        , alphaId
                                         , module Language.DMoCHi.ML.Syntax.Type
                                         ) where
 import Control.Monad
