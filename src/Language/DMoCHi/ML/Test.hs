@@ -30,6 +30,8 @@ import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
+import qualified Language.DMoCHi.ML.ElimCast as PAbst
+import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
 import           Language.DMoCHi.Boolean.Test 
@@ -198,8 +200,12 @@ doit = do
         cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs) = do
             res <- measure (printf "CEGAR-%d" k) $ do
                 liftIO $ putStrLn "Predicate Abstracion"
+                liftIO $ PAbst.printTypeMap typeMap
                 let curTypeMap = PAbst.mergeTypeMap typeMap typeMapFool
-                boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg curTypeMap normalizedProgram
+                liftIO $ putStrLn "Elim cast"
+                castFreeProgram <- PAbst.elimCast curTypeMap normalizedProgram
+                liftIO $ PNormal.printProgram castFreeProgram
+                boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg curTypeMap castFreeProgram
                 let file_boolean = printf "%s_%d.bool" path k
                 liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
                 liftIO $ putStrLn "Converted program"

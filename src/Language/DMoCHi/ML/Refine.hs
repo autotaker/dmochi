@@ -15,7 +15,7 @@ import           Text.Printf
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
-import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
+import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import qualified Language.DMoCHi.ML.SMT as SMT
 import           Language.DMoCHi.ML.SymbolicExec

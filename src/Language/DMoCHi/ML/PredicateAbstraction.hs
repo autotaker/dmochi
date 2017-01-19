@@ -10,69 +10,14 @@ import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
 import qualified Language.DMoCHi.Boolean.PrettyPrint.Typed as B
 import qualified Language.DMoCHi.ML.SMT as SMT
+import Language.DMoCHi.ML.Syntax.PType
 import Language.DMoCHi.Common.Util
 import Language.DMoCHi.Common.Id
 import Control.Monad.Writer
 import Text.PrettyPrint
 import Debug.Trace
 
-data PType = PInt | PBool
-           | PFun ML.Type ArgType TermType
-           | PPair ML.Type PType PType
-
-
-instance Eq PType where
-    PInt == PInt = True
-    PBool == PBool = True
-    (PFun ty_1 (xs_1,xsty_1,ps_1) (r_1,rty_1,qs_1)) == (PFun ty_2 (xs_2,xsty_2,ps_2) (r_2,rty_2,qs_2)) =
-        ty_1 == ty_2 && 
-        ps_1 == map (substFormula subst1) ps_2 &&
-        qs_1 == map (substFormula subst2) qs_2 &&
-        xsty_1 == map (substPType subst1) xsty_2 &&
-        rty_1 == substPType subst2 rty_2
-        where
-        subst1 = M.fromList $ zip xs_2 xs_1
-        subst2 = M.insert r_2 r_1 subst1
-    PPair ty pty_fst pty_snd == PPair ty' pty_fst' pty_snd' =
-        ty == ty' && pty_fst == pty_fst' && pty_snd == pty_snd'
-    _ == _ = False
-
-
-type Env = M.Map ML.Id PType
-type Constraints = [Formula]
 type PVar = [(B.Term, Formula)]
-type Formula = ML.AValue
-
-type TermType = (ML.Id, PType, [Formula])
-type ArgType = ([ML.Id],[PType],[Formula])
-
-type TypeMap = IM.IntMap (Either PType TermType)
-type ScopeMap = IM.IntMap [ML.Id]
-
-pprintTermType :: TermType -> Doc
-pprintTermType (x,pty_x,fml) = braces $ 
-    text (ML.name x) <+> colon <+> (pprintPType 0 pty_x) <+>
-    text "|" <+> (hsep $ punctuate comma $ map (ML.pprintA 0) fml)
-
-pprintPTypeArg :: ArgType -> Doc
-pprintPTypeArg (xs,pty_xs,fml) =
-    braces $ 
-        hsep (punctuate comma $ zipWith (\x pty_x -> text (ML.name x) <+> colon <+> (pprintPType 0 pty_x)) xs pty_xs) <+>
-        text "|" <+> (hsep $ punctuate comma $ map (ML.pprintA 0) fml)
-
-
-pprintPType :: Int -> PType -> Doc
-pprintPType _ PInt = text "int"
-pprintPType _ PBool = text "bool"
-pprintPType assoc (PPair _ pty1 pty2) =
-    let d1 = pprintPType 1 pty1
-        d2 = pprintPType 1 pty2
-        d = d1 <+> text "*" <+> d2
-    in if assoc == 0 then d else parens d
-pprintPType assoc (PFun _ x_tup r_tup) =
-    let d = pprintPTypeArg x_tup <+> text "->" <+> pprintTermType r_tup in
-    if assoc == 0 then d else parens d
-
 -- getSort (abstFormulae cs pv fmls) == TBool^(length fmls)
 abstFormulae :: (MonadIO m, MonadId m) => Constraints -> PVar -> [Formula] -> m B.Term
 abstFormulae cs pvs fml = do
@@ -165,24 +110,33 @@ cast' cs pv e curTy newTy = case (curTy,newTy) of
                 r'_preds <- abstFormulae cs pv'' qs'
                 return $ B.T [r'_body,r'_preds]                                           {- <r_body, r_preds> -}
 cast cs pv e curTy newTy = do
-    r <- cast' cs pv e curTy newTy
-    liftIO $ putStrLn $ render $
-        let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintA 0) cs)
-            doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintA 0 . snd) pv)
-            doc_e = B.pprintTerm 0 e
-            doc_curTy = pprintPType 0 curTy
-            doc_newTy = pprintPType 0 newTy
-            doc_r = B.pprintTerm 0 r
-        in braces (
-           text "constraints:" <+> doc_cs $+$ 
-           text "predicates:" <+> doc_pvar $+$ 
-           text "prev term:" <+> doc_e $+$ 
-           text "prev type:" <+> doc_curTy $+$
-           text "new  type:" <+> doc_newTy $+$
-           text "abst result:" <+> doc_r)
-    return r
-
-
+    let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintA 0) cs)
+        doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintA 0 . snd) pv)
+        doc_e = B.pprintTerm 0 e
+        doc_curTy = pprintPType 0 curTy
+        doc_newTy = pprintPType 0 newTy
+    if curTy /= newTy 
+      then do
+        liftIO $ putStrLn $ render $
+            braces (
+               text "constraints:" <+> doc_cs $+$ 
+               text "predicates:" <+> doc_pvar $+$ 
+               text "prev term:" <+> doc_e $+$ 
+               text "prev type:" <+> doc_curTy $+$
+               text "new  type:" <+> doc_newTy)
+        error "unexpected cast"
+      else do
+        r <- cast' cs pv e curTy newTy
+        let doc_r = B.pprintTerm 0 r
+        liftIO $ putStrLn $ render $
+            braces (
+               text "constraints:" <+> doc_cs $+$ 
+               text "predicates:" <+> doc_pvar $+$ 
+               text "prev term:" <+> doc_e $+$ 
+               text "prev type:" <+> doc_curTy $+$
+               text "new  type:" <+> doc_newTy $+$
+               text "abst result:" <+> doc_r)
+        return r
 
 toSort :: PType -> B.Sort
 toSort PInt = B.Tuple []
@@ -194,61 +148,6 @@ toSortTerm :: TermType -> B.Sort
 toSortTerm (_, ty, ps) = B.Tuple [toSort ty, B.Tuple [ B.Bool | _ <- ps ]]
 toSortArg :: ArgType -> B.Sort
 toSortArg (_, tys, ps) = B.Tuple [B.Tuple $ map toSort tys, B.Tuple [B.Bool | _ <- ps]]
-
-
-substTermType :: M.Map ML.Id ML.Id -> TermType -> TermType
-substTermType subst (x,pty,ps) = (x, substPType subst' pty, map (substFormula subst') ps)
-    where
-    subst' = M.delete x subst
-
-substPType :: M.Map ML.Id ML.Id -> PType -> PType
-substPType subst = substVPType (fmap (ML.Atomic . ML.Var) subst)
-
-substVPType :: M.Map ML.Id ML.Value -> PType -> PType
-substVPType subst PInt = PInt
-substVPType subst PBool = PBool
-substVPType subst (PPair t t1 t2) = 
-    PPair t (substVPType subst t1) (substVPType subst t2)
-substVPType subst (PFun ty (xs,ty_xs,ps) (r,ty_r,qs)) = 
-    PFun ty (xs,ty_xs',ps') (r,ty_r',qs')
-    where
-    subst1 = foldr M.delete subst xs
-    subst2 = M.delete r subst1
-    ty_xs' = map (substVPType subst1) ty_xs
-    ps' = map (substVFormula subst1) ps
-    ty_r' = substVPType subst2 ty_r
-    qs' = map (substVFormula subst2) qs
-
-substFormula :: M.Map ML.Id ML.Id -> Formula -> Formula
-substFormula subst = substVFormula (fmap (ML.Atomic . ML.Var) subst)
-
-substVFormula :: M.Map ML.Id ML.Value -> Formula -> Formula
-substVFormula subst = atomic . go where
-    atomic (ML.Atomic v) = v
-    atomic _ = error "substVFormula: type error"
-    go e = case e of
-        ML.Var x ->
-            case M.lookup x subst of
-                Just b -> b
-                Nothing -> ML.Atomic e
-        ML.CInt _ -> ML.Atomic e
-        ML.CBool _ -> ML.Atomic e
-        -- ML.Pair v1 v2 -> ML.Pair (go v1) (go v2)
-        ML.Op op ->  case op of
-            ML.OpAdd v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpAdd `on` atomic) (go v1) (go v2)
-            ML.OpSub v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpSub `on` atomic) (go v1) (go v2)
-            ML.OpEq  v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpEq `on` atomic) (go v1) (go v2)
-            ML.OpLt  v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpLt `on` atomic) (go v1) (go v2)
-            ML.OpLte v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpLte `on` atomic) (go v1) (go v2)
-            ML.OpAnd v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpAnd `on` atomic) (go v1) (go v2)
-            ML.OpOr  v1 v2 -> ML.Atomic $ ML.Op $ (ML.OpOr  `on` atomic) (go v1) (go v2)
-            ML.OpFst ty v  -> case go v of 
-                ML.Atomic av -> ML.Atomic $ ML.Op $ ML.OpFst ty av
-                ML.Pair v1 _ -> v1
-            ML.OpSnd ty v  -> case go v of
-                ML.Atomic av -> ML.Atomic $ ML.Op $ ML.OpSnd ty av
-                ML.Pair _ v2 -> v2
-            ML.OpNot v     -> ML.Atomic $ ML.Op $ (ML.OpNot . atomic) (go v)
 
 toSymbol :: ML.Id -> PType -> B.Symbol
 toSymbol x ty = B.Symbol (toSort ty) (ML.name x)
@@ -284,28 +183,6 @@ abstValue tbl env cs pv (ML.Fun fdef) ty = fst <$> abstFunDef tbl env cs pv fdef
 abstValue tbl env cs pv (ML.Pair v1 v2) ty = 
     let PPair _ ty1 ty2 = ty in
     (\x y -> B.T [x,y]) <$> abstValue tbl env cs pv v1 ty1 <*> abstValue tbl env cs pv v2 ty2
-
-
-typeOfAValue :: Env -> ML.AValue -> PType
-typeOfAValue env = go where
-    go v = case v of
-        ML.Var x -> env M.! x
-        ML.CInt i -> PInt
-        ML.CBool b -> PBool
---        ML.Pair v1 v2 -> PPair (ML.getType v) (go v1) (go v2)
-        ML.Op op -> case op of
-            ML.OpAdd v1 v2 -> PInt
-            ML.OpSub v1 v2 -> PInt
-            ML.OpEq  v1 v2 -> PBool
-            ML.OpLt  v1 v2 -> PBool
-            ML.OpLte v1 v2 -> PBool
-            ML.OpAnd v1 v2 -> PBool
-            ML.OpOr  v1 v2 -> PBool
-            ML.OpFst _ v   ->
-                let PPair _ ty1 _ = go v in ty1
-            ML.OpSnd _ v   -> 
-                let PPair _ _ ty2 = go v in ty2
-            ML.OpNot v -> PBool
 
 abstTerm :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
 abstTerm tbl env cs pv t (r,ty,qs) = doit where
@@ -421,94 +298,3 @@ abstProg tbl (ML.Program fs t0) = do
         abstTerm tbl env [] [] t0 (r,PInt,[])
     return $ B.Program ds e0
 
-initTypeMap :: MonadId m => ML.Program -> m (TypeMap,ScopeMap)
-initTypeMap (ML.Program fs t0) = do
-    es <- execWriterT $ do
-        let gather fv (ML.Value v) = case v of
-                ML.Fun fdef -> gather (ML.args fdef ++ fv) (ML.body fdef)
-                ML.Pair v1 v2 -> gather fv (ML.Value v1) >> gather fv (ML.Value v2)
-                ML.Atomic _ -> return ()
-            gather fv (ML.Let s x lv e) = do
-                case lv of
-                    ML.LValue _ -> return ()
-                    ML.LApp _ _ _ vs -> mapM_ (gather fv . ML.Value) vs
-                    ML.LExp i e' -> do
-                        gather fv e'
-                        ty <- genTermType (ML.getType e')
-                        tell (DL.singleton (i, Right ty, fv))
-                    ML.LRand -> return ()
-                gather (x : fv) e
-            gather fv (ML.Assume _ _ e) = gather fv e
-            gather _ (ML.Fail _) = return ()
-            {-
-            gather fv (ML.Fun fdef) = 
-                -- DO NOT count tail functions,
-                -- because their types are determined elsewhere
-                gather (ML.arg fdef : fv) (ML.body fdef)
-            -}
-            gather fv (ML.Branch _ _ e1 e2) = gather fv e1 >> gather fv e2
-            gatherF fv f = do
-                gather (ML.args f ++ fv) (ML.body f)
-                ty <- genPType (ML.getType f)
-                tell (DL.singleton (ML.ident f,Left ty, fv))
-        let fv = map fst fs
-        forM_ fs $ \(_, f) -> gatherF fv f
-        gather fv t0
-    let (es1,es2) = unzip [ ((i,v1),(i,v2)) | (i, v1, v2) <- DL.toList es ]
-    return (IM.fromList es1, IM.fromList es2)
-
-genTermType :: MonadId m => ML.Type -> m TermType
-genTermType s = do
-    r <- ML.Id s <$> freshId "r"
-    pty <- genPType s
-    return (r,pty,[])
-genPType :: MonadId m => ML.Type -> m PType
-genPType ML.TInt = return PInt
-genPType ML.TBool = return PBool
-genPType ty@(ML.TPair t1 t2) = PPair ty <$> genPType t1 <*> genPType t2
-genPType ty@(ML.TFun ts t2) = do
-    xs <- mapM (\t1 -> ML.Id t1 <$> freshId "x") ts
-    r <- ML.Id t2 <$> freshId "r"
-    ty_xs <- mapM genPType ts
-    ty_r <- genPType t2
-    return $ PFun ty (xs, ty_xs, []) (r, ty_r, [])
-
-updateFormula :: Formula -> [Formula] -> [Formula]
-updateFormula phi fml = case phi of
-    ML.CBool _ -> fml
-    -- decompose boolean combinations
-    ML.Op (ML.OpAnd v1 v2) -> updateFormula v1 (updateFormula v2 fml)
-    ML.Op (ML.OpOr v1 v2) -> updateFormula v1 (updateFormula v2 fml)
-    _ | phi `elem` fml -> fml
-      | otherwise -> phi : fml
-    
-mergeTypeMap :: TypeMap -> TypeMap -> TypeMap
-mergeTypeMap typeMap1 typeMap2 = IM.unionWith f typeMap1 typeMap2
-    where
-    f (Left pty1) (Left pty2) = Left $ mergePType pty1 pty2
-    f (Right tty1) (Right tty2) = Right $ mergeTermType tty1 tty2
-    f _ _ = error "merge type map: sort mismatch"
-
-mergePType :: PType -> PType -> PType
-mergePType PInt PInt = PInt
-mergePType PBool PBool = PBool
-mergePType (PPair ty1 pty_fst1 pty_snd1) (PPair ty2 pty_fst2 pty_snd2) 
-    | ty1 == ty2 = PPair ty1 (mergePType pty_fst1 pty_fst2) (mergePType pty_snd1 pty_snd2)
-mergePType (PFun ty1 (xs_1,xsty_1,ps_1) (r_1,rty_1,qs_1)) 
-           (PFun ty2 (xs_2,xsty_2,ps_2) (r_2,rty_2,qs_2))
-    | ty1 == ty2 = PFun ty1 (xs_1,xsty, ps) (r_1,rty,qs)
-        where
-        subst1 = M.fromList (zip xs_2 xs_1)
-        subst2 = M.insert r_2 r_1 subst1
-        xsty = zipWith mergePType xsty_1 (map (substPType subst1) xsty_2)
-        ps = foldr (updateFormula . substFormula subst1) ps_1 ps_2
-        rty = mergePType rty_1 (substPType subst2 rty_2)
-        qs = foldr (updateFormula . substFormula subst2) qs_1 qs_2 
-mergePType _ _ = error "mergePType: sort mismatch"   
-
-mergeTermType :: TermType -> TermType -> TermType
-mergeTermType (r_1,rty_1,qs_1) (r_2,rty_2,qs_2) = (r_1,rty,qs)
-    where
-    subst = M.singleton r_2 r_1
-    rty = mergePType rty_1 (substPType subst rty_2)
-    qs = foldr (updateFormula . substFormula subst) qs_1 qs_2
