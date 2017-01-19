@@ -64,9 +64,7 @@ elimCastTerm tbl env _e tau = case _e of
             env' = M.insert x x_ty env
         Let s x (LValue av) <$> elimCastTerm tbl env' e tau
     Let s x (LApp ty ident f vs) e -> do
-        let PFun _ (ys, ys_ty, _) (r, r_ty, _) = (case M.lookup f env of
-                                                       Just v -> v
-                                                       Nothing -> error $ show f)
+        let PFun _ (ys, ys_ty, _) (r, r_ty, _) = env M.! f
             subst = M.fromList $ zip ys vs
             ys_ty' = map (substVPType subst) ys_ty
         vs' <- zipWithM (elimCastValue tbl env) vs ys_ty' 
