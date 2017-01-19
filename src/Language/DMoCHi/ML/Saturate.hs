@@ -3,9 +3,9 @@ module Language.DMoCHi.ML.Saturate where
 import Control.Monad
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.PNormal
-import Z3.Monad
+--import Z3.Monad
 import qualified Language.DMoCHi.ML.SMT as SMT
-import Language.DMoCHi.ML.PredicateAbstraction hiding(Env, cast)
+import Language.DMoCHi.ML.Syntax.PType hiding(Env)
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
 
@@ -22,23 +22,6 @@ type Env = M.Map Id (PType, IType)
 getFlow :: Int -> IO [([IType], BFormula)]
 getFlow = undefined
 
-cast :: Env -> Formula -> (PType,IType) -> PType -> IO IType
-cast = undefined {-
-cast env fml (PInt,_) _ = return IInt
-cast env fml (PBool,_) _ = return IInt
-cast env fml (PPair _ p1 p2,IPair i1 i2) _ = 
-    IPair <$> cast env fml p1 i1 <*> cast env fml p2 i2
-cast env fml (PFun _ argTy retTy, IFun tys) (PFun _ argTy' retTy') = do
-    let (xs, ty_xs, ps) = argTy
-        (ys, ty_ys, qs) = argTy'
-        subst = M.fromList $ zip ys xs
-        ty_xs' = map (substPType subst) ty_ys
-        ps' = map (substFormula subst) qs
-    forM tys $ \(thetas, phi, iota) -> do
-        
-        -}
-            
-
 calcTypeFunDef :: TypeMap -> Env -> Formula -> FunDef -> PType -> IO IType
 calcTypeFunDef tbl env fml (FunDef ident xs e) (PFun _ argTy retTy) = do
     let (ys, ty_ys, ps) = argTy
@@ -54,10 +37,15 @@ calcTypeFunDef tbl env fml (FunDef ident xs e) (PFun _ argTy retTy) = do
         if b 
           then map ((,,) thetas phi) <$> calcTypeTerm tbl env' fml' e retTy
           else return []
+calcTypeFunDef _ _ _ _ _ = error "calcTypeFunDef: non-function abstraction type is supplied"
 
 calcTypeValue :: TypeMap -> Env -> Formula -> Value -> PType -> IO IType
 calcTypeValue tbl env fml _v ty = case _v of
-    Atomic v -> calcTypeAValue env fml v ty id
+    Atomic v -> do
+        (ty', ity) <- calcTypeAValue env fml v
+        if ty /= ty' then
+            error $ "calcTypeValue: Abstraction type mismatch"
+        else return ity
     Fun fdef -> calcTypeFunDef tbl env fml fdef ty
     Pair v1 v2 -> do
         let PPair _ ty1 ty2 = ty
@@ -66,24 +54,23 @@ calcTypeValue tbl env fml _v ty = case _v of
         return (IPair i1 i2)
 
 
-calcTypeAValue :: Env -> Formula -> AValue -> PType -> ((PType, IType) -> (PType,IType)) -> IO IType
-calcTypeAValue env fml _v ty proj = case _v of
-    Var x -> let (ty',theta) = proj (env M.! x) in
-             cast env fml (ty',theta) ty
-    CInt _ -> return IInt
-    CBool _ -> return IBool
-    Op (OpAdd _ _) -> return IInt
-    Op (OpSub _ _) -> return IInt
-    Op (OpLt  _ _) -> return IBool
-    Op (OpLte _ _) -> return IBool
-    Op (OpAnd _ _) -> return IBool
-    Op (OpOr _ _) -> return IBool
-    Op (OpNot _) -> return IBool
+calcTypeAValue :: Env -> Formula -> AValue -> IO (PType,IType)
+calcTypeAValue env fml _v  = case _v of
+    Var x -> return $ env M.! x
+    CInt _ -> return (PInt,IInt)
+    CBool _ -> return (PBool,IBool)
+    Op (OpAdd _ _) -> return (PInt,IInt)
+    Op (OpSub _ _) -> return (PInt,IInt)
+    Op (OpEq  _ _) -> return (PBool,IBool)
+    Op (OpLt  _ _) -> return (PBool,IBool)
+    Op (OpLte _ _) -> return (PBool,IBool)
+    Op (OpAnd _ _) -> return (PBool,IBool)
+    Op (OpOr _ _) -> return (PBool,IBool)
+    Op (OpNot _) -> return (PBool,IBool)
     Op (OpFst _ v) -> 
-        calcTypeAValue env fml v ty (\(PPair _ p1 _, IPair i1 _) -> (p1,i1))
+        (\(PPair _ p1 _, IPair i1 _) -> (p1,i1)) <$> calcTypeAValue env fml v
     Op (OpSnd _ v) -> 
-        calcTypeAValue env fml v ty (\(PPair _ _ p2, IPair _ i2) -> (p2,i2))
-    
+        (\(PPair _ _ p2, IPair _ i2) -> (p2,i2)) <$> calcTypeAValue env fml v
 
 -- Function: calcCondition fml ps 
 -- assumption: fml is a satisfiable formula
@@ -91,7 +78,7 @@ calcTypeAValue env fml _v ty proj = case _v of
 calcCondition :: Formula -> [Formula] -> IO BFormula
 calcCondition _fml _ps = go 0 _fml _ps
     where
-    go _ fml [] = return $ BConst True
+    go _ _ [] = return $ BConst True
     go i fml (p:ps) = do
         let np = Op (OpNot p)
         b1 <- checkSat fml p
@@ -109,7 +96,7 @@ fromBFormula :: [Formula] -> BFormula -> Formula
 fromBFormula ps (BVar i) 
     | i < 0     = Op (OpNot (ps !! (-i)))
     | otherwise = ps !! i
-fromBFormula ps (BConst b) = CBool b
+fromBFormula _ (BConst b) = CBool b
 fromBFormula ps (BOr p1 p2)  = Op (OpOr  (fromBFormula ps p1) (fromBFormula ps p2))
 fromBFormula ps (BAnd p1 p2) = Op (OpAnd (fromBFormula ps p1) (fromBFormula ps p2))
 
@@ -123,7 +110,7 @@ calcTypeTerm tbl env fml _e tau = case _e of
         let subst = M.singleton r v
             rty' = substVPType subst rty
             ps'  = map (substVFormula subst) ps
-        theta <- calcTypeValue tbl env fml v rty
+        theta <- calcTypeValue tbl env fml v rty'
         phi   <- calcCondition fml ps'
         return [ITerm theta phi]
     Let _ x (LValue av) e -> do
