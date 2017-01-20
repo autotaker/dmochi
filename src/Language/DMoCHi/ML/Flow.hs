@@ -1,5 +1,5 @@
 {-# LANGUAGE ViewPatterns, LambdaCase #-}
-module Language.DMoCHi.ML.Flow where
+module Language.DMoCHi.ML.Flow( FlowMap, flowAnalysis ) where
 import qualified Data.HashTable.IO as H
 import Language.DMoCHi.ML.Syntax.PNormal
 import qualified Data.Set as S
@@ -10,6 +10,7 @@ import qualified Data.DList  as DL
 import Control.Monad.Writer
 import Control.Monad.State
 import Data.Hashable
+import Text.PrettyPrint
 
 type HashTable k v = H.BasicHashTable k v
 type Cache = HashTable Key (S.Set Func)
@@ -32,6 +33,7 @@ type Proj = Integer
 
 data Edge = ELabel Label Label    -- ELabel l1 l2 <=> C(l1) \supseteq C(l2)
           | EApp Id Key [Label] Label
+          deriving(Show)
           -- EApp l ls l_x <=> \forall i \in C(l). 
           --                 let (fun ys -> e) = def(i) in
           --                 \forall j \in [0..length ls]. C(labelOf (ys !! j)) \supseteq C(ls !! i)
@@ -39,7 +41,7 @@ data Edge = ELabel Label Label    -- ELabel l1 l2 <=> C(l1) \supseteq C(l2)
 data Func = Func { funcIdent :: Int
                  , funcArgs  :: [Label]
                  , funcBody  :: Label }
-                 deriving(Eq,Ord)
+                 deriving(Eq,Ord, Show)
 
 type Env = M.Map Id Label
 type W e = Writer (DL.DList Edge, DL.DList Func) e
@@ -100,8 +102,8 @@ labelOfId x = labelOfType (KVar x) (getType x)
 labelOfType :: (Integer -> Key) -> Type -> Label
 labelOfType f = go 1
     where
-    go i TInt = LKey $ f i
-    go i TBool = LKey $ f i
+    go _ TInt = LBase
+    go _ TBool = LBase
     go i (TFun _ _) = LKey $ f i
     go i (TPair ty1 ty2) = LPair (go (2*i) ty1) (go (2*i+1) ty2)
 
@@ -128,12 +130,16 @@ type Queue = Q.Seq (Key, [Func])
 saturate :: HashTable Key [([Label], Label)] -> Graph -> Cache -> StateT Queue IO ()
 saturate appTbl graph cache = pop >>= \case
     Just (key, values) -> do
+        liftIO $ putStrLn "pop" 
+        liftIO $ putStrLn $ "key:" ++ show key
+        liftIO $ putStrLn $ "values:" ++ show values
         Just cValues <- liftIO $ H.lookup cache key
         let (nValues, diff) = foldl' (\(vs,ds) v -> if S.member v vs 
                                                      then (vs,ds) 
                                                      else (S.insert v vs, v : ds)) 
                                      (cValues,[]) values
-        when (null diff) $ do
+        liftIO $ putStrLn $ "diff:" ++ show diff
+        unless (null diff) $ do
             liftIO $ H.insert cache key nValues
             Just vs <- liftIO (H.lookup graph key)
             forM_ vs $ \nkey -> push (nkey,diff)
@@ -171,12 +177,15 @@ decompLabel (LKey k) = [k]
 decompLabel (LPair l1 l2) = decompLabel l1 ++ decompLabel l2
 decompLabel LBase = []
 
-flowAnalysis :: Program -> IO (M.Map Id [Int])
+type FlowMap = M.Map Id [Int]
+flowAnalysis :: Program -> IO FlowMap 
 flowAnalysis (Program fs e0) = do
     let (cs,funcs) = (\(a,b) -> (DL.toList a, DL.toList b)) $ execWriter $ do
             let env = M.fromList [ (f, LKey $ KFun (ident fdef))  | (f, fdef) <- fs ]
             mapM_ (genCFunDef env . snd) fs
             genCTerm env LBase e0
+    putStrLn "Constraints"
+    print cs
     let keys = S.toList $ S.fromList $ concat $ 
             map (\case 
                 ELabel l1 l2 -> decompLabel l1 ++ decompLabel l2
@@ -201,5 +210,7 @@ flowAnalysis (Program fs e0) = do
     foldM (\acc e -> case e of
         EApp f key _ _ -> do
             Just values <- H.lookup cache key
-            return $! M.insert f (map funcIdent $ S.toList values) acc
+            let vs = map funcIdent $ S.toList values
+            liftIO $ print $ text (name f) <+> text "->" <+> hsep (map int vs)
+            return $! M.insert f vs acc
         _ -> return acc) M.empty cs
