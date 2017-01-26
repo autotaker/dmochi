@@ -5,7 +5,7 @@ TEST1="example1.txt example2.txt example3.txt example4.txt example5.txt example6
 TEST2="ack.txt copy-1.txt isnil.txt sum.txt fold.txt mc91.txt reverse.txt"
 TEST3="length.txt sum-e.txt copy.txt fold_div.txt fold_fun_list.txt fold_left.txt for_all_eq_pair.txt search.txt zip.txt"
 TESTS=$(find ../sample/mochi -name '*.prog' | sort | sed -e s-../sample/--)
-TESTS=$(find ../sample/algorithm -name '*.prog' | sort | sed -e s-../sample/--)
+#TESTS=$(find ../sample/algorithm -name '*.prog' | sort | sed -e s-../sample/--)
 
 if [ $# -gt 0 ]; then
     TESTS="$@"

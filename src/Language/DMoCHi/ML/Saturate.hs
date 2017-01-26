@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase, BangPatterns #-}
 module Language.DMoCHi.ML.Saturate where
 
 import Control.Monad
@@ -81,7 +81,8 @@ data Context = Context { ctxFlowTbl :: HashTable Int (S.Set ([IType], BFormula))
 type R a = ReaderT Context IO a
 
 
-saturate :: TypeMap -> Program -> IO [ITermType]
+
+saturate :: TypeMap -> Program -> IO (Bool,[ITermType])
 saturate typeMap prog = do
     ctx <- Context <$> H.new
                    <*> pure typeMap
@@ -102,7 +103,9 @@ saturate typeMap prog = do
             if b 
               then go env'
               else return ts
-    runReaderT (go env0) ctx
+    ts <- runReaderT (go env0) ctx
+    let !b = IFail `elem` ts
+    return (b, ts)
 
 getFlow :: Int -> R [([IType], BFormula)]
 getFlow i = do

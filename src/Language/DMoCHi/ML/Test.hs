@@ -67,6 +67,7 @@ data Flag = Help
           | ContextSensitive 
           | Interactive
           | FoolTraces Int
+          | Fusion
           deriving Eq
 data HCCSSolver = IT | GCH  deriving Eq
 
@@ -77,6 +78,7 @@ data Config = Config { targetProgram :: FilePath
                      , contextSensitive :: Bool
                      , foolTraces :: Bool
                      , foolThreshold :: Int
+                     , fusion :: Bool
                      , interactive :: Bool }
 
 
@@ -92,6 +94,7 @@ defaultConfig path = Config { targetProgram = path
                             , contextSensitive = False
                             , foolTraces = False
                             , foolThreshold = 1
+                            , fusion = False
                             , interactive = False }
 
 run :: IO ()
@@ -110,6 +113,7 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
           , Option [] ["context-sensitive"] (NoArg ContextSensitive) 
                    "Enable context sensitive predicate discovery, this also enables --acc-traces flag"
           , Option [] ["fool-traces"] (OptArg (FoolTraces . fromMaybe 1 . fmap read) "N")  "Distinguish fool error traces in refinement phase, and set threshold (default = 1)"
+          , Option [] ["fusion"] (NoArg Fusion) "enable model checking fusion"
           , Option [] ["interactive"] (NoArg Interactive) "interactive counterexample generation" ]
     where
     parseSolver "it" = HCCS IT
@@ -139,6 +143,7 @@ parseArgs = doit
                      AccErrTraces -> acc { accErrTraces = True }
                      ContextSensitive -> acc { accErrTraces = True, contextSensitive = True }
                      FoolTraces n -> acc { foolTraces = True, foolThreshold = n }
+                     Fusion -> acc { fusion = True }
                      Interactive -> acc { interactive = True } ) 
                   (defaultConfig file) opts
         (opts, [], []) -> die ["No target specified\n"]
@@ -209,9 +214,13 @@ doit = do
                 castFreeProgram <- PAbst.elimCast curTypeMap normalizedProgram
                 liftIO $ PNormal.printProgram castFreeProgram
 
-                liftIO $ putStrLn "Saturate"
-                saturationResult <- liftIO $ Saturate.saturate curTypeMap castFreeProgram
-                liftIO $ print saturationResult
+                reachable <- if (fusion conf) 
+                    then do
+                        liftIO $ putStrLn "Saturate"
+                        (reachable,res) <- liftIO $ Saturate.saturate curTypeMap castFreeProgram
+                        liftIO $ print res
+                        return (Just reachable)
+                    else return Nothing
 
                 boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg curTypeMap castFreeProgram
                 let file_boolean = printf "%s_%d.bool" path k
@@ -230,6 +239,11 @@ doit = do
                 -- liftIO $ B.printProgram boolProgram
 
                 r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
+                case (r, reachable) of
+                    (Just _, Just True) -> return ()
+                    (Nothing, Just False) -> return ()
+                    (_, Nothing) -> return ()
+                    _ -> throwError Debugging
                 case r of
                     Just trace -> measure "Refinement" $ do
                         let traceFile = printf "%s_%d.trace.dot" path k
