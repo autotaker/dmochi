@@ -14,9 +14,6 @@ module Language.DMoCHi.ML.Syntax.Typed( Program(..)
                                       , freeVariables
                                       , module Language.DMoCHi.ML.Syntax.Type
                                       ) where
-import Control.Monad
-import Control.Monad.State
-import Language.DMoCHi.Common.Util
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Language.DMoCHi.ML.Syntax.Type
@@ -101,6 +98,7 @@ instance HasType FunDef where
 substV :: Id -> Value -> Value -> Value
 substV x v = go where
     go (Var y) | name x == name y = v
+               | otherwise = Var y
     go (Op op) = Op $ case op of
         OpAdd a b -> OpAdd (go a) (go b)
         OpSub a b -> OpSub (go a) (go b)
@@ -201,7 +199,7 @@ freeVariables = goE S.empty where
         foldl (\acc v -> goV acc env v) (push acc env f) vs
     goLV !acc env (LFun fdef) = goE acc (foldr S.insert env (args fdef)) (body fdef)
     goLV !acc env (LExp _ e) = goE acc env e
-    goLV !acc env LRand = acc
+    goLV !acc _ LRand = acc
     push acc env x | S.member x env = acc
                    | otherwise = S.insert x acc
 

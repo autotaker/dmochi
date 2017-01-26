@@ -74,8 +74,8 @@ substPType :: M.Map Id Id -> PType -> PType
 substPType subst = substVPType (fmap (Atomic . Var) subst)
 
 substVPType :: M.Map Id Value -> PType -> PType
-substVPType subst PInt = PInt
-substVPType subst PBool = PBool
+substVPType _ PInt = PInt
+substVPType _ PBool = PBool
 substVPType subst (PPair t t1 t2) = 
     PPair t (substVPType subst t1) (substVPType subst t2)
 substVPType subst (PFun ty (xs,ty_xs,ps) (r,ty_r,qs)) = 
@@ -114,30 +114,32 @@ substVFormula subst = atomic . go where
             OpFst ty v  -> case go v of 
                 Atomic av -> Atomic $ Op $ OpFst ty av
                 Pair v1 _ -> v1
+                Fun _ -> error "substVFormula: unexpected Fun"
             OpSnd ty v  -> case go v of
                 Atomic av -> Atomic $ Op $ OpSnd ty av
                 Pair _ v2 -> v2
+                Fun _ -> error "substVFormula: unexpected Fun"
             OpNot v     -> Atomic $ Op $ (OpNot . atomic) (go v)
 typeOfAValue :: Env -> AValue -> PType
 typeOfAValue env = go where
     go v = case v of
         Var x -> env M.! x
-        CInt i -> PInt
-        CBool b -> PBool
+        CInt _ -> PInt
+        CBool _ -> PBool
 --        Pair v1 v2 -> PPair (getType v) (go v1) (go v2)
         Op op -> case op of
-            OpAdd v1 v2 -> PInt
-            OpSub v1 v2 -> PInt
-            OpEq  v1 v2 -> PBool
-            OpLt  v1 v2 -> PBool
-            OpLte v1 v2 -> PBool
-            OpAnd v1 v2 -> PBool
-            OpOr  v1 v2 -> PBool
+            OpAdd _v1 _v2 -> PInt
+            OpSub _v1 _v2 -> PInt
+            OpEq  _v1 _v2 -> PBool
+            OpLt  _v1 _v2 -> PBool
+            OpLte _v1 _v2 -> PBool
+            OpAnd _v1 _v2 -> PBool
+            OpOr  _v1 _v2 -> PBool
             OpFst _ v   ->
                 let PPair _ ty1 _ = go v in ty1
             OpSnd _ v   -> 
                 let PPair _ _ ty2 = go v in ty2
-            OpNot v -> PBool
+            OpNot _v -> PBool
 
 initTypeMap :: MonadId m => Program -> m (TypeMap,ScopeMap)
 initTypeMap (Program fs t0) = do
@@ -146,7 +148,7 @@ initTypeMap (Program fs t0) = do
                 Fun fdef -> gather (args fdef ++ fv) (body fdef)
                 Pair v1 v2 -> gather fv (Value v1) >> gather fv (Value v2)
                 Atomic _ -> return ()
-            gather fv (Let s x lv e) = do
+            gather fv (Let _ x lv e) = do
                 case lv of
                     LValue _ -> return ()
                     LApp _ _ _ vs -> mapM_ (gather fv . Value) vs

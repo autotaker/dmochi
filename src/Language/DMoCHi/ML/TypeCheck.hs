@@ -1,14 +1,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Language.DMoCHi.ML.TypeCheck where
 import qualified Data.Map as M
-import Control.Applicative
 import Control.Monad.Except
-import Language.DMoCHi.ML.Syntax.Typed 
-import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
 import Text.PrettyPrint
 import Language.DMoCHi.ML.PrettyPrint.Typed 
+import Language.DMoCHi.ML.Syntax.Typed 
+import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
 import qualified Language.DMoCHi.ML.PrettyPrint.UnTyped as U
-import Debug.Trace
 import Language.DMoCHi.Common.Id
 import Language.DMoCHi.ML.DesugarSynonym
 
@@ -144,6 +142,7 @@ convertV env v = case v of
     U.Var x -> case M.lookup x env of
         Just ty -> pure $ Var $ Id ty x
         Nothing -> throwError $ UndefinedVariable x
+    U.App _ _ -> error "convertV: unexpected App"
     U.CInt i -> pure $ CInt i
     U.CBool b -> pure $ CBool b
     U.Pair v1 v2 -> Pair <$> convertV env v1 <*> convertV env v2

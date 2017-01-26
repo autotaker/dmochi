@@ -13,8 +13,6 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , module Language.DMoCHi.ML.Syntax.Type
                                         ) where
 import Control.Monad
-import Control.Monad.State
-import Language.DMoCHi.Common.Util
 import Language.DMoCHi.Common.Id
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -170,7 +168,7 @@ freeVariables = goE S.empty where
     goLV !acc env (LApp _ _ f vs) = 
         foldl (\acc v -> goV acc env v) (push acc env f) vs
     goLV !acc env (LExp _ e) = goE acc env e
-    goLV !acc env LRand = acc
+    goLV !acc _env LRand = acc
     push acc env x | S.member x env = acc
                    | otherwise = S.insert x acc
 
@@ -178,7 +176,7 @@ alpha :: MonadId m => Value -> m Value
 alpha = alphaV M.empty where
     alphaV :: MonadId m => M.Map Id Id -> Value -> m Value
     alphaV env (Atomic av) = pure $ Atomic (renameA env av)
-    alphaV env (Fun (FunDef l xs e)) = do
+    alphaV env (Fun (FunDef _ xs e)) = do
         l' <- freshInt
         xs' <- mapM alphaId xs
         e' <- alphaE (foldr (uncurry M.insert) env (zip xs xs')) e
@@ -193,21 +191,21 @@ alpha = alphaV M.empty where
     alphaE env (Assume ty av e) = 
         Assume ty (renameA env av) <$> alphaE env e
     alphaE _ (Fail ty) = pure (Fail ty)
-    alphaE env (Branch ty l e1 e2) = do
+    alphaE env (Branch ty _ e1 e2) = do
         l' <- freshInt
         Branch ty l' <$> alphaE env e1 <*> alphaE env e2
 
     alphaLV :: MonadId m => M.Map Id Id -> LetValue -> m LetValue
     alphaLV env (LValue av) = pure $ LValue (renameA env av)
-    alphaLV env (LApp ty l f vs) = 
+    alphaLV env (LApp ty _ f vs) = 
         freshInt >>= (\l' -> LApp ty l' (rename env f) <$> (mapM (alphaV env) vs))
-    alphaLV env (LExp l e) = 
+    alphaLV env (LExp _ e) = 
         freshInt >>= (\l' -> LExp l' <$> alphaE env e)
-    alphaLV env (LRand) = pure LRand
+    alphaLV _env LRand = pure LRand
 
     renameA env (Var x) = Var (rename env x)
-    renameA env (CInt i) = CInt i
-    renameA env (CBool b) = CBool b
+    renameA _env (CInt i) = CInt i
+    renameA _env (CBool b) = CBool b
     renameA env (Op op) = Op $ case op of
         OpAdd v1 v2 -> OpAdd (renameA env v1) (renameA env v2)
         OpSub v1 v2 -> OpSub (renameA env v1) (renameA env v2)
@@ -246,7 +244,7 @@ normalize prog = do
         Typed.LValue v -> do
             v' <- convertV env v
             case v' of
-                Atomic (Var y) -> convertE (M.insert x v' env) e
+                Atomic (Var _) -> convertE (M.insert x v' env) e
                 Atomic av -> Let ty x (LValue av) <$> convertE env e
                 _ -> convertE (M.insert x v' env) e
         Typed.LApp ty' l f vs -> do
@@ -268,7 +266,7 @@ normalize prog = do
     convertE env (Typed.Assume ty v e) = do
         Atomic av <- convertV env v
         Assume ty av <$> convertE env e
-    convertE env (Typed.Fail ty) = pure (Fail ty)
+    convertE _env (Typed.Fail ty) = pure (Fail ty)
     convertE env (Typed.Branch ty l e1 e2) =
         Branch ty l <$> convertE env e1 <*> convertE env e2
             
@@ -280,8 +278,8 @@ normalize prog = do
         case M.lookup x env of
             Nothing -> pure (Atomic $ Var x)
             Just v  -> alpha v
-    convertV env (Typed.CInt i) = pure (Atomic $ CInt i)
-    convertV env (Typed.CBool b) = pure (Atomic $ CBool b)
+    convertV _env (Typed.CInt i) = pure (Atomic $ CInt i)
+    convertV _env (Typed.CBool b) = pure (Atomic $ CBool b)
     convertV env (Typed.Pair v1 v2) = 
         Pair <$> convertV env v1 <*> convertV env v2
     convertV env (Typed.Op op) = (case op of
@@ -297,11 +295,13 @@ normalize prog = do
             case v' of
                 Atomic av -> return $ Atomic $ Op $ OpFst ty av
                 Pair v1 _ -> pure v1
+                Fun _ -> error "convertV: unexpected Fun"
         Typed.OpSnd ty v -> do
             v' <- convertV env v
             case v' of
                 Atomic av -> return $ Atomic $ Op $ OpSnd ty av
                 Pair _ v2 -> pure v2
+                Fun _ -> error "convertV: unexpected Fun"
         Typed.OpNot v -> do
             Atomic av <- convertV env v
             return $ Atomic $ Op $ OpNot av)

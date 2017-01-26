@@ -2,7 +2,6 @@
 module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..)) where
 
 import Language.DMoCHi.ML.Syntax.PNormal
-import Language.DMoCHi.ML.PrettyPrint.PNormal(pprintA)
 import Z3.Monad
 import Control.Monad.IO.Class
 import Control.Monad
@@ -123,6 +122,7 @@ bDDNodeId :: BDDNode a -> Int
 bDDNodeId (Leaf i _) = i
 bDDNodeId (Node i _ _ _) = i
 
+{-
 hiChild :: BDDNode a -> BDDNode a
 hiChild (Node _ _ hi _) = hi
 hiChild _ = error "hiChild: Node expected"
@@ -130,6 +130,7 @@ hiChild _ = error "hiChild: Node expected"
 lowChild :: BDDNode a -> BDDNode a
 lowChild (Node _ _ _ lo) = lo
 lowChild _ = error "lowChild: Node expected"
+-}
 
 instance Eq (BDDNode a) where
     (==) = (==) `on` bDDNodeId

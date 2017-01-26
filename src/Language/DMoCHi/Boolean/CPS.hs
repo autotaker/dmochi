@@ -9,7 +9,6 @@ import Language.DMoCHi.Common.Id
 import Prelude hiding(foldl,foldr,sum,mapM_,concat,mapM)
 import Data.Foldable
 import Data.Traversable
-import Data.Monoid
 
 data Tuple t = One t | Many [t] 
 instance Show t => Show (Tuple t) where

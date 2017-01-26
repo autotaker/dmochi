@@ -1,9 +1,10 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Language.DMoCHi.ML.PredicateAbstraction where
 import Control.Monad
+import Control.Monad.Writer
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
-import qualified Data.DList as DL
+import Text.PrettyPrint
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
@@ -11,11 +12,7 @@ import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
 import qualified Language.DMoCHi.Boolean.PrettyPrint.Typed as B
 import qualified Language.DMoCHi.ML.SMT as SMT
 import Language.DMoCHi.ML.Syntax.PType
-import Language.DMoCHi.Common.Util
 import Language.DMoCHi.Common.Id
-import Control.Monad.Writer
-import Text.PrettyPrint
-import Debug.Trace
 
 type PVar = [(B.Term, Formula)]
 -- getSort (abstFormulae cs pv fmls) == TBool^(length fmls)
@@ -25,10 +22,10 @@ abstFormulae cs pvs fml = do
     bdd <- liftIO $ SMT.abst cs ps
     let sort = B.Tuple [ B.Bool | _ <- fml ]
     let gen qs (SMT.Leaf _ True) = return $ B.T $ reverse qs
-        gen qs (SMT.Leaf _ False) = do
+        gen _ (SMT.Leaf _ False) = do
             omega <- B.Symbol sort <$> freshId "Omega"
             return $ B.Omega omega
-        gen qs (SMT.Node _ v hi lo) 
+        gen qs (SMT.Node _ _ hi lo) 
             | hi == lo = do
                 let q = (B.f_branch (B.C True) (B.C False))
                 gen (q:qs) hi
@@ -37,10 +34,10 @@ abstFormulae cs pvs fml = do
                 term_lo <- gen (B.C False : qs) lo
                 return $ B.f_branch term_hi term_lo
         go [] bdd = gen [] bdd
-        go ((term_p, _):_) (SMT.Leaf _ False) = do
+        go (_:_) (SMT.Leaf _ False) = do
             omega <- B.Symbol sort <$> freshId "Omega1"
             return $ B.Omega omega
-        go ((term_p, _):_) (SMT.Leaf _ True) = error "abstFormulae: unexpected satisfiable leaf"
+        go (_:_) (SMT.Leaf _ True) = error "abstFormulae: unexpected satisfiable leaf"
         go ((term_p, _):pvs') (SMT.Node _ _ hi lo) 
             | hi == lo = go pvs' hi
             | otherwise = do
@@ -109,6 +106,7 @@ cast' cs pv e curTy newTy = case (curTy,newTy) of
                 r'_body <- cast' cs pv'' r_body (substPType subst' ty_r) ty_r'
                 r'_preds <- abstFormulae cs pv'' qs'
                 return $ B.T [r'_body,r'_preds]                                           {- <r_body, r_preds> -}
+    _ -> error "cast: unexpected pattern"
 cast cs pv e curTy newTy = do
     let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintA 0) cs)
         doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintA 0 . snd) pv)
@@ -157,19 +155,19 @@ abstAValue env cs pv = go
     where 
     go v ty = case v of
         ML.Var x -> cast cs pv (B.V (toSymbol x (env M.! x))) (env M.! x) ty
-        ML.CInt i -> return $ B.T []
+        ML.CInt _ -> return $ B.T []
         ML.CBool b -> return $ (B.C b)
 --        ML.Pair v1 v2 -> 
 --            let PPair _ ty1 ty2 = ty in
 --            (\x y -> B.T [x,y]) <$> go v1 ty1 <*> go v2 ty2
         ML.Op op -> case op of
-            ML.OpAdd v1 v2 -> return $ B.T []
-            ML.OpSub v1 v2 -> return $ B.T []
-            ML.OpEq  v1 v2 -> abstFormula cs pv v
-            ML.OpLt  v1 v2 -> abstFormula cs pv v
-            ML.OpLte v1 v2 -> abstFormula cs pv v
-            ML.OpAnd v1 v2 -> abstFormula cs pv v
-            ML.OpOr  v1 v2 -> abstFormula cs pv v
+            ML.OpAdd _v1 _v2 -> return $ B.T []
+            ML.OpSub _v1 _v2 -> return $ B.T []
+            ML.OpEq  _v1 _v2 -> abstFormula cs pv v
+            ML.OpLt  _v1 _v2 -> abstFormula cs pv v
+            ML.OpLte _v1 _v2 -> abstFormula cs pv v
+            ML.OpAnd _v1 _v2 -> abstFormula cs pv v
+            ML.OpOr  _v1 _v2 -> abstFormula cs pv v
             ML.OpFst _ v   -> 
                 let PPair _ _ ty2 = typeOfAValue env v in
                 B.f_proj 0 2 <$> go v (PPair (ML.getType v) ty ty2)

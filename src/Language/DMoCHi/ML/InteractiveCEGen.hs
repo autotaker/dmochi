@@ -1,7 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 module Language.DMoCHi.ML.InteractiveCEGen where
 
-import           Control.Monad
 import           Control.Monad.Fix
 import           Control.Monad.IO.Class
 import           System.Process
@@ -9,7 +8,6 @@ import           Text.Printf
 
 import           Language.DMoCHi.ML.SymbolicExec
 import           Language.DMoCHi.ML.Syntax.PNormal as ML
-import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.Common.Id
 import qualified Language.DMoCHi.ML.SMT as SMT
 
@@ -38,7 +36,7 @@ interactiveCEGen prog path = loop
     where
     loop trace = do
         (_,log,tree) <- symbolicExec prog trace
-        isFeasible <- liftIO $ SMT.sat (map fromSValue (logCnstr log))
+        _ <- liftIO $ SMT.sat (map fromSValue (logCnstr log))
         liftIO $ writeFile path (renderCompTree tree)
         liftIO $ callCommand $ dotCommand path
         liftIO $ callCommand $ viewerCommand path

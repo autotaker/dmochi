@@ -1,7 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables, FlexibleContexts, LambdaCase, BangPatterns #-}
 module Language.DMoCHi.ML.SymbolicExec where
 
-import           Control.Applicative
 import           Control.Monad.Writer
 import           Control.Monad.State.Strict
 import qualified Data.Map as M
@@ -13,9 +12,7 @@ import           Data.Bits
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
 import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
-import qualified Language.DMoCHi.ML.SMT as SMT
 import           Language.DMoCHi.Common.Id
-import           Language.DMoCHi.Common.Util
 
 type Trace = [Bool]
 newtype CallId = CallId { unCallId :: Int } deriving (Eq,Ord)
@@ -105,8 +102,8 @@ instance ML.HasType Accessor where
 
 instance ML.HasType SValue where
     getType (SVar x)  = ML.getType x
-    getType (Int i)   = ML.TInt
-    getType (Bool i)  = ML.TBool
+    getType (Int _)   = ML.TInt
+    getType (Bool _)  = ML.TBool
     getType (P v1 v2) = ML.TPair (ML.getType v1) (ML.getType v2)
     getType (Add _ _) = ML.TInt
     getType (Sub _ _) = ML.TInt
@@ -222,7 +219,7 @@ leaf :: ML.Exp -> CompTree
 leaf e = CompTree e []
 
 bindCls :: CallId -> Id -> SValue -> SValue
-bindCls = (.) bindClsA . AVar
+bindCls callId = bindClsA . AVar callId
 
 bindClsR :: CallId -> SValue -> SValue
 bindClsR j sv = bindClsA (ARet j (ML.getType sv)) sv
@@ -230,7 +227,7 @@ bindClsR j sv = bindClsA (ARet j (ML.getType sv)) sv
 bindClsA :: Accessor -> SValue -> SValue
 bindClsA acsr (C cls) = C cls{ clsAccessors = acsr : clsAccessors cls }
 bindClsA acsr (P v1 v2) = P (bindClsA (AFst acsr) v1) (bindClsA (ASnd acsr) v2)
-bindClsA acsr v = v
+bindClsA _acsr v = v
 
 symbolicExec :: forall m. (MonadId m, MonadFix m) => ML.Program -> Trace -> m (M.Map Id SValue, Log, CompTree)
 symbolicExec prog trace = do

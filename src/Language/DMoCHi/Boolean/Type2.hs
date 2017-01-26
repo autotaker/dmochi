@@ -7,7 +7,6 @@ import Control.Applicative
 import Language.DMoCHi.Boolean.Syntax
 import Language.DMoCHi.Boolean.Flow(FlowGraph,Id)
 import Control.Monad
---import Language.DMoCHi.Boolean.Util
 import Data.Array
 import Data.Array.IO
 import Data.Maybe
@@ -22,7 +21,7 @@ import Text.PrettyPrint
 import Text.Printf
 import Data.Time
 import Language.DMoCHi.Boolean.IType
-import Debug.Trace
+--import Debug.Trace
 
 incrId :: State Id Id
 incrId = do
@@ -261,8 +260,6 @@ initContext (Program defs _) (_,mapSym,leafTbl) = do
     arr <- liftIO $ (newArray (bounds leafTbl) nil :: IO (IOArray Id TTypeList))
     return $ Context (fmap (const nil) mapSym) (M.fromList (map (second (const ty)) defs)) arr []
 
-type STerm = Term (Id,S.Set String)
-
 data Value = VB Bool | Cls Symbol (Term ()) Env FEnv TEnv | Tup [Value]
 type Env = M.Map Symbol Value
 type TEnv = M.Map Symbol VType
@@ -282,7 +279,7 @@ extractCE prog flowEnv genv hist =
     where
     evalFail :: Env -> FEnv -> TEnv -> Term () -> WriterT [Bool] (ReaderT Factory IO) ()
     evalFail env fenv tenv e = {- traceShow (e,tenv) $ -} case e of
-        T s es -> 
+        T _s es -> 
             let sub [] = error "extractCE: Tuple: there must be an term that fails"
                 sub (ei:es') = do
                     tyi <- lift $ saturateTerm fenv tenv ei
@@ -301,8 +298,9 @@ extractCE prog flowEnv genv hist =
                         evalFail (M.insert x ex env) fenv tenv' e2
                     else
                         sub ts 
+                sub (LNil _) = error "evalFail: unexpected pattern" 
             in lift (saturateTerm fenv tenv e1) >>= sub
-        Proj s n d e1 -> evalFail env fenv tenv e1
+        Proj _s _n _d e1 -> evalFail env fenv tenv e1
         If _ b e1 e2 e3 -> do
             ty1 <- lift $ saturateTerm fenv tenv e1
             if TFail `telem` ty1 then
@@ -340,17 +338,23 @@ extractCE prog flowEnv genv hist =
                     v2 <- eval env fenv tenv e2 ty2'
                     evalFail (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0
         Fail _ _ -> return ()
+        C _ _ -> error "evalFail: unexpected pattern"
+        V _ _ -> error "evalFail: unexpected pattern"
+        TF _ -> error "evalFail: unexpected pattern"V
+        Lam _ _ _ -> error "evalFail: unexpected pattern"
+        Omega _ _ -> error "evalFail: unexpected pattern"
     eval :: Env -> FEnv -> TEnv -> Term () -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
     eval env fenv tenv e ety = {- traceShow e $ traceShow ("env",env) $ trace ("type: "++ show ety) $ -} case e of
         V _ x -> return $ env M.! x
-        C s b -> return $ VB b
-        T s es -> 
+        C _ b -> return $ VB b
+        T _ es -> 
             let VTup _ tys = ety in 
             Tup <$> zipWithM (\ei tyi -> eval env fenv tenv ei tyi) es tys
-        TF s -> case ety of
+        TF _ -> case ety of
             VT _ -> return $ VB True
             VF _ -> return $ VB False
-        Lam s x e1 -> return $ Cls x e1 env fenv tenv
+            _ -> error "eval: unexpected pattern"
+        Lam _ x e1 -> return $ Cls x e1 env fenv tenv
         Let _ x e1 e2 ->
             let sub (LCons _ ty1 ts) = do
                     let tenv' = M.insert x ty1 tenv
@@ -360,13 +364,15 @@ extractCE prog flowEnv genv hist =
                         eval (M.insert x ex env) fenv tenv' e2 ety
                     else
                         sub ts
+                sub _ = error "eval: unexpected pattern"
             in lift (saturateTerm fenv tenv e1) >>= sub
-        Proj s n d e1 -> 
+        Proj _ n _ e1 -> 
             let sub (LCons _ ty1@(VTup _ tys) ty') 
                     | ety == tys !! projN n = do
                         Tup vs <- eval env fenv tenv e1 ty1
                         return $ vs !! projN n
-                    | otherwise = sub ty' in
+                    | otherwise = sub ty'
+                sub _ = error "eval: unexpected pattern" in
             lift (saturateTerm fenv tenv e1) >>= sub
         App _ e1 e2 -> do
             ty1 <- lift (saturateTerm fenv tenv e1)
@@ -393,6 +399,8 @@ extractCE prog flowEnv genv hist =
                 eval env fenv tenv e1 vfalse >>
                 tell (if b then [False] else []) >> 
                 eval env fenv tenv e3 ety
+        Fail _ _ -> error "eval: unexpected pattern"
+        Omega _ _ -> error "eval: unexpected pattern"
     telem :: TType -> TTypeList -> Bool
     telem TFail (LFail _) = True
     telem TFail _ = False

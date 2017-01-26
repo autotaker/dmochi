@@ -4,14 +4,12 @@ import Language.DMoCHi.Boolean.IType
 import Language.DMoCHi.Boolean.Flow2 hiding(getId,varId,Context)
 import Language.DMoCHi.Boolean.PrettyPrint.Typed
 import qualified Language.DMoCHi.Boolean.Flow2 as Flow
-import Language.DMoCHi.Boolean.Syntax.Typed(Symbol)
 import Control.Monad
 import Data.Array
 import Data.Array.IO
 import Data.IORef
 import Control.Monad.Reader
 import Control.Monad.Writer
-import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Prelude hiding(elem)
@@ -91,7 +89,7 @@ projType n tys = do
     foldM (\acc _t -> buildTypeList $ lcons _t acc) t0 sorted
 
 saturateTerm :: IOArray Id TTypeList -> M.Map VarId TTypeList -> M.Map VarId VType -> FlowTerm -> M (TTypeList,S.Set (Id,TTypeList))
-saturateTerm flowTbl flowEnv env0 t0 = do
+saturateTerm _flowTbl flowEnv env0 t0 = do
     updateList <- liftIO $ newIORef $ S.empty
     let go env t = do
             -- liftIO $ printf "go %s\n" (take 30 $ show t)
@@ -111,6 +109,8 @@ calcTermTypeAux flowEnv go env _t = case _t of
     V   x -> singleton (env M.! x)
     Fail _ -> buildTypeList lfail
     Omega _ -> buildTypeList lnil
+    Dom _ _ _ -> error "calcTermTypeAux: unexpected pattern"
+    Cod _ _ _ -> error "calcTermTypeAux: unexpected pattern"
     Lam _ x t -> do
         let l = unfoldV $ flowEnv M.! x
         as <- forM l $ \tyx -> (,) tyx <$> go (M.insert x tyx env) t
@@ -224,12 +224,12 @@ initContext prog = do
                 Global -> pure (Flow.getId x, termId t_body)
                 _      -> empty
             go (T _ ts) = ts >>= go
-            go (Lam _ x t) = go t
+            go (Lam _ _ t) = go t
             go (And _ t1 t2) = go t1 <|> go t2
             go (Or  _ t1 t2) = go t1 <|> go t2
             go (Not _ t) = go t
             go (App _ _ t1 t2) = go t1 <|> go t2
-            go (Let _ _ x t1 t2) = go t1 <|> go  t2
+            go (Let _ _ _ t1 t2) = go t1 <|> go  t2
             go (Assume _ _ t1 t2) = go t1 <|> go t2
             go (Branch _ _ _ t1 t2) = go t1 <|> go t2
             go (Fail _) = empty
@@ -270,7 +270,8 @@ extractCE prog flowEnv genv hist = execWriterT $ evalFail env flowEnv genv (main
     env0 = M.fromList [ (f, RFun f t M.empty) | (f,t) <- definitions prog]
     env = foldr (\((fenv, genv),genv') env -> 
             fmap (\(RFun f t phi) ->
-                let tys = case genv' M.! f of VFun _ vf -> unfoldFun vf 
+                let VFun _ vf = genv' M.! f
+                    tys = unfoldFun vf 
                     phi' = foldl' (\acc ty -> 
                                 if M.member (FunAssoc ty) acc 
                                     then acc 
@@ -281,8 +282,8 @@ extractCE prog flowEnv genv hist = execWriterT $ evalFail env flowEnv genv (main
 eval :: VEnv -> FEnv -> TEnv -> FlowTerm -> VType -> WriterT [Bool] (ReaderT Factory IO) Value
 eval env fenv tenv _e ety = case _e of
     V x -> return $ env M.! x
-    C s b -> return $ VB b
-    T s es ->
+    C _ b -> return $ VB b
+    T _ es ->
         let VTup _ tys = ety in
         Tup <$> zipWithM (eval env fenv tenv) es tys
     Lam _ x e1 -> return $ Cls x e1 env fenv tenv
@@ -296,7 +297,7 @@ eval env fenv tenv _e ety = case _e of
                 eval (M.insert x ex env) fenv tenv' e2 ety
             else
                 sub ts)
-    Proj _ _ n d e ->
+    Proj _ _ n _ e ->
         lift (calcTermType fenv tenv e) >>=
         fix (\sub (LCons _ ty1@(VTup _ tys) ty') ->
             if ety === (tys !! n) then do
@@ -318,12 +319,13 @@ eval env fenv tenv _e ety = case _e of
         case v1 of
             Cls x e0 env' fenv' tenv'  -> 
                 eval (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0 ety
-            RFun f (Lam _ x e0) phi -> do
+            RFun _ (Lam _ x e0) phi -> do
                 let (env',tenv',fenv') = phi M.! (FunAssoc (ty2',TPrim ety))
                 eval (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0 ety
+            _ -> error "eval: App: unexpected pattern"
     Branch _ _ b e1 e2 -> do
         ty1 <- lift $ calcTermType fenv tenv e1
-        ty2 <- lift $ calcTermType fenv tenv e2
+        _ <- lift $ calcTermType fenv tenv e2
         if ety `elem` ty1 then do
             when b $ tell [True]
             eval env fenv tenv e1 ety
@@ -351,6 +353,7 @@ eval env fenv tenv _e ety = case _e of
                 else do
                     eval env fenv tenv e1 vtrue
                     eval env fenv tenv e2 vfalse
+            _ -> error "eval: And: unexpected pattern"
     Or _ e1 e2 ->
         case ety of
             VT _ -> do
@@ -369,6 +372,7 @@ eval env fenv tenv _e ety = case _e of
                 vfalse <- buildType (bool False)
                 eval env fenv tenv e1 vfalse
                 eval env fenv tenv e2 vfalse
+            _ -> error "eval: And: unexpected pattern"
     Not _ e ->
         case ety of
             VT _ -> do
@@ -377,7 +381,11 @@ eval env fenv tenv _e ety = case _e of
             VF _ -> do
                 eval env fenv tenv e =<< buildType (bool True)
                 return $ VB False
-
+            _ -> error "eval: And: unexpected pattern"
+    Fail _ -> error "eval: unexpected pattern"
+    Omega _ -> error "eval: unexpected pattern"
+    Dom _ _ _ -> error "eval: unexpected pattern"
+    Cod _ _ _ -> error "eval: unexpected pattern"
 evalFail :: VEnv -> FEnv -> TEnv -> FlowTerm -> WriterT [Bool] (ReaderT Factory IO) ()
 evalFail env fenv tenv _e = case _e of
     T _ es -> 
@@ -393,6 +401,7 @@ evalFail env fenv tenv _e = case _e of
         lift (calcTermType fenv tenv e1) >>=
         fix (\sub l -> case l of
             (LFail _) -> evalFail env fenv tenv e1
+            (LNil _) -> error "evalFail: unexpected LNil"
             (LCons _ ty1 ts) -> do
                 let tenv' = M.insert x ty1 tenv
                 ty2 <- lift $ calcTermType fenv tenv' e2
@@ -438,9 +447,10 @@ evalFail env fenv tenv _e = case _e of
                 case v1 of
                     Cls x e0 env' fenv' tenv' ->
                         evalFail (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0
-                    RFun f (Lam _ x e0) phi -> do
+                    RFun _ (Lam _ x e0) phi -> do
                         let (env',tenv',fenv') = phi M.! (FunAssoc (ty2',TFail))
                         evalFail (M.insert x v2 env') fenv' (M.insert x ty2' tenv') e0
+                    _ -> error "evalFail: App: unexpected pattern"
     Fail _ -> return ()
     And _ e1 e2 -> do
         ty1 <- lift $ calcTermType fenv tenv e1
@@ -457,6 +467,12 @@ evalFail env fenv tenv _e = case _e of
             eval env fenv tenv e1 (head $ unfoldV ty1)
             evalFail env fenv tenv e2
     Not _ e -> evalFail env fenv tenv e
+    C _ _ -> error "evalFail: unexpected pattern"
+    V _ -> error "evalFail: unexpected pattern"
+    Lam _ _ _ -> error "evalFail: unexpected pattern"
+    Omega _ -> error "evalFail: unexpected pattern"
+    Dom _ _ _ -> error "evalFail: unexpected pattern"
+    Cod _ _ _ -> error "evalFail: unexpected pattern"
 
 saturate :: Program -> IO (Maybe [Bool])
 saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where

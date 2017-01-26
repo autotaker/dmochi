@@ -46,7 +46,7 @@ instance Show Term where
                         | otherwise = showParen True (showString (name x) . showChar ':' . showsPrec 0 (getType x))
     -- showsPrec _ (Var x) = showString (name x)
     -- showsPrec _ (Pair t1 t2) = showParen True $ shows t1 . showChar ',' . showChar ' ' . shows t2
-    showsPrec _ (Pred p []) = showString "top"
+    showsPrec _ (Pred _ []) = showString "top"
     showsPrec _ (Pred p ps) = 
         showString p . showChar '(' .
         (foldr1 (\a b -> a . showChar ',' . showChar ' ' . b) (map shows ps)) .
@@ -73,6 +73,6 @@ instance Show Term where
         (showsPrec 3 t1) . showString " \\/ " . (showsPrec 4 t2)
     showsPrec d (Iff t1 t2) = showParen (d >= 3) $
         (showsPrec 3 t1) . showString " = " . (showsPrec 4 t2)
-    showsPrec d (Not t1) = showChar '!' . (showsPrec 6 t1)
+    showsPrec _ (Not t1) = showChar '!' . (showsPrec 6 t1)
 
 

@@ -11,15 +11,10 @@ import Text.Parsec(ParseError)
 import Text.PrettyPrint hiding((<>))
 import Text.Printf
 
-import qualified Language.DMoCHi.Boolean.Syntax as B
-import qualified Language.DMoCHi.Boolean.Sort   as B
-import qualified Language.DMoCHi.Boolean.HORS   as B
-import           Language.DMoCHi.Boolean.Syntax.Typed as B(toUnTyped,tCheck)
-import           Language.DMoCHi.Boolean.PrettyPrint.HORS(pprintHORS,printHORS)
+import           Language.DMoCHi.Boolean.Syntax.Typed as B(tCheck)
 import           Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
-import           Language.DMoCHi.ML.Syntax.UnTyped
+import           Language.DMoCHi.Boolean.Test 
 import           Language.DMoCHi.ML.Parser
-import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
 import           Language.DMoCHi.ML.PrettyPrint.UnTyped
 import           Language.DMoCHi.ML.Alpha
 import qualified Language.DMoCHi.ML.CallNormalize as CallNormalize
@@ -35,13 +30,11 @@ import qualified Language.DMoCHi.ML.Saturate as Saturate
 import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
-import           Language.DMoCHi.Boolean.Test 
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import qualified Language.DMoCHi.ML.HornClauseParser as Horn
-import           Paths_dmochi
 
 data MainError = NoInputSpecified
                | ParseFailed ParseError
@@ -134,7 +127,7 @@ parseArgs = doit
     argv <- getArgs
     printf "Command: %s %s\n" pname (unwords $ map show argv)
     case parse argv of
-        (opts, files, []) | Help `elem` opts -> help
+        (opts, _, []) | Help `elem` opts -> help
         (opts, [file], []) -> return $
             foldl (\acc opt -> case opt of
                      HCCS IT -> acc { hornOption = "-hccs it" }
@@ -144,10 +137,12 @@ parseArgs = doit
                      ContextSensitive -> acc { accErrTraces = True, contextSensitive = True }
                      FoolTraces n -> acc { foolTraces = True, foolThreshold = n }
                      Fusion -> acc { fusion = True }
-                     Interactive -> acc { interactive = True } ) 
+                     Interactive -> acc { interactive = True } 
+                     Help -> error "unexpected"
+                     ) 
                   (defaultConfig file) opts
-        (opts, [], []) -> die ["No target specified\n"]
-        (opts, files, []) -> die ["Multiple targets Specified\n"]
+        (_, [], []) -> die ["No target specified\n"]
+        (_, _, []) -> die ["Multiple targets Specified\n"]
         (_,_,errs) -> die errs
 
 data CEGARResult a = Safe | Unsafe | Refine a
@@ -222,12 +217,12 @@ doit = do
                         return (Just reachable)
                     else return Nothing
 
-                boolProgram' <- measure "Predicate Abstraction" $ PAbst.abstProg curTypeMap castFreeProgram
+                boolProgram <- measure "Predicate Abstraction" $ PAbst.abstProg curTypeMap castFreeProgram
                 let file_boolean = printf "%s_%d.bool" path k
-                liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
+                liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram
                 liftIO $ putStrLn "Converted program"
-                liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
-                case runExcept (B.tCheck boolProgram') of
+                liftIO $ putStrLn $ render $ B.pprintProgram boolProgram
+                case runExcept (B.tCheck boolProgram) of
                     Left (s1,s2,str,ctx) -> do
                         liftIO $ do
                             printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
@@ -235,10 +230,8 @@ doit = do
                                 printf "Context %d: %s\n" i (show t)
                         throwError $ BooleanError "Abstracted Program is ill-typed"
                     Right _ -> return ()
-                let boolProgram = B.toUnTyped boolProgram'
-                -- liftIO $ B.printProgram boolProgram
 
-                r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
+                r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram
                 case (r, reachable) of
                     (Just _, Just True) -> return ()
                     (Nothing, Just False) -> return ()

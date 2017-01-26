@@ -1,0 +1,54 @@
+type 'a array = int * ([] -> 'a);;
+
+let make_array : [int] -> int array =
+    fun size ->
+        let f : [] -> int = fun () -> 0 in
+        (size, f);;
+
+let get : [int array,int] -> int =
+    fun array idx -> 
+        let n = array.fst in 
+        let f = array.snd in
+        let tmp : int = assert( 0 <= idx && idx < n ) in
+        f ();;
+
+let update : [int array,int,int] -> int array =
+    fun array idx value ->
+        let n = array.fst in
+        let f = array.snd in
+        let tmp : int = assert( 0 <= idx && idx < n ) in
+        let g : [] -> int = fun () -> value <> f () in
+        (n, g);;
+
+
+let print_int : [int] -> int = fun i -> 0;;
+
+let bcopy : [int,int array,int array, int] -> int array =
+    fun m src des i ->
+        if i >= m then
+            des
+        else let v = get src i in
+             let des = update des i v in
+             bcopy m src des (i + 1);;
+
+let print_array : [int,int array, int] -> int =
+    fun m array i ->
+        if i >= m then 
+            0
+        else let v = get array i in
+             let r1 = print_int v in
+             let r2 = print_array m array (i + 1) in
+             r2;;
+
+let f : [int, int array, int array] -> int =
+    fun m src des ->
+        let array = bcopy m src des 0 in
+        print_array m array 0;;
+        
+let n = * in
+let array1 = make_array n in
+let array2 = make_array n in
+assume n > 0;
+let r = f n array1 array2 in
+r
+

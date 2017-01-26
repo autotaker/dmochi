@@ -6,7 +6,6 @@ import Language.DMoCHi.Boolean.Syntax.Typed(Size,Index)
 import Control.Monad
 import Control.Monad.Writer
 import Control.Monad.State
-import Control.Applicative
 import Control.Monad.Except
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -38,7 +37,8 @@ data Term = C Bool
           | And SLabel Term Term
           | Or  SLabel Term Term
           | Not SLabel Term
-          | Fail SSort deriving(Ord,Eq,Show)
+          | Fail SSort 
+          | Omega SSort deriving(Ord,Eq,Show)
 
 -- CPSTerm should has sort s ::= X | Bool | t -> s 
 --                         t ::= s | [t_1..t_k]
@@ -110,6 +110,7 @@ instance HasSSort Term where
     getSSort (Or _ _ _)  = SBool
     getSSort (Not _ _)   = SBool
     getSSort (Fail s) = s
+    getSSort (Omega s) = s
 
 -- insert labels
 convert :: (MonadId m, Applicative m) => B.Program -> m Program
@@ -173,6 +174,9 @@ convertT env = \case
     B.Fail x -> do
         sx <- convertS $ B.getSort x
         return $ Fail sx
+    B.Omega x -> do
+        sx <- convertS $ B.getSort x
+        return $ Omega sx
     B.And t1 t2 -> And <$> freshId "l" <*> convertT env t1 <*> convertT env t2
     B.Or t1 t2 -> Or <$> freshId "l" <*> convertT env t1 <*> convertT env t2
     B.Not t -> Not <$> freshId "l" <*> convertT env t
@@ -262,6 +266,7 @@ gatherT = \case
         tell $ pure (l,v)
         return v
     Fail _ -> pure Cont
+    Omega _ -> pure Cont
 
 gatherP :: Program -> [Constraint]
 gatherP (Program ds t0) = toList $ execWriter doit where
@@ -335,6 +340,7 @@ requireCont env = \case
     Or  l _ _ -> S.member l env
     Not l _ -> S.member l env
     Fail _ -> True
+    Omega _ -> True
 
 
 cpsN :: (MonadId m, Applicative m) => S.Set SLabel -> Term -> m CPSTerm
@@ -403,6 +409,7 @@ cpsC env _t k = case _t of
         cps env t1 =<< (lam b <$> 
             (CPSIf (CPSVar b) <$> (cps env t2 k) <*> pure CPSOmega))
     Fail _ -> pure CPSFail
+    Omega _ -> pure CPSOmega
     Branch _ t1 t2 -> do
         k' <- freshSym "k" (transformS env (getSSort t1) B.:-> B.X)
         t' <- CPSBranch <$> cps env t1 (CPSVar k') <*> cps env t2 (CPSVar k')
@@ -537,6 +544,8 @@ tCheck (ds,t0) = doit where
         CPSVar x -> return $ B.getSort x
         CPSFail -> return B.X
         CPSOmega -> return B.X
+        CPSTuple _ -> error "tCheck: cannot be a tuple"
+        CPSProj _ _ _ _ -> error "tCheck: cannot be a projection"
         CPSBranch t1 t2 -> do
             check "branch fst" B.X =<< go t1
             check "branch snd" B.X =<< go t2
@@ -663,6 +672,8 @@ elimBool :: M.Map String CPSTerm -> CPSTerm -> CPSTerm
 elimBool env CPSTrue = env M.! "true"
 elimBool env CPSFalse = env M.! "false"
 elimBool _ (CPSVar x) = CPSVar (B.modifySort elimBoolSort x)
+elimBool _ (CPSTuple _) = error "elimBool: unexpected projection"
+elimBool _ (CPSProj _ _ _ _) = error "elimBool: unexpected projection"
 elimBool env (CPSIf b t1 t2) =
     (env M.! "if") `f_cpsapp` elimBool env b
                    `f_cpsapp` elimBool env t1

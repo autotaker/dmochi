@@ -1,0 +1,28 @@
+let make_array : [int] -> [int] -> int =
+    fun n -> fun i ->
+        if i < n then 0 else Fail;;
+
+let update : [int, int, ([int] -> int), int] -> [int] -> int =
+    fun i n des x ->
+        let v = des i in
+        let res : [int] -> int = fun j -> if i = j then x else let r = des j in r
+        in res;;
+
+let bcopy : [int,([int] -> int), int] -> [int] -> int =
+    fun m des i ->
+        if i >= m then
+            des
+        else let des = update i m des 0 in
+             bcopy m des (i + 1);;
+
+let print_array : [int,([int] -> int), int] -> int =
+    fun m array i ->
+        if i >= m then 
+            0
+        else let v = array (i+1) in
+             print_array m array (i + 1);;
+
+let n = * in
+assume n > 0;
+let array = bcopy n (make_array n) 0 in
+print_array n array 0

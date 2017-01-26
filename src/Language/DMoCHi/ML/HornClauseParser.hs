@@ -4,7 +4,6 @@ import qualified Text.Parsec.Token as P
 import Text.Parsec.Expr
 import Text.Parsec.Language(emptyDef)
 import Text.Parsec.String
-import Control.Applicative hiding((<|>),many,optional)
 import Language.DMoCHi.ML.Syntax.PNormal
 import qualified Data.Map as M
 
@@ -99,6 +98,7 @@ exprP env = it where
     prefix name fun       = Prefix (reservedOp name >> pure fun)
     prefix' name fun      = Prefix (reserved name >> pure fun)
     scalar (CInt c) t = foldl1 (after2 Op OpAdd) [ t | _ <- [1..c]]
+    scalar _ _ = error "exprP: scalar: non-linear term is unsupported"
     termP = Var <$> (fmap (\x -> Id (env M.! x) x) identifier) <* optional (parens (pure ()))
         <|> CInt <$> natural 
         <|> CBool True <$ reserved "true" 

@@ -14,8 +14,6 @@ import Data.Array
 import Text.Printf
 import Control.Monad.IO.Class
 import Data.Char(isDigit)
-import Debug.Trace
-import Language.DMoCHi.ML.PrettyPrint.Typed
 
 type InlineLimit = Int
 
@@ -91,11 +89,11 @@ inline limit prog = doit
     
 inlineF :: MonadId m => M.Map Id IValue -> FunDef -> m FunDef
 inlineF env (FunDef l x e) = FunDef l x . simplify <$> inlineE env e
-inlineE env (Value v) = return (Value v)
+inlineE _ (Value v) = return (Value v)
 inlineE env (Let ty x lv e) = do
     (lv',iv) <- case lv of
         LValue v -> return (lv, eval env v)
-        LApp ty0 l f vs -> 
+        LApp ty0 _ f vs -> 
             case M.lookup f env of
                 Just (IFun (FunDef _ ys e0)) -> do
                     ys'  <- mapM alphaId ys
@@ -104,6 +102,7 @@ inlineE env (Let ty x lv e) = do
                     let e0'' = foldr (\(y',v) acc -> Let ty0 y' (LValue v) acc) e0' (zip ys' vs)
                     return (LExp i e0'', INil)
                 Just INil -> return (lv, INil)
+                Just (IPair _ _) -> error "inlineF: impossible"
                 Nothing -> return (lv, INil)
         LFun fdef -> do
             fdef' <- inlineF env fdef
@@ -113,7 +112,7 @@ inlineE env (Let ty x lv e) = do
     Let ty x lv' <$> inlineE (M.insert x iv env) e
 inlineE env (Fun fdef) = Fun <$> inlineF env fdef
 inlineE env (Assume ty v e) = Assume ty v <$> inlineE env e
-inlineE env (Fail ty) = return (Fail ty)
+inlineE _ (Fail ty) = return (Fail ty)
 inlineE env (Branch ty l e1 e2) = Branch ty l <$> inlineE env e1 <*> inlineE env e2
 
 eval :: M.Map Id IValue -> Value -> IValue
@@ -124,9 +123,9 @@ eval env (Op (OpFst _ v)) = case eval env v of IPair v1 _ -> v1
                                                _ -> INil
 eval env (Op (OpSnd _ v)) = case eval env v of IPair _ v2 -> v2 
                                                _ -> INil
-eval env (Op _) = INil
-eval env (CInt _) = INil
-eval env (CBool _) = INil
+eval _ (Op _) = INil
+eval _ (CInt _) = INil
+eval _ (CBool _) = INil
 
 alphaId :: MonadId m => Id -> m Id
 alphaId x = Id (getType x) <$> freshId (elim $ name x)
@@ -153,7 +152,7 @@ alphaLabel = goE
         x' <- alphaId x
         Let ty x' lv' <$> goE (M.insert x x' env) e
     goE env (Assume ty v e) = Assume ty <$> goV env v <*> goE env e
-    goE env (Fail ty) = pure $ Fail ty
+    goE _ (Fail ty) = pure $ Fail ty
     goE env (Fun (FunDef _ ys e0)) = do
         ys' <- mapM alphaId ys
         let env' = foldr (uncurry M.insert) env (zip ys ys')
@@ -161,8 +160,8 @@ alphaLabel = goE
     goE env (Branch ty _ e1 e2) =
         Branch ty <$> freshInt <*> goE env e1 <*> goE env e2
     goV env (Var x) = Var <$> rename env x
-    goV env (CInt i) = pure $ CInt i
-    goV env (CBool b) = pure $ CBool b
+    goV _ (CInt i) = pure $ CInt i
+    goV _ (CBool b) = pure $ CBool b
     goV env (Pair v1 v2) = Pair <$> goV env v1 <*> goV env v2
     goV env (Op op) = Op <$> case op of
         OpAdd v1 v2 -> OpAdd <$> goV env v1 <*> goV env v2
@@ -195,11 +194,11 @@ simplify (Fun fdef) = Fun fdef{ body = simplify $ body fdef }
 simplify (Branch ty l e1 e2) = Branch ty l (simplify e1) (simplify e2)
 
 straight :: Exp -> Type -> (LetValue -> Exp) -> Maybe Exp
-straight (Value v) ty cont = Just (cont (LValue v))
+straight (Value v) _ cont = Just (cont (LValue v))
 straight (Let _ x lv e) ty cont = Let ty x lv <$> straight e ty cont
 straight (Assume _ v e) ty cont = Assume ty v <$> straight e ty cont
-straight (Fail _) ty cont = Nothing
-straight (Fun fdef) ty cont = Just (cont (LFun fdef))
+straight (Fail _) _ _ = Nothing
+straight (Fun fdef) _ cont = Just (cont (LFun fdef))
 straight (Branch _ l e1 e2) ty cont = 
     Branch ty l <$> straightFail e1 ty <*> straight e2 ty cont <|>
     Branch ty l <$> straight e1 ty cont <*> straightFail e2 ty
@@ -237,7 +236,7 @@ elimIndirectionF env (FunDef l x e) = FunDef l x (elimIndirection env e)
 elimIndirection :: M.Map Id Id -> Exp -> Exp
 elimIndirection env (Value v) = Value $ renameV env v
 elimIndirection env (Fun fdef) = Fun (elimIndirectionF env fdef)
-elimIndirection env (Let ty x (LValue (Var y)) e) = elimIndirection (M.insert x (rename env y) env) e
+elimIndirection env (Let _ x (LValue (Var y)) e) = elimIndirection (M.insert x (rename env y) env) e
 elimIndirection env (Let ty x lv e) = Let ty x lv' e' where
     lv' = case lv of
         LValue v -> LValue (renameV env v)
@@ -247,7 +246,7 @@ elimIndirection env (Let ty x lv e) = Let ty x lv' e' where
         LRand -> LRand
     e' = elimIndirection env e
 elimIndirection env (Assume ty v e) = Assume ty (renameV env v) (elimIndirection env e)
-elimIndirection env (Fail ty) = Fail ty
+elimIndirection _ (Fail ty) = Fail ty
 elimIndirection env (Branch ty l e1 e2) = 
     Branch ty l (elimIndirection env e1) (elimIndirection env e2)
 

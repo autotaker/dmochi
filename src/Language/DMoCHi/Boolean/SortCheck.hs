@@ -10,7 +10,6 @@ import Language.DMoCHi.Boolean.Syntax
 import Language.DMoCHi.Boolean.Util
 import qualified Data.Sequence as Q
 import qualified Data.Map as M
-import Data.Traversable(traverse)
 
 sortCheck :: Program -> [Symbol] -> Either Err (M.Map Symbol Sort)
 sortCheck prog syms = runExcept $ do

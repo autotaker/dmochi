@@ -6,7 +6,6 @@ import Data.Function
 import Data.Time
 import Text.Printf
 import Control.Monad.Except
-import Control.Monad.IO.Class
 
 rec :: a -> ((a -> b) -> a -> b) -> b
 rec = flip fix

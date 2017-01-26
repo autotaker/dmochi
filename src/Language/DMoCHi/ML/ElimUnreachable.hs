@@ -1,14 +1,10 @@
 {-# LANGUAGE ViewPatterns #-}
 module Language.DMoCHi.ML.ElimUnreachable where
 
-import Control.Monad
-import Language.DMoCHi.Common.Util
-import Language.DMoCHi.Common.Id
 import Language.DMoCHi.ML.Syntax.Typed
 
 import qualified Data.Set as S
 import qualified Data.Map as M
-import Debug.Trace
 
 elimUnreachable :: Program -> Program
 elimUnreachable prog = prog' where

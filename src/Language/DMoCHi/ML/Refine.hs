@@ -4,11 +4,10 @@ module Language.DMoCHi.ML.Refine where
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Writer
-import           Control.Monad.State.Strict
 import           Control.Arrow (first)
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
-import           Data.List(intersperse,nub,foldl',sortBy)
+import           Data.List(intersperse,foldl',sortBy)
 import           Text.PrettyPrint
 import           Text.Printf
 --import Debug.Trace
@@ -65,20 +64,25 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
     clsTbl = IM.fromList [ (unClosureId (clsId (closure i)), i) | i <- closures ]
     rtnTbl :: IM.IntMap ReturnInfo
     rtnTbl = IM.fromList [ (unCallId (rcallId i), i) | i <- returns ]
+    {-
     callTbl :: IM.IntMap CallInfo
     callTbl = IM.fromList [ (unCallId (callId i), i) | i <- calls ]
+    -}
     clsLookup :: ClosureId -> ClosureInfo
     clsLookup j = clsTbl IM.! unClosureId j
     rtnLookup :: CallId -> ReturnInfo
     rtnLookup j = rtnTbl IM.! unCallId j
+    {-
     callLookup :: CallId -> CallInfo
     callLookup j = callTbl IM.! unCallId j
+    -}
     isBase x = case ML.getType x of 
         (ML.TFun _ _) -> False
         _ -> True
     flatten (SVar x) env | isBase x  = (SVar x) : env
                          | otherwise = env
     flatten (P v1 v2) env = flatten v1 (flatten v2 env)
+    flatten _ _ = error "genRTypeFactor: flatten: unexpected"
     push = flatten . decompose
     meta_add (Meta i l) s = Meta i (s:l)
 
@@ -89,8 +93,8 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
         case ML.getType acsr of
             ML.TBool -> return RBool
             ML.TInt  -> return RInt
-            ML.TPair ty1 ty2 -> RPair <$> gen meta env (AFst acsr) <*> gen meta env (ASnd acsr)
-            ML.TFun ty_args ty_ret -> do
+            ML.TPair _ty1 _ty2 -> RPair <$> gen meta env (AFst acsr) <*> gen meta env (ASnd acsr)
+            ML.TFun _ty_args ty_ret -> do
                 let cs = [ info | info <- calls, acsr `elem` callAccessors info ]
                 if null cs then
                     return (RFun IM.empty)
@@ -101,7 +105,6 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
                     fmap (RFun . IM.fromList) $ forM cs $ \info -> do
                         let j = callId info
                             path = callContext info
-                            ReturnInfo _ _ mv = rtnLookup j
                         -- 変数スコープの例
                         -- fの中でxが参照できたり、sの第一要素の中でsの第二要素が参照できることに注意
                         -- { x : int, f : { y : int | P(y,x) } -> { r : int | Q(r,y,x) } | U(x) } -> 
@@ -112,7 +115,7 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
                         let rv = retValue $ rtnLookup j
                         posTy <- genPost (meta_add meta "post") path env' (fmap (const (ARet j ty_ret)) rv)
                         return (unCallId j, RFunAssoc xs arg_tys (Formula (meta_add meta "pre") p1 path env') posTy)
-    genPost meta path env Nothing = return RPostTypeFailure
+    genPost _ _ _ Nothing = return RPostTypeFailure
     genPost meta path env (Just acsr) = do
         rj <- ML.Id (ML.getType acsr) <$> freshId "r"
         let env' = push rj env
@@ -207,35 +210,35 @@ evalRTypeA env = go where
         (RPair r1 r2, P sv1 sv2)
     -}
     go (ML.Op (ML.OpAdd v1 v2)) = 
-        let (r1,sv1) = go v1 
-            (r2,sv2) = go v2 in
+        let (_,sv1) = go v1 
+            (_,sv2) = go v2 in
         (RInt,Add sv1 sv2)
     go (ML.Op (ML.OpSub v1 v2)) = 
-        let (r1,sv1) = go v1 
-            (r2,sv2) = go v2 in
+        let (_,sv1) = go v1 
+            (_,sv2) = go v2 in
         (RInt,Sub sv1 sv2)
     go (ML.Op (ML.OpEq  v1 v2)) = 
-        let (r1,sv1) = go v1 
-            (r2,sv2) = go v2 in
+        let (_,sv1) = go v1 
+            (_,sv2) = go v2 in
         (RBool,Eq sv1 sv2)
     go (ML.Op (ML.OpLt  v1 v2)) = 
-        let (r1,sv1) = go v1 
-            (r2,sv2) = go v2 in
+        let (_,sv1) = go v1 
+            (_,sv2) = go v2 in
         (RBool,Lt sv1 sv2)
     go (ML.Op (ML.OpLte  v1 v2)) = 
-        let (r1,sv1) = go v1 
-            (r2,sv2) = go v2 in
+        let (_,sv1) = go v1 
+            (_,sv2) = go v2 in
         (RBool,Lte sv1 sv2)
     go (ML.Op (ML.OpAnd  v1 v2)) = 
-        let (r1,sv1) = go v1 
-            (r2,sv2) = go v2 in
+        let (_,sv1) = go v1 
+            (_,sv2) = go v2 in
         (RBool,And sv1 sv2)
     go (ML.Op (ML.OpOr  v1 v2)) = 
-        let (r1,sv1) = go v1 
-            (r2,sv2) = go v2 in
+        let (_,sv1) = go v1 
+            (_,sv2) = go v2 in
         (RBool,Or sv1 sv2)
     go (ML.Op (ML.OpNot v)) = 
-        let (r,sv) = go v in (RBool,Not sv)
+        let (_,sv) = go v in (RBool,Not sv)
     go (ML.Op (ML.OpFst _ v)) = let (RPair a _,P sv _) = go v in (a,sv)
     go (ML.Op (ML.OpSnd _ v)) = let (RPair _ b,P _ sv) = go v in (b,sv)
 
@@ -290,13 +293,15 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
 
         let callTbl :: M.Map (CallId,Int) CallId
             callTbl = M.fromList [ ((pcallId info,callLabel info),callId info)| info <- calls ]
+            {-
             closureMap :: M.Map (CallId,Int) ClosureId
             closureMap = M.fromList [ ((cCallId info,label info),clsId $ closure info)| info <- closures ]
+            -}
             branchMap :: M.Map (CallId,Int) Bool
             branchMap = M.fromList [ ((bCallId info,branchId info),direction info) | info <- branches ]
             letMap :: M.Map (CallId, Int) (CompTreePath, Maybe SValue)
             letMap = M.fromList [ ((lCallId info,lLabel info),(lContext info,evalValue info)) | info <- letexps ]
-        genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,v) -> do
+        genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,_) -> do
             ty <- gen (ML.name f) [] (AVar (CallId 0) f)
             return (f,(ty,decompose f))
         dump "RefineEnv" (M.assocs genv')
@@ -309,7 +314,7 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
         let genClause :: Maybe LFormula -> [Either SValue LFormula] -> Horn.Clause
             genClause hd body = Horn.Clause chd cbody
                 where
-                    f fml@(Formula meta i path svs) 
+                    f fml@(Formula meta i _ svs) 
                         | contextSensitive = fml
                         | otherwise = Formula meta i [] svs
                     chd = case hd of
@@ -338,7 +343,7 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                     svs <- mapM (genSValue env) vs
                     let subst = M.fromList $ zip (argNames ty_f) svs
                     let tys = map (substRType subst) (argTypes ty_f)
-                    svs <- mapM (\(v,sv,theta) -> checkValue env cs callSite v sv theta) $ zip3 vs svs tys
+                    _svs <- mapM (\(v,sv,theta) -> checkValue env cs callSite v sv theta) $ zip3 vs svs tys
                     clause cs (substLFormula subst (preCond ty_f))
                     case resType ty_f of
                         resTy@(RPostType _ _ _) -> do
@@ -353,13 +358,6 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                     let x' = decompose x 
                         env' = M.insert x (RInt,x') env
                     check env' cs callSite e tau
-{-
-                ML.Let _ f (ML.LFun fdef) e -> do
-                    theta <- checkFunDef (ML.name f) env cs callSite fdef Nothing
-                    let env' = M.insert f (theta,decompose f) env
-                    addFuncBinding (ML.ident fdef) theta
-                    check env' cs callSite e tau
--}
                 ML.Let _ x (ML.LExp label e') e -> do
                     let (path,letv) = letMap M.! (callSite, label)
                     tau' <- genP (ML.name x ++ "_" ++ show label) path (M.keys env) (fmap (const (AVar callSite x)) letv)
@@ -374,16 +372,6 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                                 cs'  = Right (posCond tau'') : cs
                             check env' cs' callSite e tau
                         RPostTypeFailure -> return ()
-                        {- 
-                ML.Fun fdef -> do
-                    case tau of
-                        RPostType _ rty cond -> do
-                            checkFunDef "fun" env cs callSite fdef (Just rty)
-                            clause cs cond
-                        RPostTypeFailure -> do
-                            let s = render $ ML.pprintF fdef
-                            error $ "This function " ++ s ++ " cannot have the refinement type" ++ show tau
-                            -}
                 ML.Assume _ v e -> do
                     let (_,sv) = evalRTypeA env v
                     let cs' = Left sv : cs
@@ -399,7 +387,7 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                         RPostType _ _ _ -> do
                             sv <- genSValue env v
                             let tau' = substPostType (M.singleton (posName tau) sv) tau
-                            sv <- checkValue env cs callSite v sv (posType tau')
+                            _sv <- checkValue env cs callSite v sv (posType tau')
                             clause cs (posCond tau')
                         RPostTypeFailure -> do
                             let s = render $ ML.pprintV 0 v
@@ -408,15 +396,8 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                     case tau of
                         RPostTypeFailure -> failClause cs
                         _ -> error $ "This failure term cannot have the refinement type" ++ show tau
-            checkFunDef fname env cs callSite fdef@(ML.FunDef label xs e0) mtheta = do
-                theta@(RFun fassoc) <- case mtheta of 
-                    Just it -> return it
-                    Nothing -> error "checkFunDef unsupported"
-                    {-
-                        let clsId = closureMap M.! (callSite,label)
-                            meta  = fname++ "_" ++ show label in
-                        gen meta (M.keys env) (C (Cls fdef clsId undefined []))
-                        -}
+            checkFunDef _fname env cs _callSite (ML.FunDef _ xs e0) theta = do
+                let RFun fassoc = theta 
                 forM_ (IM.assocs fassoc) $ \(j,ty_f) -> do
                     let xsj = argNames ty_f
                         ty_xsj = argTypes ty_f
@@ -438,8 +419,9 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                     (rty, sv) = evalRTypeA env av
                 go (ML.Pair v1 v2) (P _sv1 _sv2) (RPair rty1 rty2) =
                     P <$> go v1 _sv1 rty1 <*> go v2 _sv2 rty2
+                go (ML.Pair _ _) _ _ = error "checkValue: ML.Pair: unexpected pattern"
                 go (ML.Fun fdef) sv theta = 
-                    sv <$ checkFunDef "fun" env cs callSite fdef (Just theta)
+                    sv <$ checkFunDef "fun" env cs callSite fdef theta
                 
             clause cs fml = do
                 liftIO $ printf "Clause: %s ==> %s\n" (showCs cs) (show fml)
@@ -460,20 +442,20 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                             let rtys1' = map (substRType subst) rtys1
                             zipWithM (subType cs') rtys2 rtys1'
                             subTypePost cs' (substPostType subst pty1) pty2
+                    (_, _) -> error "subType: unexpected pattern"
             subTypePost cs (RPostType r1 ty1 cond1) (RPostType r2 ty2 cond2) = do
                 let subst = M.singleton r1 (decompose r2)
                 let cs' = Right (substLFormula subst cond1) : cs
                 clause cs' cond2
                 subType cs' (substRType subst ty1) ty2
-            subTypePost cs RPostTypeFailure RPostTypeFailure = return ()
+            subTypePost _ RPostTypeFailure RPostTypeFailure = return ()
             subTypePost cs ty1 ty2 = error $ "subTypePost: unexpected subtyping:" ++ show (cs,ty1,ty2) 
             failClause cs = do
                 liftIO $ printf "Clause: %s ==> _|_\n" (showCs cs) 
                 addClause ([10],genClause Nothing cs)
         forM_ (ML.functions prog) $ \(f,fdef) -> do
-            theta <- checkFunDef (ML.name f) genv' [] (CallId 0) fdef (Just $ fst $ genv' M.! f)
+            theta <- checkFunDef (ML.name f) genv' [] (CallId 0) fdef (fst $ genv' M.! f)
             addFuncBinding (ML.ident fdef) theta
-        x <- freshId "main"
         check genv' [] (CallId 0) (ML.mainTerm prog) RPostTypeFailure
         return ()
 
@@ -527,7 +509,7 @@ atomOfValue = \case
 substPostType :: M.Map Id SValue -> RPostType -> RPostType
 substPostType subst (RPostType r rty cond) =
     RPostType r (substRType subst rty) (substLFormula subst cond)
-substPostType subst RPostTypeFailure = RPostTypeFailure
+substPostType _ RPostTypeFailure = RPostTypeFailure
 
 -- assume that v is a decomposed value
 substRType :: M.Map Id SValue -> RType -> RType
@@ -568,9 +550,9 @@ substSValue subst _sv = case _sv of
     And sv1 sv2 -> And (substSValue subst sv1) (substSValue subst sv2)
     Or  sv1 sv2 -> Or (substSValue subst sv1) (substSValue subst sv2)
     Not sv1     -> Not (substSValue subst sv1)
-    C cls       -> error "substSValue: substituting closure is not supported"
-    Int i       -> _sv
-    Bool b      -> _sv
+    C _       -> error "substSValue: substituting closure is not supported"
+    Int _       -> _sv
+    Bool _      -> _sv
 
 
 -- penv :: i -> (xs,fml) s.t. P_{i} = \xs. fml
@@ -589,6 +571,7 @@ refinePType _ _ RBool PAbst.PBool = PAbst.PBool
 refinePType _ _ RInt PAbst.PInt = PAbst.PInt
 refinePType penv env (RPair rty1 rty2) (PAbst.PPair ty pty1 pty2) = 
     PAbst.PPair ty (refinePType penv env rty1 pty1) (refinePType penv env rty2 pty2)
+
 refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
     where
     pty' = uncurry (PAbst.PFun ty) $ foldl' f (pty_x0, pty_r0) (IM.elems fassoc)
@@ -599,15 +582,17 @@ refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
         abst_ptys' = zipWith (refinePType penv env') (argTypes as) abst_ptys
         pty_x' = (abst_xs, abst_ptys', PAbst.updateFormula pre abst_fml)
         pty_r' = refineTermType penv env' (resType as) pty_r
+refinePType _ _ _ _ = error "refinePType: unexpected pattern"
 
 refineLFormula :: IM.IntMap ([Id], ML.AValue) -> M.Map String ML.AValue -> LFormula -> PAbst.Formula
-refineLFormula penv env (Formula _ _ _ []) = ML.CBool True  {- this is ad-hoc technique to avoid lookup error: 
+refineLFormula _ _ (Formula _ _ _ []) = ML.CBool True  {- this is ad-hoc technique to avoid lookup error: 
                                                              if args is null, penv may not contain the corresponding formula -}
 refineLFormula penv env fml = phi' where
     Formula _ i _ args = fml
     (args_phi, phi) = penv IM.! i
     env' = M.union (M.fromList $ zip (map ML.name args_phi) (map recover args)) env
     recover (SVar x) = env M.! (ML.name x)
+    recover _ = error "refineLFormula: recover: unexpected pattern"
     phi' = phi & fix (\go -> \case 
         ML.Var x -> case M.lookup (ML.name x) env' of
             Just r -> r

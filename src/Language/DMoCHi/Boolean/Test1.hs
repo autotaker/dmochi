@@ -1,21 +1,12 @@
 module Language.DMoCHi.Boolean.Test1 where
-import System.Environment
 import Language.DMoCHi.Boolean.Parser.Typed hiding(Parser)
-import Language.DMoCHi.Boolean.Alpha
-import qualified Language.DMoCHi.Boolean.Flow2 as Flow
-import Language.DMoCHi.Boolean.SortCheck
-import Language.DMoCHi.Boolean.Syntax
-import Language.DMoCHi.Common.Id
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as Typed
-import qualified Language.DMoCHi.Boolean.Type3 as Sat
 import Language.DMoCHi.Boolean.PrettyPrint.Typed
 import Language.DMoCHi.Common.Util
 import Text.PrettyPrint(render)
 import Control.Monad.Except
-import qualified Data.Map as M
 import Language.DMoCHi.Boolean.Test(test,testTyped)
 import Text.Printf
-import Data.Time
 import Options.Applicative
 
 data Mode = Typed | UnTyped

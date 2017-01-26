@@ -3,9 +3,7 @@ module Language.DMoCHi.Boolean.Flow2 where
 
 import qualified Data.Map as M
 import qualified Data.Set as S
---import Control.Monad
 import Control.Monad.State
-import Control.Applicative
 import Data.STRef
 import Data.Maybe
 import Language.DMoCHi.Boolean.Syntax.Typed(Size,Index,Symbol,Sort(..),HasSort(..))
@@ -15,7 +13,6 @@ import qualified Data.HashTable.Class as HT
 import Data.HashTable.ST.Basic (HashTable)
 import Control.Monad.ST
 import Data.Array.Unboxed
---import Data.Array.ST
 import Data.Function
 --import Debug.Trace
 
@@ -216,7 +213,7 @@ buildGraph (Typed.Program ds d0) = runST $ do
         termTbl = array (0,n-1) lbls
         edgeTbl :: Array Id [Id]
         edgeTbl = accumArray (flip (:)) [] (0,n-1) edges'
-        edges' = filter (\(s,t) -> 
+        edges' = filter (\(s,_) -> 
                             case termTbl ! s of
                                 V x | not (S.member x globals) -> True
                                 Dom _ _ _ -> True

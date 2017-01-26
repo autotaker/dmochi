@@ -4,7 +4,6 @@ import qualified Text.Parsec.Token as P
 import Text.Parsec.Expr
 import Text.Parsec.Language(emptyDef)
 import Text.Parsec.String
-import Control.Applicative hiding((<|>),many,optional)
 import Language.DMoCHi.ML.Syntax.UnTyped
 import Data.Either
 

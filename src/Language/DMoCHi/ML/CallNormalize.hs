@@ -3,9 +3,7 @@ module Language.DMoCHi.ML.CallNormalize (normalize) where
 
 import Language.DMoCHi.ML.Syntax.UnTyped
 import Language.DMoCHi.Common.Id
-import Control.Monad
 import Control.Monad.Cont
-import Control.Monad.Trans
 import Control.Applicative
 
 normalize :: MonadId m => Program -> m Program
@@ -22,6 +20,7 @@ normalizeE (Let x lv e) = case lv of
     LExp ty ex -> do
         ex' <- normalizeE ex
         Let x (LExp ty ex') <$> normalizeE e
+    LApp _ _ -> error "normalizeE: unexpected LApp"
     LRand -> Let x LRand <$> normalizeE e
 normalizeE (Assume v e) =
     runContT (normalizeV v) (\v' -> Assume v' <$> normalizeE e)
