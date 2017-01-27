@@ -1,11 +1,12 @@
+{-# LANGUAGE BangPatterns #-}
 module Language.DMoCHi.ML.Parser where
 import Text.Parsec
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Expr
-import Text.Parsec.Language(emptyDef)
-import Text.Parsec.String
 import Language.DMoCHi.ML.Syntax.UnTyped
+import Language.DMoCHi.Common.Id
 import Data.Either
+import Data.Functor.Identity
 
 reservedNames :: [String]
 reservedNames = ["let","rec","in","and","fun","not",
@@ -13,15 +14,25 @@ reservedNames = ["let","rec","in","and","fun","not",
                  "type",
                  "Fail","Main"]
 
-language :: P.LanguageDef st
-language = emptyDef { P.commentStart = "(*"
-                    , P.commentEnd = "*)"
-                    , P.nestedComments = True
-                    , P.reservedNames = reservedNames
-                    , P.reservedOpNames = ["=","<",">","&&","||","->","<>","+","-",";;","<=",">=","*"]
-                    , P.caseSensitive = True }
+language :: Monad m => P.GenLanguageDef String u m
+language = P.LanguageDef { P.commentStart = "(*"
+                         , P.commentEnd = "*)"
+                         , P.commentLine = ""
+                         , P.nestedComments = True
+                         , P.identStart = letter <|> char '_'
+                         , P.identLetter = alphaNum <|> oneOf "_'"
+                         , P.opStart = P.opLetter language
+                         , P.opLetter = oneOf ":!#$%&*+./<=>?@\\^|-~"
+                         , P.reservedNames = reservedNames
+                         , P.reservedOpNames = ["=","<",">","&&","||","->","<>","+","-",";;","<=",">=","*"]
+                         , P.caseSensitive = True }
 
-lexer :: P.TokenParser st
+
+type Parser a = ParsecT String [(UniqueKey,Type)] (FreshT Identity) a
+
+type UserState = [(UniqueKey, Type)]
+type UserMonad = [(UniqueKey, Type)]
+
 lexer = P.makeTokenParser language
 
 reserved :: String -> Parser ()
@@ -60,10 +71,19 @@ typVar :: Parser Id
 typVar = char '\'' *> identifier
 
 parseProgramFromFile :: FilePath -> IO (Either ParseError Program)
-parseProgramFromFile = parseFromFile (whiteSpace >> progP)
+parseProgramFromFile f = do
+    input <- readFile f
+    return $ runFresh (runParserT progP [] f input)
 
 progP :: Parser Program
-progP = uncurry Program . partitionEithers <$> many defP <*> exprP
+progP = do
+    (funDefs, synDefs) <- partitionEithers <$> many defP
+    e <- exprP
+    annots <- getState
+    return $ Program { functions = funDefs
+                     , synonyms = synDefs
+                     , typeAnn = annots
+                     , mainTerm = e }
 
 defP :: Parser (Either (Id,Type,Exp) SynonymDef)
 defP = Right <$> synDefP <|> Left <$> funDefP 
@@ -90,14 +110,17 @@ synDefP = do
     return $ SynonymDef syn tvs ty
 
 exprP :: Parser Exp
-exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") <?> "expr" where
-    simpleP = Value <$> (try valueP) <|> letP <|> assumeP <|> assertP <|> lambdaP <|> ifP <|> failP <|> parens exprP
-    assumeP = Assume <$> (reserved "assume" *> valueP <* semi) 
-                     <*> exprP
+exprP = simpleP `chainl1` (reservedOp "<>" >> mkBranch' ) <?> "expr" where
+    simpleP = try valueP <|> letP <|> assumeP <|> assertP <|> lambdaP <|> ifP <|> failP <|> omegaP <|> parens exprP
+    assumeP = do cond <- (reserved "assume" *> valueP <* semi) 
+                 e <- exprP
+                 mkAssume cond e
     assertP = do
         reserved "assert" 
         v <- termP
-        return $ Branch (Assume v (Value (CInt 0))) (Assume (Op (OpNot v)) Fail)
+        e2 <- mkLiteral (CInt 0)
+        e3 <- mkFail
+        mkIf v e2 e3
     ifP = do
         reserved "if"
         pred <- valueP
@@ -105,70 +128,76 @@ exprP = simpleP `chainl1` (Branch <$ reservedOp "<>") <?> "expr" where
         eThen <- exprP
         reserved "else"
         eElse <- exprP
-        return $ Branch (Assume pred eThen) (Assume (Op (OpNot pred)) eElse)
-    lambdaP = Lambda <$> (reserved "fun" *> argsP <* reservedOp "->") 
-                     <*> exprP
+        mkIf pred eThen eElse
+    lambdaP = do xs <- reserved "fun" *> argsP <* reservedOp "->" 
+                 e <- exprP
+                 mkLambda xs e
     argsP = parens (pure []) <|> many1 identifier
-    failP   = Fail <$ reserved "Fail"
+    failP   = reserved "Fail" >> mkFail
+    omegaP   = reserved "Omega" >> mkOmega
 
 letP :: Parser Exp
-letP = (Let <$> (reserved "let" *> identifier)
-           <*> sub
-           <*> (reserved "in" *> exprP)) <?> "let"
-    where sub = LExp <$> (reservedOp ":" *> typeP) <*> (reservedOp "=" *> exprP)
-            <|> (reservedOp "=" *> (LValue <$> valueP <|> LRand <$ reservedOp "*"))
+letP = (do x <- reserved "let" *> identifier
+           e1 <- sub
+           e2 <- reserved "in" *> exprP
+           mkLet x e1 e2) <?> "let"
+    where sub = (do ty <- reservedOp ":" *> typeP 
+                    e1 <- reservedOp "=" *> exprP
+                    let !key = getKey e1
+                    modifyState ((key, ty):)
+                    return e1) <|> 
+                (reservedOp "=" *> (valueP <|> (reservedOp "*" >> mkRand)))
 
-valueP :: Parser Value
+valueP :: Parser Exp
 valueP = buildExpressionParser opTable termP <?> "value" where
     opTable = [ [fstOrSnd]
-              , [prefix "-" (after Op OpNeg), prefix "+" id, prefix' "not" (after Op OpNot)]
-              , [binary "+" (after2 Op OpAdd) AssocLeft, binary "-" (after2 Op OpSub) AssocLeft]
-              , [binary "=" (after2 Op OpEq)  AssocNone, 
-                 binary "<" (after2 Op OpLt) AssocNone,
-                 binary "<=" (after2 Op OpLte) AssocNone,
-                 binary ">=" (after2 Op OpGte) AssocNone,
-                 binary ">" (after2 Op OpGt) AssocNone]
-              , [binary "&&" (after2 Op OpAnd) AssocLeft]
-              , [binary "||" (after2 Op OpOr) AssocLeft]
+              , [prefix "-" SNeg, prefix' "not" SNot]
+              , [binary "+" SAdd AssocLeft, binary "-" SSub AssocLeft]
+              , [binary "=" SEq AssocNone, 
+                 binary "<" SLt AssocNone,
+                 binary "<=" SLte AssocNone,
+                 binary ">=" SGte AssocNone,
+                 binary ">" SGt AssocNone]
+              , [binary "&&" SAnd AssocLeft]
+              , [binary "||" SOr AssocLeft]
               ]
-    after2 = (.) . (.)
-    after = (.)
-    binary name fun assoc = Infix (reservedOp name >> pure fun) assoc
-    prefix name fun       = Prefix (reservedOp name >> pure fun)
-    prefix' name fun      = Prefix (reserved name >> pure fun)
-    fstOrSnd = Postfix $ dot >> ((reserved "fst" >> pure (Op . OpFst)) <|>
-                                 (reserved "snd" >> pure (Op . OpSnd)))
+    binary name op assoc = Infix (reservedOp name >> mkBinary' op) assoc
+    prefix name op       = Prefix (reservedOp name >> mkUnary' op)
+    prefix' name op      = Prefix (reserved name >> mkUnary' op)
+    fstOrSnd = Postfix $ dot >> ((reserved "fst" >> mkUnary' SFst) <|>
+                                 (reserved "snd" >> mkUnary' SSnd))
 
-termP :: Parser Value
+termP :: Parser Exp
 termP = varOrApp
-    <|> CInt <$> natural 
-    <|> CBool True <$ reserved "true" 
-    <|> CBool False <$ reserved "false"
+    <|> (natural >>= mkLiteral . CInt)
+    <|> (reserved "true" >> mkLiteral (CBool True))
+    <|> (reserved "false" >> mkLiteral (CBool False))
     <|> parens (do p1 <- valueP
                    mp2 <- optionMaybe (comma >> valueP)
                    case mp2 of
                         Nothing -> return p1
-                        Just p2 -> return $ Pair p1 p2)
-argP :: Parser Value
-argP = Var <$> identifier
-    <|> CInt <$> natural 
-    <|> CBool True <$ reserved "true" 
-    <|> CBool False <$ reserved "false"
-    <|> parens (do p1 <- valueP
-                   mp2 <- optionMaybe (comma >> valueP)
-                   case mp2 of
-                        Nothing -> return p1
-                        Just p2 -> return $ Pair p1 p2)
+                        Just p2 -> mkPair p1 p2)
 
-varOrApp :: Parser Value
+argP :: Parser Exp
+argP = (identifier >>= mkVar)
+    <|> (natural >>= mkLiteral . CInt)
+    <|> (reserved "true" >> mkLiteral (CBool True))
+    <|> (reserved "false" >> mkLiteral (CBool False))
+    <|> parens (do p1 <- valueP
+                   mp2 <- optionMaybe (comma >> valueP)
+                   case mp2 of
+                        Nothing -> return p1
+                        Just p2 -> mkPair p1 p2)
+
+varOrApp :: Parser Exp
 varOrApp = do
     f <- identifier
     let l2m [] = Nothing
         l2m vs = Just vs
     l <- try (parens (pure (Just []))) <|> l2m <$> many argP
     case l of
-        Nothing -> return $ Var f
-        Just vs -> return $ App f vs
+        Nothing -> mkVar f
+        Just vs -> mkApp f vs
 
 typeP :: Parser Type
 typeP = prim <|> func 
