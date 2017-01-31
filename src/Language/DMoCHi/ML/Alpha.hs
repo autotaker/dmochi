@@ -1,34 +1,63 @@
-{-# LANGUAGE FlexibleContexts #-}
-module Language.DMoCHi.ML.Alpha(alpha,AlphaError) where
-import Language.DMoCHi.ML.Syntax.UnTyped
+{-# LANGUAGE GADTs, FlexibleContexts, TypeFamilies #-}
+module Language.DMoCHi.ML.Alpha(alpha,AlphaError, Exp(..), Program(..)) where
+import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
+import Language.DMoCHi.ML.Syntax.UnTyped(Type(..), SynonymDef)
+import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.Common.Id
 import Control.Monad.Except
 import Control.Monad.Reader
 import qualified Data.Map as M
-import Control.Applicative
+import Text.PrettyPrint.HughesPJClass
 import Data.List(sort,group)
 
 data AlphaError = UndefinedVariable String
                 | MultipleDefinition [String]
 
+data Exp where
+    Exp :: (WellFormed l Exp arg, Supported l (Labels Exp)) => SLabel l -> arg -> UniqueKey -> Exp
+
+data Program = Program { functions :: [(Id String, Type, Exp)]
+                       , synonyms :: [SynonymDef]
+                       , typeAnn :: [(UniqueKey, Type)]
+                       , maiTerm :: Exp }
+
+type instance Ident Exp = Id String
+type instance Literal Exp = U.Lit
+type instance Labels Exp = AllLabels
+type instance BinOps Exp = AllBinOps
+type instance UniOps Exp = AllUniOps
+
 instance Show AlphaError where
     show (UndefinedVariable s) = "UndefinedVariable: "++s
     show (MultipleDefinition fs) = "MultipleDefinition: "++show fs
 
-type M m a = ReaderT (M.Map String String) m a
+instance Pretty Exp where
+    pPrintPrec plevel prec (Exp l arg key) = 
+        if plevel == prettyNormal then doc else comment key <+> doc
+            where
+            pp :: WellFormedPrinter Exp
+            pp = WellFormedPrinter {
+                   pPrintExp = pPrintPrec,
+                   pPrintLit = pPrintPrec,
+                   pPrintIdent = pPrintPrec
+                 }
+            doc = genericPPrint pp plevel prec l arg
 
-alpha :: (MonadError AlphaError m,MonadId m,Applicative m) => Program -> m Program
-alpha (Program fs syns t0) = do
-    env <- M.fromList <$> mapM (\(x,_,_) -> (,) x <$> freshId x) fs
+type M m a = ReaderT (M.Map String (Id String)) (ExceptT AlphaError m) a
+
+{-# SPECIALIZE alpha :: U.Program -> FreshT IO (Either AlphaError Program) #-}
+alpha :: (MonadId m) => U.Program -> m (Either AlphaError Program)
+alpha (U.Program fs syns ann t0) = runExceptT $ do
+    env <- M.fromList <$> mapM (\(x,_,_) -> (,) x <$> identify x) fs
     when (M.size env /= length fs) $ do
         let fs' = map head $ filter ((>1).length) $ group $ sort $ map (\(x,_,_) -> x) fs
         throwError $ MultipleDefinition fs'
     flip runReaderT env $ do
         fs' <- forM fs $ \(x,p,e) -> (,,) <$> rename x <*> pure p <*> renameE e
         t0' <- renameE t0
-        return $ Program fs' syns t0'
+        return $ Program fs' syns ann t0'
 
-rename :: MonadError AlphaError m => String -> M m String
+rename :: Monad m => String -> M m (Id String)
 rename x = do
     env <- ask
     let m = M.lookup x env
@@ -36,50 +65,37 @@ rename x = do
         Nothing -> throwError $ UndefinedVariable x
         Just x' -> return x'
 
-renameE :: (MonadError AlphaError m,MonadId m, Applicative m) => Exp -> M m Exp
-renameE (Value v) = fmap Value $ renameV v
-renameE (Let x lv e) = do
-    lv' <- case lv of
-        LValue v -> LValue <$> renameV v
-        LApp f vs -> LApp <$> rename f <*> mapM renameV vs
-        LExp p ev -> LExp <$> pure p <*> renameE ev
-        LRand -> pure LRand
-    (x',e') <- register x (renameE e)
-    return $ Let x' lv' e'
-renameE (Assume v e) = liftA2 Assume (renameV v) (renameE e)
-renameE (Lambda xs e) = uncurry Lambda <$> register' xs (renameE e)
-renameE Fail = pure Fail
-renameE (Branch e1 e2) = liftA2 Branch (renameE e1) (renameE e2)
+renameE :: MonadId m => U.Exp -> M m Exp
+renameE (U.Exp label arg key) =
+    case (label, arg) of
+        (SLiteral, arg) -> return $ Exp label arg key
+        (SVar, x) -> Exp label <$> rename x <*> pure key
+        (SBinary, BinArg op e1 e2) -> Exp label <$> (BinArg op <$> renameE e1 <*> renameE e2) <*> pure key
+        (SUnary, UniArg op e) -> Exp label <$> (UniArg op <$> renameE e) <*> pure key
+        (SPair, (e1, e2)) -> Exp label <$> ((,) <$> renameE e1 <*> renameE e2) <*> pure key
+        (SLambda, (xs, e)) -> Exp label <$> register' xs (renameE e) <*> pure key
+        (SApp, (f, es)) -> Exp label <$> ((,) <$> rename f <*> mapM renameE es) <*> pure key
+        (SLet, (x, e1, e2)) -> do
+            e1' <- renameE e1
+            (x', e2') <- register x (renameE e2)
+            return $! Exp label (x', e1', e2') key
+        (SAssume, (cond,e)) -> Exp label <$> ((,) <$> renameE cond <*> renameE e) <*> pure key
+        (SIf, (e1,e2,e3)) -> Exp label <$> ((,,) <$> renameE e1 
+                                                 <*> renameE e2
+                                                 <*> renameE e3) <*> pure key
+        (SBranch, (e1,e2)) -> Exp label <$> ((,) <$> renameE e1 <*> renameE e2) <*> pure key
+        (SFail, _) -> return $ Exp label () key
+        (SOmega, _) -> return $ Exp label () key
+        (SRand, _) -> return $ Exp label () key
 
-renameV :: (MonadError AlphaError m,Applicative m) => Value -> M m Value
-renameV (Var x) = Var <$> rename x
-renameV (CInt i) = return $ CInt i
-renameV (CBool b) = return $ CBool b
-renameV (Pair v1 v2) = liftA2 Pair (renameV v1) (renameV v2)
-renameV (App f vs) = liftA2 App (rename f) (mapM renameV vs)
-renameV (Op op) = Op <$> case op of
-    OpAdd v1 v2 -> liftA2 OpAdd (renameV v1) (renameV v2)
-    OpSub v1 v2 -> liftA2 OpSub (renameV v1) (renameV v2)
-    OpNeg v1 -> fmap OpNeg (renameV v1)
-    OpEq v1 v2 -> liftA2 OpEq (renameV v1) (renameV v2)
-    OpLt v1 v2 -> liftA2 OpLt (renameV v1) (renameV v2)
-    OpGt v1 v2 -> liftA2 OpGt (renameV v1) (renameV v2)
-    OpLte v1 v2 -> liftA2 OpLte (renameV v1) (renameV v2)
-    OpGte v1 v2 -> liftA2 OpGte (renameV v1) (renameV v2)
-    OpAnd v1 v2 -> liftA2 OpAnd (renameV v1) (renameV v2)
-    OpOr  v1 v2 -> liftA2 OpOr  (renameV v1) (renameV v2)
-    OpFst v1 -> fmap OpFst (renameV v1)
-    OpSnd v1 -> fmap OpSnd (renameV v1)
-    OpNot v1 -> fmap OpNot (renameV v1)
-
-register :: (MonadError AlphaError m,MonadId m) => String -> M m a -> M m (String,a)
+register :: MonadId m => String -> M m a -> M m (Id String,a)
 register x m = do
-    x' <- freshId x
+    x' <- identify x
     v  <- local (M.insert x x') m
     return (x',v)
 
-register' :: (MonadError AlphaError m,MonadId m) => [String] -> M m a -> M m ([String],a)
+register' :: MonadId m => [String] -> M m a -> M m ([Id String],a)
 register' xs m = do
-    xs' <- mapM freshId xs
+    xs' <- mapM identify xs
     v  <- local (\env -> foldr (uncurry M.insert) env (zip xs xs')) m
     return (xs',v)

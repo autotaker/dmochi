@@ -1,27 +1,26 @@
-module Language.DMoCHi.Common.Id(UniqueKey, FreshT, runFreshT, Fresh, runFresh, MonadId(..)) where
+module Language.DMoCHi.Common.Id(UniqueKey, FreshT, runFreshT, Fresh, runFresh, Id
+                                , MonadId(..), freshId, reserved, maybeReserved, fromReserved
+                                , refresh, identify) where
 
 import Control.Monad.State
 import qualified Control.Monad.State.Strict as Strict
 import Control.Applicative
 import Control.Monad.Reader
-import Control.Monad.Writer
+import Control.Monad.Writer hiding((<>))
 import Control.Monad.Except
 import Data.Functor.Identity
 import Text.Parsec(ParsecT)
 import Text.PrettyPrint.HughesPJClass
 
-newtype UniqueKey = UniqueKey Int
+newtype UniqueKey = UniqueKey { unUniqueKey :: Int }
     deriving(Show,Eq,Ord)
 
 instance Pretty UniqueKey where
     pPrint (UniqueKey i) = int i
 
 class Monad m => MonadId m where
-    freshId :: String -> m String
-    freshId s = do
-        i <- freshInt
-        return $ s ++ "_" ++ show i
     freshInt :: m Int
+    freshInt = unUniqueKey <$> freshKey 
     freshKey :: m UniqueKey
     freshKey = UniqueKey <$> freshInt
 
@@ -29,12 +28,59 @@ newtype FreshT m a = FreshT { unFreshT :: Strict.StateT Int m a }
 
 type Fresh a = FreshT Identity a
 
+{- Ident -}
+data Id a = Id !UniqueKey a
+
+instance Eq a => Eq (Id a) where
+    Id (UniqueKey 0) b == Id (UniqueKey 0) d = b == d
+    Id a _ == Id c _ = a == c
+
+instance Ord a => Ord (Id a) where
+    compare (Id (UniqueKey 0) b) (Id (UniqueKey 0) d) = compare b d
+    compare (Id a _) (Id c _) = compare a c
+
+instance Pretty a => Pretty (Id a) where
+    pPrintPrec level prec (Id (UniqueKey 0) x) = pPrintPrec level prec x
+    pPrintPrec level prec (Id i x) = 
+        pPrintPrec level prec x <> text "_" <> (pPrintPrec level prec i)
+
+instance (Show a, Pretty a) => Show (Id a) where
+    show = render . pPrint
+
+freshId :: MonadId m => String -> m String
+freshId s = do
+    i <- freshInt
+    return $ s ++ "_" ++ show i
+
+reserved :: a -> Id a
+reserved x = Id (UniqueKey 0) x
+
+maybeReserved :: Id a -> Maybe a
+maybeReserved (Id (UniqueKey 0) v) = Just v
+maybeReserved (Id _ _) = Nothing
+
+{-# INLINE fromReserved #-}
+fromReserved :: Id a -> a
+fromReserved (Id (UniqueKey 0) v) = v
+fromReserved _ = error "fromReserved: this is unreserved value"
+
+{-# INLINE identify #-}
+identify :: MonadId m => a -> m (Id a)
+identify v = do
+    key <- freshKey
+    return $! Id key v
+
+{-# INLINE refresh #-}
+refresh :: MonadId m => Id a -> m (Id a)
+refresh (Id _ v) = do
+    key <- freshKey
+    return $! Id key v
 
 runFreshT :: Monad m => FreshT m a -> m a
-runFreshT m = Strict.evalStateT (unFreshT m) 0
+runFreshT m = Strict.evalStateT (unFreshT m) 1
 
 runFresh :: Fresh a -> a
-runFresh m = Strict.evalState (unFreshT m) 0
+runFresh m = Strict.evalState (unFreshT m) 1
 
 instance Monad m => Monad (FreshT m) where
     return = FreshT . return

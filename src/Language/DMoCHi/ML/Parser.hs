@@ -3,8 +3,8 @@ module Language.DMoCHi.ML.Parser where
 import Text.Parsec
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Expr
-import Language.DMoCHi.ML.Syntax.UnTyped
-import Language.DMoCHi.Common.Id
+import Language.DMoCHi.ML.Syntax.UnTyped 
+import Language.DMoCHi.Common.Id(FreshT,UniqueKey, runFresh)
 import Data.Either
 import Data.Functor.Identity
 
@@ -67,7 +67,7 @@ semiSep = P.semiSep lexer
 brackets :: Parser a -> Parser a
 brackets = P.brackets lexer
 
-typVar :: Parser Id
+typVar :: Parser String
 typVar = char '\'' *> identifier
 
 parseProgramFromFile :: FilePath -> IO (Either ParseError Program)
@@ -85,10 +85,10 @@ progP = do
                      , typeAnn = annots
                      , mainTerm = e }
 
-defP :: Parser (Either (Id,Type,Exp) SynonymDef)
+defP :: Parser (Either (String,Type,Exp) SynonymDef)
 defP = Right <$> synDefP <|> Left <$> funDefP 
 
-funDefP :: Parser (Id,Type,Exp)
+funDefP :: Parser (String,Type,Exp)
 funDefP = try $ do
     x <- reserved "let" *> identifier
     ty <- colon *> typeP
@@ -161,7 +161,9 @@ valueP = buildExpressionParser opTable termP <?> "value" where
               , [binary "&&" SAnd AssocLeft]
               , [binary "||" SOr AssocLeft]
               ]
+    binary :: Supported op (BinOps Exp) => String -> SBinOp op -> Assoc -> Operator String [(UniqueKey,Type)] (FreshT Identity) Exp
     binary name op assoc = Infix (reservedOp name >> mkBinary' op) assoc
+    prefix, prefix' :: Supported op (UniOps Exp) => String -> SUniOp op  -> Operator String [(UniqueKey,Type)] (FreshT Identity) Exp
     prefix name op       = Prefix (reservedOp name >> mkUnary' op)
     prefix' name op      = Prefix (reserved name >> mkUnary' op)
     fstOrSnd = Postfix $ dot >> ((reserved "fst" >> mkUnary' SFst) <|>
