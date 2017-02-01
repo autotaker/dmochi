@@ -38,7 +38,7 @@ desugarType synEnv (TSyn tys syn) =
         Nothing -> throwError (UndefinedSynonym syn)
 desugarType _synEnv (TVar x) = return $ TVar x
 
-substType :: Monad m => M.Map Id Type -> Type -> ExceptT SynonymError m Type
+substType :: Monad m => M.Map String Type -> Type -> ExceptT SynonymError m Type
 substType _env TInt = return TInt
 substType _env TBool = return TBool
 substType env (TPair t1 t2) = liftA2 TPair (substType env t1) (substType env t2)

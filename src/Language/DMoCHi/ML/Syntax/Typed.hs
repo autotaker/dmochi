@@ -1,5 +1,5 @@
-{-# LANGUAGE FlexibleContexts, BangPatterns #-}
-module Language.DMoCHi.ML.Syntax.Typed( Program(..)
+{-# LANGUAGE FlexibleContexts, BangPatterns, GADTs, TypeFamilies, DataKinds #-}
+module Language.DMoCHi.ML.Syntax.Typed {- ( Program(..)
                                       , Exp(..)
                                       , Value(..)
                                       , Op(..)
@@ -13,14 +13,36 @@ module Language.DMoCHi.ML.Syntax.Typed( Program(..)
                                       , sizeLV
                                       , freeVariables
                                       , module Language.DMoCHi.ML.Syntax.Type
-                                      ) where
-import qualified Data.Map as M
-import qualified Data.Set as S
-import Language.DMoCHi.ML.Syntax.Type
+                                      ) -} where
+-- import qualified Data.Map as M
+-- import qualified Data.Set as S
+import GHC.Exts(Constraint)
+import Language.DMoCHi.Common.Id 
+import Language.DMoCHi.ML.Syntax.Type hiding(Id)
+import Language.DMoCHi.ML.Syntax.Base
+import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
 
-data Program = Program { functions :: [(Id,FunDef)] 
+data Program = Program { functions :: [(SId, [SId], Exp)] 
                        , mainTerm  :: Exp }
 
+data Exp where
+    Exp :: ( WellFormed l Exp arg
+           , Supported l (Labels Exp)
+           , WellLabeled l ty) => SLabel l -> arg -> SType ty -> UniqueKey -> Exp
+
+type family WellLabeled (l :: Label) (ty :: TypeLabel) :: Constraint where
+    WellLabeled 'Literal ty = ty ~ 'LBase
+    WellLabeled 'Pair    ty = ty ~ 'LPair
+    WellLabeled 'Lambda  ty = ty ~ 'LFun
+    WellLabeled l        ty = ()
+
+type instance Labels Exp = AllLabels
+type instance BinOps Exp = AllBinOps
+type instance UniOps Exp = AllUniOps
+type instance Literal Exp = U.Lit
+type instance Ident Exp = SId
+
+{-
 data Exp = Value Value
          | Fun   FunDef
          | Let Type Id LetValue Exp -- associated type is that of body exp
@@ -203,3 +225,4 @@ freeVariables = goE S.empty where
     push acc env x | S.member x env = acc
                    | otherwise = S.insert x acc
 
+-}
