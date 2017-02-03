@@ -20,7 +20,6 @@ import GHC.Exts(Constraint)
 import Language.DMoCHi.Common.Id 
 import Language.DMoCHi.ML.Syntax.Type hiding(Id)
 import Language.DMoCHi.ML.Syntax.Base
-import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
 
 data Program = Program { functions :: [(SId, UniqueKey, [SId], Exp)] 
                        , mainTerm  :: Exp }
@@ -39,7 +38,6 @@ type family WellLabeled (l :: Label) (ty :: TypeLabel) :: Constraint where
 type instance Labels Exp = AllLabels
 type instance BinOps Exp = AllBinOps
 type instance UniOps Exp = AllUniOps
-type instance Literal Exp = U.Lit
 type instance Ident Exp = SId
 
 {-

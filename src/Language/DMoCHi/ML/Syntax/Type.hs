@@ -19,6 +19,11 @@ data TypeLabel = LBase | LPair | LFun
 data SId where
     SId ::  SType ty -> Id.Id String -> SId
 
+instance Eq SId where
+    SId _ x == SId _ y = x == y
+instance Ord SId where
+    compare (SId _ x) (SId _ y) = compare x y
+
 foldArg :: (forall ty. SType ty -> b -> b) -> b -> STypeArg -> b
 foldArg _ acc SArgNil = acc
 foldArg f acc (SArgCons x xs) = f x (foldArg f acc xs)

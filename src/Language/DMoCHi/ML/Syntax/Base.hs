@@ -2,7 +2,7 @@
 module Language.DMoCHi.ML.Syntax.Base(Label(..), 
                                       BinOp(..),
                                       UniOp(..),
-                                      Labels, Ident, Literal,
+                                      Labels, Ident, Lit(..),
                                       BinOps, UniOps,
                                       AllLabels, AllBinOps, AllUniOps,
                                       WellFormed,
@@ -34,7 +34,8 @@ data Label = Literal | Var | Binary | Unary | Pair
 data BinOp = Add | Sub | Eq | Lt | Gt | Lte | Gte | And | Or 
 data UniOp = Fst | Snd | Not | Neg
 
-type family Literal e
+data Lit = CInt Integer | CBool Bool
+
 type family Ident e
 type family Labels e :: [Label]
 type family BinOps e :: [BinOp]
@@ -64,7 +65,7 @@ data UniArg e where
     UniArg :: Elem op (UniOps e) ~ 'True => SUniOp op -> e -> UniArg e
 
 type family WellFormed (l :: Label)  (e :: *)  (arg :: *) :: Constraint where
-    WellFormed 'Literal e arg = arg ~ Literal e
+    WellFormed 'Literal e arg = arg ~ Lit
     WellFormed 'Var     e arg = arg ~ Ident e
     WellFormed 'Unary   e arg = arg ~ UniArg e
     WellFormed 'Binary  e arg = arg ~ BinArg e
@@ -172,9 +173,16 @@ binaryPrec SGte  = (4, ">", AssocNone)
 binaryPrec SAnd  = (3, "&&", AssocNone)
 binaryPrec SOr   = (2, "||", AssocNone)
 
+instance Pretty Lit where
+    pPrintPrec _ prec lit = 
+        case lit of
+            CInt i | i < 0     -> maybeParens (prec >= 9) (integer i)
+                   | otherwise -> integer i
+            CBool True -> text "true"
+            CBool False -> text "false"
+
 data WellFormedPrinter e = 
     WellFormedPrinter { pPrintExp    :: PrettyLevel -> Rational -> e -> Doc
-                      , pPrintLit    :: PrettyLevel -> Rational -> Literal e -> Doc
                       , pPrintIdent  :: PrettyLevel -> Rational -> Ident e -> Doc }
 
 genericPPrint :: (WellFormed l e arg) => WellFormedPrinter e ->
@@ -182,7 +190,7 @@ genericPPrint :: (WellFormed l e arg) => WellFormedPrinter e ->
                  SLabel l -> arg -> Doc
 genericPPrint pp pLevel prec op arg =
     case (op, arg) of
-        (SLiteral, lit) -> pPrintLit pp pLevel prec lit
+        (SLiteral, lit) -> pPrintPrec pLevel prec lit
         (SVar, x) -> pPrintIdent pp pLevel prec x
         (SUnary, (UniArg op  e)) -> maybeParens (prec > prec') d
             where

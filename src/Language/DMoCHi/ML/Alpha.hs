@@ -22,7 +22,6 @@ data Program = Program { functions :: [(Id String, Type, Exp)]
                        , mainTerm :: Exp }
 
 type instance Ident Exp = Id String
-type instance Literal Exp = U.Lit
 type instance Labels Exp = AllLabels
 type instance BinOps Exp = AllBinOps
 type instance UniOps Exp = AllUniOps
@@ -38,7 +37,6 @@ instance Pretty Exp where
             pp :: WellFormedPrinter Exp
             pp = WellFormedPrinter {
                    pPrintExp = pPrintPrec,
-                   pPrintLit = pPrintPrec,
                    pPrintIdent = pPrintPrec
                  }
             doc = genericPPrint pp plevel prec l arg

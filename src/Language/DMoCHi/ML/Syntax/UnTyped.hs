@@ -1,5 +1,5 @@
 {-# LANGUAGE GADTs, TypeFamilies, LambdaCase #-}
-module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, Lit(..)
+module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id
                                         , Type(..), SynName 
                                         , SynonymDef(..), Program(..)
                                         , getKey
@@ -16,12 +16,10 @@ data Exp where
     Exp :: (WellFormed l Exp arg, Supported l (Labels Exp)) => SLabel l -> arg -> UniqueKey -> Exp
 
 type instance Ident Exp = String
-type instance Literal Exp = Lit
 type instance Labels Exp = AllLabels
 type instance BinOps Exp = AllBinOps
 type instance UniOps Exp = AllUniOps
 
-data Lit = CInt Integer | CBool Bool
 
 type SynName = String
 
@@ -138,18 +136,9 @@ instance Pretty Exp where
             pp :: WellFormedPrinter Exp
             pp = WellFormedPrinter {
                    pPrintExp = pPrintPrec,
-                   pPrintLit = pPrintPrec,
                    pPrintIdent = \_ _ -> text
                  }
             doc = genericPPrint pp plevel prec l arg
-
-instance Pretty Lit where
-    pPrintPrec _ prec lit = 
-        case lit of
-            CInt i | i < 0     -> maybeParens (prec >= 9) (integer i)
-                   | otherwise -> integer i
-            CBool True -> text "true"
-            CBool False -> text "false"
 
 
 {-

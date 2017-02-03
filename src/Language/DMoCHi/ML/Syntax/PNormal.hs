@@ -1,25 +1,131 @@
-{-# LANGUAGE FlexibleContexts, BangPatterns #-}
-module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
-                                        , Exp(..)
-                                        , Value(..)
-                                        , AValue(..)
-                                        , Op(..)
-                                        , LetValue(..)
-                                        , FunDef(..)
-                                        , size
-                                        , freeVariables
-                                        , normalize
-                                        , alphaId
-                                        , module Language.DMoCHi.ML.Syntax.Type
-                                        ) where
-import Control.Monad
+{-# LANGUAGE FlexibleContexts, BangPatterns, TypeFamilies, DataKinds, KindSignatures, GADTs, MultiParamTypeClasses #-}
+module Language.DMoCHi.ML.Syntax.PNormal where
+-- import Control.Monad
 import Language.DMoCHi.Common.Id
 import qualified Data.Map as M
-import qualified Data.Set as S
-import Data.Char
+-- import qualified Data.Set as S
+import GHC.Exts(Constraint)
+-- import Data.Char
 import Language.DMoCHi.ML.Syntax.Type
+import Language.DMoCHi.ML.Syntax.Base
 import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
+import Language.DMoCHi.ML.Syntax.Typed(WellLabeled)
+import Control.Monad.Cont
 
+data Program = Program { functions :: [(SId, UniqueKey, [SId], Exp)]
+                       , mainTerm  :: Exp }
+
+data Exp where
+    Exp :: (Normalized l Exp arg, WellLabeled l ty, Supported l (Labels Exp)) => 
+            SLabel l -> arg -> SType ty -> UniqueKey -> Exp
+
+data Value where
+    Value :: (Normalized l Value arg, WellLabeled l ty, Supported l (Labels Value)) => 
+            SLabel l -> arg -> SType ty -> UniqueKey -> Value
+
+data Atom where
+    Atom :: (Normalized l Atom arg, WellLabeled l ty, Supported l (Labels Atom)) => 
+            SLabel l -> arg -> SType ty -> UniqueKey -> Atom
+
+type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
+    Normalized 'Literal e arg = arg ~ Lit
+    Normalized 'Var     e arg = arg ~ Ident e
+    Normalized 'Unary   e arg = arg ~ UniArg Atom
+    Normalized 'Binary  e arg = arg ~ BinArg Atom
+    Normalized 'Pair    e arg = arg ~ (Value, Value)
+    Normalized 'Lambda  e arg = arg ~ ([Ident e], Exp)
+    Normalized 'App     e arg = arg ~ (Ident e, [Value])
+    Normalized 'Let     e arg = arg ~ (Ident e, Exp, Exp)
+    Normalized 'Assume  e arg = arg ~ (Atom, Exp)
+    Normalized 'Branch  e arg = arg ~ (Exp, Exp)
+    Normalized 'Fail    e arg = arg ~ ()
+    Normalized 'Omega   e arg = arg ~ ()
+    Normalized 'Rand    e arg = arg ~ ()
+
+type instance Labels Exp = AllLabels
+type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda ]
+type instance Labels Atom  = '[ 'Literal, 'Var, 'Binary, 'Unary ]
+type instance BinOps Atom  = '[ 'Add, 'Sub, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
+type instance UniOps Atom  = '[ 'Fst, 'Snd, 'Not, 'Neg ]
+type instance Ident  Exp = SId
+type instance Ident  Value = SId
+type instance Ident  Atom = SId
+
+mkBin :: SBinOp op -> Atom -> Atom -> UniqueKey -> Atom
+mkBin op v1 v2 key = case op of
+    SAdd -> Atom SBinary (BinArg SAdd v1 v2) STInt key
+    SSub -> Atom SBinary (BinArg SSub v1 v2) STInt key
+    SEq  -> Atom SBinary (BinArg SEq v1 v2) STBool key
+    SLt  -> Atom SBinary (BinArg SLt v1 v2) STBool key
+    SLte -> Atom SBinary (BinArg SLte v1 v2) STBool key
+    SGt  -> Atom SBinary (BinArg SLt v2 v1) STBool key
+    SGte -> Atom SBinary (BinArg SLte v2 v1) STBool key
+    SAnd -> Atom SBinary (BinArg SAnd v1 v2) STBool key
+    SOr  -> Atom SBinary (BinArg SOr  v1 v2) STBool key
+
+mkUni :: SUniOp op -> Atom -> UniqueKey -> Atom
+mkUni op v1@(Atom _ _ sty _) key = case op of
+    SNeg -> Atom SUnary (UniArg SNeg v1) STInt key
+    SNot -> Atom SUnary (UniArg SNot v1) STBool key
+    SFst -> case sty of
+        STPair sty1 _ -> Atom SUnary (UniArg SFst v1) sty1 key
+        _ -> error "mkUni: Fst"
+    SSnd -> case sty of
+        STPair _ sty2 -> Atom SUnary (UniArg SSnd v1) sty2 key
+        _ -> error "mkUni: Snd"
+
+mkLiteral :: Lit -> UniqueKey -> Atom
+mkLiteral l@(CInt _) key = Atom SLiteral l STInt key
+mkLiteral l@(CBool _) key = Atom SLiteral l STInt key
+
+mkVar :: SId -> UniqueKey -> Atom
+mkVar x@(SId sty _) key = Atom SVar x sty key
+
+mkPair :: Value -> Value -> UniqueKey -> Value
+mkPair v1@(Value _ _ sty1 _) v2@(Value _ _ sty2 _) key = Value SPair (v1, v2) (STPair sty1 sty2) key
+
+mkLambda :: [SId] -> Exp -> UniqueKey -> Value
+mkLambda xs e@(Exp _ _ sty _) key = 
+    Value SLambda (xs, e) (STFun stys sty) key
+    where !stys = foldr (\(SId sty _) acc -> SArgCons sty acc) SArgNil xs
+
+class Castable from to where
+    cast :: from -> to
+
+instance Castable Atom Value where
+    cast (Atom l arg sty key) = case l of
+        SLiteral -> Value l arg sty key
+        SVar -> Value l arg sty key
+        SBinary -> Value l arg sty key
+        SUnary -> Value l arg sty key
+
+instance Castable Value Exp where
+    cast (Value l arg sty key) = case l of
+        SLiteral -> Exp l arg sty key
+        SVar -> Exp l arg sty key
+        SBinary -> Exp l arg sty key
+        SUnary -> Exp l arg sty key
+        SLambda -> Exp l arg sty key
+        SPair -> Exp l arg sty key
+
+instance Castable Atom Exp where
+    cast = cast . (cast :: Atom -> Value)
+
+convertE :: MonadId m => Typed.Exp -> m Exp
+convertE e@(Typed.Exp l arg ty key) = 
+    case (l, arg) of
+        (SLiteral, _)         -> runContT (convertA e) (pure . cast)
+        (SVar, _)             -> runContT (convertA e) (pure . cast)
+        (SUnary, _) -> runContT (convertA e) (pure . cast)
+        (SPair, _) -> runContT (convertV e) (pure . cast)
+        (SLambda, _) -> runContT (convertV e) (pure . cast)
+
+convertA :: MonadId m => Typed.Exp -> runContT Exp m Atom
+convertA = undefined
+
+convertV :: MonadId m => Typed.Exp -> runContT Exp m Value
+convertV = undefined
+{-
 data Program = Program { functions :: [(Id,FunDef)] 
                        , mainTerm  :: Exp }
 
@@ -312,4 +418,5 @@ normalize prog = do
             return $ Atomic $ Op (f av1 av2)
 
             
+            -}
 
