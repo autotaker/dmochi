@@ -1,7 +1,10 @@
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables, Rank2Types, GADTs, TypeOperators #-}
 module Language.DMoCHi.ML.TypeCheck where
 import qualified Data.Map as M
+import Prelude hiding(mapM)
 import Control.Monad.Except
+import Control.Monad.RWS.Strict
+import qualified Data.DList as DL
 -- import Text.PrettyPrint
 import Language.DMoCHi.ML.Syntax.Typed 
 import Language.DMoCHi.ML.Syntax.Base
@@ -20,6 +23,7 @@ instance Show TypeError where
     show (TypeMisUse t1 t2)         = "TypeUse: " ++ show t1 ++ " should be in " ++ show t2
     show (ArityMisMatch s t1 t2)    = "ArityMismatch: " ++ show t1 ++ " should be  " ++ show t2 ++ ". context :" ++ show s
     show (Synonym err)  = "SynonymError: " ++ show err
+    show (Infer err)  = "InferError: " ++ show err
     show (OtherError s) = "OtherError: " ++ s
 
 type Env = M.Map (Id.Id String) SomeSType
@@ -31,20 +35,173 @@ data TypeError = UndefinedVariable String
                | TypeMisMatchList String [Type] [Type]
                | TypeMisUse   Type [Type]
                | Synonym  SynonymError
+               | Infer  InferError
                | OtherError String
 
-{-
 fromUnTyped :: MonadId m => U.Program -> ExceptT TypeError m Program
-fromUnTyped (U.Program fs syns t) = do
-    synEnv <- withExceptT Synonym (desugarEnv syns)
-    fs' <- mapM (\(x,p,e) -> (,,) x <$> convertP synEnv p <*> pure e) fs
-    let tenv = M.fromList [ (x,ty) | (x,ty,_) <- fs' ]
-    fs'' <- forM fs' $ \(x,ty,U.Lambda y e) -> do
-        let x' = Id ty x
-        fdef <- convertLambda synEnv tenv y e ty
-        return (x',fdef) 
-    Program fs'' <$> convertE synEnv tenv TInt t
--}
+fromUnTyped prog = do
+    annot <- withExceptT Infer (infer prog)
+    let env = M.fromList [ (f, annot M.! key) | (f, _, U.Exp _ _ key) <- U.functions prog ]
+    fs' <- forM (U.functions prog) $ \(f, _, e) -> do
+        Exp l arg sty key <- convertE annot env e
+        case (l, arg) of
+            (SLambda, (xs, e)) -> return (SId sty f, key, xs, e)
+            _ -> throwError $ OtherError "RHS of definition should be a function"
+    e0 <- convertE annot env (U.mainTerm prog)
+    return $ Program { functions = fs', mainTerm = e0 }
+
+type TSubst = M.Map String U.Type 
+type InferM m = RWST (M.Map U.SynName U.SynonymDef) (DL.DList (UniqueKey, U.Type)) TSubst (ExceptT InferError m)
+
+data InferError = RecursiveType
+                | SynError SynonymError
+                | CannotUnify
+                deriving Show
+
+updateSubst :: MonadState TSubst m => String -> U.Type -> m ()
+updateSubst key value = do
+    theta <- get 
+    put $! M.insert key value theta
+
+subst :: (MonadState TSubst m) => U.Type -> m U.Type
+subst U.TInt = pure U.TInt
+subst U.TBool = pure U.TBool
+subst (U.TPair ty1 ty2) = U.TPair <$> subst ty1 <*> subst ty2
+subst (U.TFun ts ty) = U.TFun <$> mapM subst ts <*> subst ty
+subst (U.TSyn ts synName) = U.TSyn <$> mapM subst ts <*> pure synName
+subst (U.TVar x) = do
+    theta <- get
+    case M.lookup x theta of
+        Just ty -> do
+            ty' <- subst ty
+            updateSubst x ty'
+            return ty'
+        Nothing -> return $ (U.TVar x)
+
+unify :: (MonadError InferError m, 
+          MonadReader (M.Map String U.SynonymDef) m,
+          MonadState TSubst m) => U.Type -> U.Type -> m ()
+unify U.TInt U.TInt = return ()
+unify U.TBool U.TBool = return ()
+unify (U.TPair ty1 ty2) (U.TPair ty3 ty4) = unify ty1 ty3 >> unify ty2 ty4
+unify (U.TFun tys1 ty1) (U.TFun tys2 ty2) = zipWithM_ unify tys1 tys2 >> unify ty1 ty2
+unify (U.TSyn ts name) ty = do
+    synEnv <- ask
+    let synDef = synEnv M.! name
+        n = length $ U.typVars synDef
+        m = length ts
+    when (n /= m) $ throwError (SynError $ ArgLengthDiffer n m)
+    ty' <- case runExcept (substType (M.fromList $ zip (U.typVars synDef) ts) ty) of
+        Left err -> throwError $ SynError err
+        Right ty' -> return ty'
+    unify ty' ty
+unify ty1 ty2@(U.TSyn _ _) = unify ty2 ty1
+unify (U.TVar x) ty = do
+    ty' <- subst ty
+    case ty' of
+        U.TVar y | x == y -> return ()
+        _ | x `elemType` ty -> throwError RecursiveType
+          | otherwise -> updateSubst x ty
+unify ty1 ty2@(U.TVar _) = unify ty2 ty1
+unify U.TInt _ = throwError CannotUnify 
+unify U.TBool _ = throwError CannotUnify
+unify (U.TPair _ _) _ = throwError CannotUnify
+unify (U.TFun _ _) _ = throwError CannotUnify
+    
+elemType :: String -> U.Type -> Bool
+elemType _ U.TInt = False
+elemType _ U.TBool = False
+elemType x (U.TPair ty1 ty2) = elemType x ty1 || elemType x ty2
+elemType x (U.TFun tys ty) = any (elemType x) (ty:tys)
+elemType x (U.TVar y) = x == y
+elemType x (U.TSyn tys _) = any (elemType x) tys
+
+infer :: MonadId m => U.Program -> ExceptT InferError m (M.Map UniqueKey SomeSType)
+infer prog = do
+    let synEnv = M.fromList [ (U.synName syn, syn) | syn <- U.synonyms prog ]
+    (res,_,_) <- runRWST (do
+        ((), annot) <- listen $ do
+                env <- fmap M.fromList $ mapM (\(f,_,_) -> (,) f <$> (U.TVar <$> Id.freshId "t")) (U.functions prog)
+                forM_ (U.functions prog) $ \(f,_,e) -> do
+                            inferE env e >>= unify (env M.! f)
+                ty <- inferE env (U.mainTerm prog)
+                unify ty U.TInt
+        let annotEnv = M.fromList (DL.toList annot)
+        forM_ (U.typeAnn prog) $ \(key, ty) -> unify ty (annotEnv M.! key)
+        mapM (\ty -> do
+            ty' <- subst ty
+            case runExcept (convertType synEnv ty') of
+                Left err -> throwError $ SynError err
+                Right v -> return v) annotEnv) synEnv M.empty
+    return res
+             
+
+inferE :: MonadId m => M.Map (Id.Id String) U.Type -> U.Exp -> InferM m U.Type
+inferE env (U.Exp l arg key) = do
+    tvar <- U.TVar <$> Id.freshId "ty"
+    tell (DL.singleton (key, tvar))
+    ty <- case (l, arg) of
+        (SLiteral, U.CInt _) -> pure U.TInt
+        (SLiteral, U.CBool _) -> pure U.TBool
+        (SVar, x) -> return $! env M.! x
+        (SBinary, BinArg op e1 e2) -> do
+            ty1 <- inferE env e1
+            ty2 <- inferE env e2
+            let f :: MonadId m => U.Type -> InferM m ()
+                f ty = unify ty1 ty >> unify ty2 ty
+            case op of
+                SAdd -> f U.TInt >> pure U.TInt
+                SSub -> f U.TInt >> pure U.TInt
+                SEq  -> f U.TInt >> pure U.TBool
+                SLt  -> f U.TInt >> pure U.TBool
+                SGt  -> f U.TInt >> pure U.TBool
+                SLte -> f U.TInt >> pure U.TBool
+                SGte -> f U.TInt >> pure U.TBool
+                SAnd -> f U.TBool >> pure U.TBool
+                SOr  -> f U.TBool >> pure U.TBool
+        (SUnary, UniArg op e1) -> do
+            ty1 <- inferE env e1
+            case op of
+                SFst -> do
+                    ty_pair <- U.TPair <$> pure tvar <*> (U.TVar <$> Id.freshId "ty")
+                    tvar <$ unify ty1 ty_pair
+                SSnd -> do
+                    ty_pair <- U.TPair <$> (U.TVar <$> Id.freshId "ty") <*> pure tvar
+                    tvar <$ unify ty1 ty_pair
+                SNeg -> U.TInt <$ unify ty1 U.TInt
+                SNot -> U.TBool <$ unify ty1 U.TBool
+        (SPair, (e1, e2)) -> U.TPair <$> inferE env e1 
+                                     <*> inferE env e2
+        (SLambda, (xs,e)) -> do
+            tys <- mapM (\_ -> U.TVar <$> Id.freshId "t") xs
+            let env' = foldr (uncurry M.insert) env (zip xs tys)
+            U.TFun tys <$> inferE env' e
+        (SApp, (f, es)) -> do
+            tys <- mapM (inferE env) es
+            let ty_f = U.TFun tys tvar
+            tvar <$ unify (env M.! f) ty_f
+        (SLet, (x, e1, e2)) -> do
+            ty_x <- inferE env e1
+            let env' = M.insert x ty_x env
+            inferE env' e2
+        (SAssume, (cond, e)) -> do
+            ty <- inferE env cond
+            unify ty U.TBool
+            inferE env e
+        (SIf, (cond, e1, e2)) -> do
+            ty <- inferE env cond
+            unify ty U.TBool
+            ty1 <- inferE env e1
+            ty2 <- inferE env e2
+            ty1 <$ unify ty1 ty2
+        (SBranch, (e1,e2)) -> do
+            ty1 <- inferE env e1
+            ty2 <- inferE env e2
+            ty1 <$ unify ty1 ty2
+        (SFail, _) -> pure tvar
+        (SOmega, _) -> pure tvar
+        (SRand, _) -> pure U.TInt
+    ty <$ unify tvar ty
 
 shouldBe :: Monad m => UniqueKey -> SType ty1 -> SType ty2 -> ExceptT TypeError m (ty1 :~: ty2)
 shouldBe s t1 t2 = 
@@ -52,29 +209,12 @@ shouldBe s t1 t2 =
         Just Refl -> return Refl
         Nothing -> throwError (TypeMisMatch s (SomeSType t1) (SomeSType t2))
 
-shouldBeList :: Monad m => String -> [Type] -> [Type] -> ExceptT TypeError m ()
-shouldBeList s ts1 ts2 | ts1 == ts2 = return ()
-                       | otherwise = throwError (TypeMisMatchList s ts1 ts2)
-
-{-
-shouldBeValue :: Monad m => Value -> Type -> ExceptT TypeError m ()
-shouldBeValue v t1 = shouldBe (render $ pprintV 0 v) (getType v) t1
--}
-
-shouldBeIn :: Monad m => Type -> [Type] -> ExceptT TypeError m ()
-shouldBeIn t1 ts = 
-    if t1 `elem` ts then return () else throwError (TypeMisUse t1 ts)
-
-shouldBePair :: Monad m => String -> Type -> ExceptT TypeError m (Type,Type)
-shouldBePair _ (TPair t1 t2) = return (t1,t2)
-shouldBePair s _ = throwError (OtherError $ "expecting pair :" ++ s)
-
-convertType :: forall m. Monad m => SynEnv -> U.Type -> ExceptT TypeError m SomeSType
+convertType :: forall m. Monad m => SynEnv -> U.Type -> ExceptT SynonymError m SomeSType
 convertType synEnv ty = do
-    ty <- withExceptT Synonym (desugarType synEnv ty) 
+    ty <- desugarType synEnv ty
     go ty (return. SomeSType)
         where
-        go :: U.Type -> (forall ty. SType ty -> ExceptT TypeError m b) -> ExceptT TypeError m b
+        go :: U.Type -> (forall ty. SType ty -> ExceptT SynonymError m b) -> ExceptT SynonymError m b
         go ty k = case ty of
             U.TInt -> k STInt
             U.TBool -> k STBool
@@ -82,8 +222,9 @@ convertType synEnv ty = do
             U.TFun tys ty -> do
                 stys <- goArg tys
                 go ty $ \sty -> k (STFun stys sty)
-            _ -> throwError $ OtherError $ "convertP: unsupported conversion: " {- ++ render (U.pprintT 0 ty)) -}
-        goArg :: [U.Type] -> ExceptT TypeError m STypeArg
+            U.TSyn _ _ -> error "convertType: undesugared synonym"
+            U.TVar _ -> k STInt
+        goArg :: [U.Type] -> ExceptT SynonymError m STypeArg
         goArg [] = return SArgNil
         goArg (ty:tys) = go ty $ \sty -> goArg tys >>= return . SArgCons sty
 

@@ -22,7 +22,7 @@ import Language.DMoCHi.ML.Syntax.Type hiding(Id)
 import Language.DMoCHi.ML.Syntax.Base
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
 
-data Program = Program { functions :: [(SId, [SId], Exp)] 
+data Program = Program { functions :: [(SId, UniqueKey, [SId], Exp)] 
                        , mainTerm  :: Exp }
 
 data Exp where

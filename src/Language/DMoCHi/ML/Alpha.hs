@@ -19,7 +19,7 @@ data Exp where
 data Program = Program { functions :: [(Id String, Type, Exp)]
                        , synonyms :: [SynonymDef]
                        , typeAnn :: [(UniqueKey, Type)]
-                       , maiTerm :: Exp }
+                       , mainTerm :: Exp }
 
 type instance Ident Exp = Id String
 type instance Literal Exp = U.Lit

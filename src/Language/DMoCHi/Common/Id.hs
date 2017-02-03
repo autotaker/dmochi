@@ -4,6 +4,7 @@ module Language.DMoCHi.Common.Id(UniqueKey, FreshT, runFreshT, Fresh, runFresh, 
 
 import Control.Monad.State
 import qualified Control.Monad.State.Strict as Strict
+import qualified Control.Monad.RWS.Strict as Strict
 import Control.Applicative
 import Control.Monad.Reader
 import Control.Monad.Writer hiding((<>))
@@ -134,3 +135,5 @@ instance MonadId m => MonadId (StateT s m) where
 instance MonadId m => MonadId (Strict.StateT s m) where
     freshInt = lift freshInt
 
+instance (MonadId m, Monoid w) => MonadId (Strict.RWST r w s m) where
+    freshInt = lift freshInt

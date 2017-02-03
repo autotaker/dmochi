@@ -1,4 +1,4 @@
-module Language.DMoCHi.ML.DesugarSynonym(SynonymError, desugarType, desugarEnv) where
+module Language.DMoCHi.ML.DesugarSynonym(SynonymError(..), substType, desugarType, desugarEnv) where
 
 import qualified Data.Map as M
 import Control.Monad.Except
