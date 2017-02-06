@@ -9,6 +9,7 @@ import Control.Applicative
 import Control.Monad.Reader
 import Control.Monad.Writer hiding((<>))
 import Control.Monad.Except
+import Control.Monad.Cont
 import Data.Functor.Identity
 import Text.Parsec(ParsecT)
 import Text.PrettyPrint.HughesPJClass
@@ -136,4 +137,7 @@ instance MonadId m => MonadId (Strict.StateT s m) where
     freshInt = lift freshInt
 
 instance (MonadId m, Monoid w) => MonadId (Strict.RWST r w s m) where
+    freshInt = lift freshInt
+
+instance (MonadId m) => MonadId (ContT r m) where
     freshInt = lift freshInt

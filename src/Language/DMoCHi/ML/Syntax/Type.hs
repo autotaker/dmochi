@@ -47,9 +47,18 @@ instance Pretty (SType ty) where
                  punctuate comma $ 
                  mapArg (pPrintPrec plevel 0) tys
             d2 = pPrintPrec plevel 0 t
+
 instance Pretty SomeSType where
     pPrint (SomeSType ty) = pPrint ty
 
+instance Pretty SId where
+    pPrintPrec plevel prec (SId sty f) 
+        | plevel == prettyNormal = pPrintPrec plevel prec f
+        | otherwise = maybeParens (prec > 0) $
+                        pPrintPrec plevel 0 f 
+                        <+> text ":" 
+                        <+> pPrintPrec plevel 0 sty
+     
 instance Show SomeSType where
     show = render . pPrint
 instance Show (SType ty) where

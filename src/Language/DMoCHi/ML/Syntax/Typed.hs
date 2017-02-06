@@ -20,6 +20,7 @@ import GHC.Exts(Constraint)
 import Language.DMoCHi.Common.Id 
 import Language.DMoCHi.ML.Syntax.Type hiding(Id)
 import Language.DMoCHi.ML.Syntax.Base
+import Text.PrettyPrint.HughesPJClass
 
 data Program = Program { functions :: [(SId, UniqueKey, [SId], Exp)] 
                        , mainTerm  :: Exp }
@@ -39,6 +40,19 @@ type instance Labels Exp = AllLabels
 type instance BinOps Exp = AllBinOps
 type instance UniOps Exp = AllUniOps
 type instance Ident Exp = SId
+
+instance Pretty Exp where
+    pPrintPrec plevel prec (Exp op arg sty key) =
+        if plevel == prettyNormal
+            then doc 
+            else comment (key, sty) <+> doc
+        where
+        doc = genericPPrint pp plevel prec op arg
+        pp :: WellFormedPrinter Exp
+        pp = WellFormedPrinter { pPrintExp   = pPrintPrec
+                               , pPrintIdent = pPrintPrec }
+
+        
 
 {-
 data Exp = Value Value
