@@ -42,7 +42,8 @@ type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Omega   e arg = arg ~ ()
     Normalized 'Rand    e arg = arg ~ ()
 
-type instance Labels Exp = AllLabels
+type instance Labels Exp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda,
+                              'App, 'Let, 'Assume, 'Branch, 'Fail, 'Omega, 'Rand ]
 type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda ]
 type instance Labels Atom  = '[ 'Literal, 'Var, 'Binary, 'Unary ]
 type instance BinOps Atom  = '[ 'Add, 'Sub, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
@@ -89,6 +90,26 @@ mkLambda xs e@(Exp _ _ sty _) key =
     Value SLambda (xs, e) (STFun stys sty) key
     where !stys = foldr (\(SId sty _) acc -> SArgCons sty acc) SArgNil xs
 
+mkApp :: SId -> [Value] -> UniqueKey -> Exp
+mkApp f@(SId (STFun _ r_ty) _) vs key = Exp SApp (f, vs) rty key
+mkApp _ _ _ = error "mkApp"
+
+mkLet :: SId -> Exp -> Exp -> UniqueKey -> Exp
+mkLet f e1 e2@(Exp _ _ sty _) key = Exp SLet (f, e1, e2) sty key
+
+mkAssume :: Atom -> Exp -> UniqueKey -> Exp
+mkAssume v e@(Exp _ _ sty _) key = Exp SAssume (v, e) sty key
+
+mkBranch :: Exp -> Exp -> UniqueKey -> Exp
+mkBranch e1@(Exp _ _ sty _) e2 key = Exp SBranch (e1, e2) sty key
+
+mkFail, mkOmega :: SType ty -> UniqueKey -> Exp
+mkFail sty key = Exp SFail () sty key
+mkOmega sty key = Exp SOmega () sty key
+
+mkRand :: UniqueKey -> Exp
+mkRand key = Exp SRand () STInt key
+
 class Castable from to where
     cast :: from -> to
 
@@ -114,17 +135,71 @@ instance Castable Atom Exp where
 convertE :: MonadId m => Typed.Exp -> m Exp
 convertE e@(Typed.Exp l arg ty key) = 
     case (l, arg) of
-        (SLiteral, _)         -> runContT (convertA e) (pure . cast)
-        (SVar, _)             -> runContT (convertA e) (pure . cast)
-        (SUnary, _) -> runContT (convertA e) (pure . cast)
-        (SPair, _) -> runContT (convertV e) (pure . cast)
-        (SLambda, _) -> runContT (convertV e) (pure . cast)
+        (SLiteral, _) -> runContT (convertA e) (pure . cast)
+        (SVar, _)     -> runContT (convertA e) (pure . cast)
+        (SUnary, _)   -> runContT (convertA e) (pure . cast)
+        (SBinary, _)  -> runContT (convertA e) (pure . cast)
+        (SPair, _)    -> runContT (convertV e) (pure . cast)
+        (SLambda, _)  -> runContT (convertV e) (pure . cast)
+        (SApp, (f, es)) -> runContT (mkApp f <$> map convertV es <*> pure key) pure
+        (SLet, (x, e1, e2)) -> mkLet x <$> convertE e1 <*> convertE e2 <*> pure key
+        (SAssume, (e1,e2)) -> runContT (convertA e1) (\a -> 
+                                    mkAssume a <$> convertE e2 <*> pure key)
+        (SBranch, (e1,e2)) -> mkBranch <$> convertE e1 <*> convertE e2 <*> pure key
+        (SIf, (cond, e1, e2)) -> 
+            runContT (convertA cond) $ \a -> do
+                e1' <- convertE e1
+                e2' <- convertE e2
+                na  <- mkUni SNot a <$> freshKey
+                mkBranch <$> (mkAssume  a e1' <$> freshKey) 
+                         <*> (mkAssume na e2' <$> freshKey)
+                         <*> pure key
+        (SFail, ()) -> mkFail sty key
+        (SOmega, ()) -> mkOmega sty key
+        (SRand, ()) -> mkRand key
 
-convertA :: MonadId m => Typed.Exp -> runContT Exp m Atom
-convertA = undefined
+-- ContT Exp m a :: (a -> m Exp) -> m Exp
 
-convertV :: MonadId m => Typed.Exp -> runContT Exp m Value
-convertV = undefined
+convertA :: MonadId m => Typed.Exp -> ContT Exp m Atom
+convertA e@(Typed.Exp l arg sty key) = 
+    case (l,arg) of
+        (SLiteral, lit) -> pure (mkLiteral lit key)
+        (SVar, x) -> pure (mkVar x key)
+        (SUnary, UniArg op e1) -> mkUni op <$> convertA e1 <*> pure key
+        (SBinary, BinArg op e1 e2) -> mkBin op <$> convertA e1 
+                                               <*> convertA e2 
+                                               <*> pure key
+        _ -> do
+            v <- convertV e
+            r <- SId sty <$> identify "tmp"
+            vr <- mkVar r <$> freshKey
+            ContT $ \cont -> mkLet r v (cont vr) <$> freshKey
+
+convertV :: MonadId m => Typed.Exp -> ContT Exp m Value
+convertV e@(Typed.Exp l arg sty key) =
+    case (l,arg) of
+        (SLiteral, _) -> cast <$> convertA e
+        (SVar, _) -> cast <$> convertA e
+        (SUnary, _) -> cast <$> convertA e
+        (SBinary, _) -> cast <$> convertA e
+        (SPair, (e1, e2)) -> mkPair <$> convertV e1 <*> convertV e2 <*> pure key
+        (SLambda, (x, e1)) -> mkLambda x <$> lift (convertE e1) <*> pure key
+        _ -> do
+            e' <- lift (convertE e)
+            r <- SId sty <$> identify "tmp"
+            vr <- mkVar r <$> freshKey
+            ContT $ \cont -> mkLet r e' (cont (cast vr)) <$> freshKey
+{-
+ - ContT f >>= g == Cont (\cont -> f (\a -> runContT (g b) cont))
+ -
+ -
+ - convertE (f 1 + g 0) 
+ - => runContT (convertA (f 1 + g 0)) (pure . cast)
+ - => runContT (mkBin op <$> convertA (f 1) <*> convertA (g 0)) (pure . cast)
+ - => runContT (mkBin op <$> (convertV (f 1) ...) ...) (pure . cast)
+ - => runContT (mkBin op <$> (
+ - }
+            
 {-
 data Program = Program { functions :: [(Id,FunDef)] 
                        , mainTerm  :: Exp }
