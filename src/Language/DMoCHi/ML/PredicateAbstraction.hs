@@ -6,8 +6,6 @@ import qualified Data.Map as M
 import Text.PrettyPrint.HughesPJClass
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
-import qualified Language.DMoCHi.ML.Syntax.Base as ML
-import qualified Language.DMoCHi.ML.Syntax.Type as ML
 -- import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
 import qualified Language.DMoCHi.Boolean.PrettyPrint.Typed as B
@@ -152,8 +150,8 @@ toSortTerm (_, ty, ps) = B.Tuple [toSort ty, B.Tuple [ B.Bool | _ <- ps ]]
 toSortArg :: ArgType -> B.Sort
 toSortArg (_, tys, ps) = B.Tuple [B.Tuple $ map toSort tys, B.Tuple [B.Bool | _ <- ps]]
 
-toSymbol :: ML.SId -> PType -> B.Symbol
-toSymbol (ML.SId _ x) ty = B.Symbol (toSort ty) (show x)
+toSymbol :: ML.TId -> PType -> B.Symbol
+toSymbol (ML.TId _ x) ty = B.Symbol (toSort ty) (show x)
 
 abstAValue :: (MonadIO m, MonadId m) => Env -> Constraints -> PVar -> ML.Atom-> PType -> m B.Term
 abstAValue env cs pv = go 
@@ -211,7 +209,7 @@ abstTerm tbl env cs pv e@(ML.Exp l arg _ _) (r,ty,qs) = case (l,arg) of
                     let PFun _ (ys,ty_ys,ps) (r',ty_r',qs') = env M.! f
                     let subst = M.fromList $ zip ys vs
                     let ty_ys' = map (substVPType subst) ty_ys
-                    let sx = case x of { ML.SId _ name_x -> show name_x }
+                    let sx = show $ ML.name x 
                     arg_body  <- B.T <$> zipWithM (abstValue tbl env cs pv) vs ty_ys'
                     arg_preds <- abstFormulae cs pv (map (substVFormula subst) ps)
                     let f' = toSymbol f (env M.! f)
@@ -232,7 +230,7 @@ abstTerm tbl env cs pv e@(ML.Exp l arg _ _) (r,ty,qs) = case (l,arg) of
                         abstTerm tbl (M.insert x PInt env) cs pv e2 (r,ty,qs)
                 _ -> do
                     let Right (y,ty_y,ps) = tbl M.! key1
-                    let sx = case x of { ML.SId _ name_x -> show name_x }
+                    let sx = show $ ML.name x
                     x_pair <- B.freshSym (sx ++ "_pair") (toSortTerm (y,ty_y,ps))
                     B.f_let x_pair <$> abstTerm tbl env cs pv e1 (y,ty_y,ps) <*> do
                         let x_body  = B.f_proj 0 2 (B.V x_pair)
@@ -265,10 +263,10 @@ abstTerm tbl env cs pv e@(ML.Exp l arg _ _) (r,ty,qs) = case (l,arg) of
 
 -}
 
-addEq :: ML.SId -> ML.Atom -> Constraints -> Constraints
+addEq :: ML.TId -> ML.Atom -> Constraints -> Constraints
 addEq y v cs = (ML.mkBin ML.SEq (ML.mkVar y) v) :cs
 
-abstFunDef :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> (UniqueKey,[ML.SId],ML.Exp) -> Maybe PType -> m (B.Term, PType)
+abstFunDef :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> (UniqueKey,[ML.TId],ML.Exp) -> Maybe PType -> m (B.Term, PType)
 abstFunDef tbl env cs pv (ident,xs,t1) mpty = do
     let ty_f@(PFun _ (ys,ty_ys,ps) rty) = 
             case mpty of
@@ -309,7 +307,7 @@ abstProg tbl (ML.Program fs t0) = do
         (e_f,_) <- abstFunDef tbl env [] [] (key,xs,e) (Just $ env M.! f)
         return (f',e_f)
     e0 <- do
-        r <- ML.SId ML.STInt <$> identify "main"
+        r <- ML.TId ML.TInt <$> identify "main"
         abstTerm tbl env [] [] t0 (r,PInt,[])
     return $ B.Program ds e0
 

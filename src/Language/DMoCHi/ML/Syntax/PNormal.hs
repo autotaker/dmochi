@@ -1,5 +1,13 @@
 {-# LANGUAGE FlexibleContexts, BangPatterns, TypeFamilies, DataKinds, KindSignatures, GADTs, MultiParamTypeClasses #-}
-module Language.DMoCHi.ML.Syntax.PNormal where
+module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
+                                        , Exp(..), Value(..), Atom(..)
+                                        , mkBin, mkUni, mkLiteral, mkVar, mkPair
+                                        , mkLambda, mkApp, mkLet, mkAssume, mkBranch
+                                        , mkFail, mkOmega, mkRand
+                                        , Castable(..)
+                                        , normalize, atomOfValue, valueOfExp, isValue
+                                        , module Language.DMoCHi.ML.Syntax.Type
+                                        , module Language.DMoCHi.ML.Syntax.Base )where
 -- import Control.Monad
 import Language.DMoCHi.Common.Id
 -- import qualified Data.Map as M
@@ -9,26 +17,25 @@ import GHC.Exts(Constraint)
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.Base
 import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
-import Language.DMoCHi.ML.Syntax.Typed(WellLabeled)
 import Control.Monad.Cont
 import Control.Monad.Trans.Cont(shiftT,resetT,evalContT)
 import Text.PrettyPrint.HughesPJClass
 
 
-data Program = Program { functions :: [(SId, UniqueKey, [SId], Exp)]
+data Program = Program { functions :: [(TId, UniqueKey, [TId], Exp)]
                        , mainTerm  :: Exp }
 
 data Exp where
-    Exp :: (Normalized l Exp arg, WellLabeled l ty, Elem l (Labels Exp) ~ 'True) => 
-            SLabel l -> arg -> SType ty -> UniqueKey -> Exp
+    Exp :: (Normalized l Exp arg, Elem l (Labels Exp) ~ 'True) => 
+            SLabel l -> arg -> Type -> UniqueKey -> Exp
 
 data Value where
-    Value :: (Normalized l Value arg, WellLabeled l ty, Elem l (Labels Value) ~ 'True) => 
-            SLabel l -> arg -> SType ty -> UniqueKey -> Value
+    Value :: (Normalized l Value arg, Elem l (Labels Value) ~ 'True) => 
+            SLabel l -> arg -> Type -> UniqueKey -> Value
 
 data Atom where
-    Atom :: (Normalized l Atom arg, WellLabeled l ty, Elem l (Labels Atom) ~ 'True) => 
-            SLabel l -> arg -> SType ty -> Atom
+    Atom :: (Normalized l Atom arg, Elem l (Labels Atom) ~ 'True) => 
+            SLabel l -> arg -> Type -> Atom
 
 instance Eq Atom where
     (==) (Atom l1 arg1 _) (Atom l2 arg2 _) =
@@ -64,53 +71,53 @@ type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda 
 type instance Labels Atom  = '[ 'Literal, 'Var, 'Binary, 'Unary ]
 type instance BinOps Atom  = '[ 'Add, 'Sub, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
 type instance UniOps Atom  = '[ 'Fst, 'Snd, 'Not, 'Neg ]
-type instance Ident  Exp = SId
-type instance Ident  Value = SId
-type instance Ident  Atom = SId
+type instance Ident  Exp = TId
+type instance Ident  Value = TId
+type instance Ident  Atom = TId
 
 mkBin :: SBinOp op -> Atom -> Atom -> Atom
 mkBin op v1 v2 = case op of
-    SAdd -> Atom SBinary (BinArg SAdd v1 v2) STInt
-    SSub -> Atom SBinary (BinArg SSub v1 v2) STInt
-    SEq  -> Atom SBinary (BinArg SEq v1 v2) STBool
-    SLt  -> Atom SBinary (BinArg SLt v1 v2) STBool
-    SLte -> Atom SBinary (BinArg SLte v1 v2) STBool
-    SGt  -> Atom SBinary (BinArg SLt v2 v1) STBool
-    SGte -> Atom SBinary (BinArg SLte v2 v1) STBool
-    SAnd -> Atom SBinary (BinArg SAnd v1 v2) STBool
-    SOr  -> Atom SBinary (BinArg SOr  v1 v2) STBool
+    SAdd -> Atom SBinary (BinArg SAdd v1 v2) TInt
+    SSub -> Atom SBinary (BinArg SSub v1 v2) TInt
+    SEq  -> Atom SBinary (BinArg SEq v1 v2) TBool
+    SLt  -> Atom SBinary (BinArg SLt v1 v2) TBool
+    SLte -> Atom SBinary (BinArg SLte v1 v2) TBool
+    SGt  -> Atom SBinary (BinArg SLt v2 v1) TBool
+    SGte -> Atom SBinary (BinArg SLte v2 v1) TBool
+    SAnd -> Atom SBinary (BinArg SAnd v1 v2) TBool
+    SOr  -> Atom SBinary (BinArg SOr  v1 v2) TBool
 
 mkUni :: SUniOp op -> Atom -> Atom
 mkUni op v1@(Atom _ _ sty) = case op of
-    SNeg -> Atom SUnary (UniArg SNeg v1) STInt
-    SNot -> Atom SUnary (UniArg SNot v1) STBool
+    SNeg -> Atom SUnary (UniArg SNeg v1) TInt
+    SNot -> Atom SUnary (UniArg SNot v1) TBool
     SFst -> case sty of
-        STPair sty1 _ -> Atom SUnary (UniArg SFst v1) sty1
+        TPair sty1 _ -> Atom SUnary (UniArg SFst v1) sty1
         _ -> error "mkUni: Fst"
     SSnd -> case sty of
-        STPair _ sty2 -> Atom SUnary (UniArg SSnd v1) sty2
+        TPair _ sty2 -> Atom SUnary (UniArg SSnd v1) sty2
         _ -> error "mkUni: Snd"
 
 mkLiteral :: Lit -> Atom
-mkLiteral l@(CInt _) = Atom SLiteral l STInt
-mkLiteral l@(CBool _) = Atom SLiteral l STInt
+mkLiteral l@(CInt _) = Atom SLiteral l TInt
+mkLiteral l@(CBool _) = Atom SLiteral l TInt
 
-mkVar :: SId -> Atom
-mkVar x@(SId sty _) = Atom SVar x sty
+mkVar :: TId -> Atom
+mkVar x@(TId sty _) = Atom SVar x sty
 
 mkPair :: Value -> Value -> UniqueKey -> Value
-mkPair v1@(Value _ _ sty1 _) v2@(Value _ _ sty2 _) key = Value SPair (v1, v2) (STPair sty1 sty2) key
+mkPair v1@(Value _ _ sty1 _) v2@(Value _ _ sty2 _) key = Value SPair (v1, v2) (TPair sty1 sty2) key
 
-mkLambda :: [SId] -> Exp -> UniqueKey -> Value
+mkLambda :: [TId] -> Exp -> UniqueKey -> Value
 mkLambda xs e@(Exp _ _ sty _) key = 
-    Value SLambda (xs, e) (STFun stys sty) key
-    where !stys = foldr (\(SId sty _) acc -> SArgCons sty acc) SArgNil xs
+    Value SLambda (xs, e) (TFun stys sty) key
+    where !stys = map getType xs
 
-mkApp :: SId -> [Value] -> UniqueKey -> Exp
-mkApp f@(SId (STFun _ r_ty) _) vs key = Exp SApp (f, vs) r_ty key
+mkApp :: TId -> [Value] -> UniqueKey -> Exp
+mkApp f@(TId (TFun _ r_ty) _) vs key = Exp SApp (f, vs) r_ty key
 mkApp _ _ _ = error "mkApp"
 
-mkLet :: SId -> Exp -> Exp -> UniqueKey -> Exp
+mkLet :: TId -> Exp -> Exp -> UniqueKey -> Exp
 mkLet f e1 e2@(Exp _ _ sty _) key = Exp SLet (f, e1, e2) sty key
 
 mkAssume :: Atom -> Exp -> UniqueKey -> Exp
@@ -119,12 +126,12 @@ mkAssume v e@(Exp _ _ sty _) key = Exp SAssume (v, e) sty key
 mkBranch :: Exp -> Exp -> UniqueKey -> Exp
 mkBranch e1@(Exp _ _ sty _) e2 key = Exp SBranch (e1, e2) sty key
 
-mkFail, mkOmega :: SType ty -> UniqueKey -> Exp
+mkFail, mkOmega :: Type -> UniqueKey -> Exp
 mkFail sty key = Exp SFail () sty key
 mkOmega sty key = Exp SOmega () sty key
 
 mkRand :: UniqueKey -> Exp
-mkRand key = Exp SRand () STInt key
+mkRand key = Exp SRand () TInt key
 
 class Castable from to where
     type Attr from to
@@ -258,7 +265,7 @@ convertA e@(Typed.Exp l arg sty _) =
                                                <*> convertA e2 
         _ -> do
             v <- convertE e
-            r <- SId sty <$> identify "tmp"
+            r <- TId sty <$> identify "tmp"
             ContT $ \cont -> mkLet r v <$> cont (mkVar r) <*> freshKey
 
 convertV :: MonadId m => Typed.Exp -> ContT Exp m Value
@@ -272,7 +279,7 @@ convertV e@(Typed.Exp l arg sty key) =
         (SLambda, (x, e1)) -> mkLambda x <$> resetT (convertE e1) <*> pure key
         _ -> do
             e' <- convertE e
-            r <- SId sty <$> identify "tmp"
+            r <- TId sty <$> identify "tmp"
             kr <- freshKey
             shiftT $ \cont -> lift (mkLet r e' <$> cont (castWith kr (mkVar r)) <*> freshKey)
 

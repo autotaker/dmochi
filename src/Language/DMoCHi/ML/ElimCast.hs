@@ -4,8 +4,6 @@ module Language.DMoCHi.ML.ElimCast(elimCast) where
 import Control.Monad
 import Language.DMoCHi.ML.Syntax.PNormal
 import Language.DMoCHi.Common.Id
-import Language.DMoCHi.ML.Syntax.Type
-import Language.DMoCHi.ML.Syntax.Base
 
 import Language.DMoCHi.ML.Syntax.PType
 import qualified Data.Map as M
@@ -17,7 +15,7 @@ import qualified Data.Map as M
  - This type casting is eliminated by replacing av with 
  - (fun x1 .. xn -> let f = av in ElimCast(f x1 .. xn)) :: Value
  -}
-elimCastFunDef :: MonadId m => TypeMap -> Env -> (UniqueKey, [SId], Exp) -> PType -> m (UniqueKey, [SId], Exp)
+elimCastFunDef :: MonadId m => TypeMap -> Env -> (UniqueKey, [TId], Exp) -> PType -> m (UniqueKey, [TId], Exp)
 elimCastFunDef tbl env (ident,ys,e) sigma = 
     (,,) ident ys <$> elimCastTerm tbl env' e retTy'
         where
@@ -43,16 +41,17 @@ elimCastValue tbl env v@(Value l arg sty key) sigma = case (l,arg) of
                 PInt -> return v
                 PBool -> return v
                 _ | sigma == typeOfAValue env av -> return v
-                PFun ty@(STFun _ ty_r) (xs,_,_) _ -> do
+                PFun ty (xs,_,_) _ -> do
+                    let TFun _ ty_r = ty
                     (f, cnstr_f) <- case l of
                         SVar -> return (arg, id)
-                        _ -> do g <- SId ty <$> identify "f"
+                        _ -> do g <- TId ty <$> identify "f"
                                 key' <- freshKey
                                 return (g, (\e -> mkLet g (cast v) e key'))
-                    ys <- mapM alphaSId xs
+                    ys <- mapM alphaTId xs
                     e <- cnstr_f <$> do
                         j <- freshKey
-                        r <- SId ty_r <$> identify "r"
+                        r <- TId ty_r <$> identify "r"
                         kr <- freshKey 
                         vs <- mapM (\y -> freshKey >>= (\k -> return $ castWith k (mkVar y))) ys
                         mkLet r (mkApp f vs j) (castWith kr (mkVar r)) <$> freshKey
@@ -136,7 +135,7 @@ elimCastTerm tbl env (Exp l arg sty key) tau = case (l,arg) of
     (SApp, (f, vs)) -> do
         key1 <- freshKey
         key2 <- freshKey
-        r <- SId sty <$> identify "r"
+        r <- TId sty <$> identify "r"
         let e' = mkLet r (mkApp f vs key) (castWith key1 $ mkVar r) key2
         elimCastTerm tbl env e' tau
     (SBranch, (e1, e2)) -> do
@@ -150,7 +149,7 @@ elimCast tbl prog = do
     fs <- forM (functions prog) $ \(f, key, xs, e) -> do
                     (_,_,e') <- elimCastFunDef tbl env (key,xs,e) (env M.! f)
                     return (f, key, xs, e')
-    r <- SId STInt <$> identify "main"
+    r <- TId TInt <$> identify "main"
     e <- elimCastTerm tbl env (mainTerm prog) (r, PInt, [])
     return $ Program fs e
     

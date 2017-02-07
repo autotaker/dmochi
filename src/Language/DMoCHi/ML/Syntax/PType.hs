@@ -13,33 +13,30 @@ import Control.Monad.Writer
 import qualified Data.DList as DL
 
 data PType = PInt | PBool
-           | PFun (SType 'LFun) ArgType TermType
-           | PPair (SType 'LPair) PType PType
+           | PFun Type ArgType TermType
+           | PPair Type PType PType
 
-instance HasSType PType where
-    getSType ty = go ty SomeSType where
-        go :: PType -> (forall l. SType l -> SomeSType) -> SomeSType
-        go PInt k = k STInt
-        go PBool k = k STBool
-        go (PFun sty _ _) k = k sty
-        go (PPair sty _ _) k = k sty
+instance HasType PType where
+    getType PInt = TInt
+    getType PBool = TBool
+    getType (PFun sty _ _) = sty
+    getType (PPair sty _ _) = sty
 
 mkPFun :: ArgType -> TermType -> PType
-mkPFun argTy@(xs,_,_) termTy@(SId ty_r _,_,_) = PFun (STFun ty_xs ty_r) argTy termTy
+mkPFun argTy@(xs,_,_) termTy@(TId ty_r _,_,_) = PFun (TFun ty_xs ty_r) argTy termTy
     where
-    ty_xs = foldr (\(SId ty _) acc -> SArgCons ty acc) SArgNil xs
+    ty_xs = map getType xs
 mkPPair :: PType -> PType -> PType
 mkPPair ty1 ty2 = 
-    case getSType ty1 of { SomeSType sty1 -> 
-    case getSType ty2 of { SomeSType sty2 ->
-        PPair (STPair sty1 sty2) ty1 ty2
-    }}
+    let !sty1 = getType ty1 in
+    let !sty2 = getType ty2 in
+    PPair (TPair sty1 sty2) ty1 ty2
     
 
 type Env = M.Map Id PType
 type Constraints = [Formula]
 type Formula = Atom
-type Id = SId
+type Id = TId
 
 type TermType = (Id, PType, [Formula])
 type ArgType = ([Id],[PType],[Formula])
@@ -51,7 +48,7 @@ instance Eq PType where
     PInt == PInt = True
     PBool == PBool = True
     (PFun ty_1 (xs_1,xsty_1,ps_1) (r_1,rty_1,qs_1)) == (PFun ty_2 (xs_2,xsty_2,ps_2) (r_2,rty_2,qs_2)) =
-        SomeSType ty_1 == SomeSType ty_2 && 
+        ty_1 == ty_2 && 
         ps_1 == map (substFormula subst1) ps_2 &&
         qs_1 == map (substFormula subst2) qs_2 &&
         xsty_1 == map (substPType subst1) xsty_2 &&
@@ -60,19 +57,19 @@ instance Eq PType where
         subst1 = M.fromList $ zip xs_2 xs_1
         subst2 = M.insert r_2 r_1 subst1
     PPair ty pty_fst pty_snd == PPair ty' pty_fst' pty_snd' =
-        SomeSType ty == SomeSType ty' && pty_fst == pty_fst' && pty_snd == pty_snd'
+        ty == ty' && pty_fst == pty_fst' && pty_snd == pty_snd'
     _ == _ = False
 
 
 pprintTermType :: TermType -> Doc
-pprintTermType (SId _ name,pty_x,fml) = braces $ 
+pprintTermType (TId _ name,pty_x,fml) = braces $ 
     pPrint name <+> colon <+> (pprintPType 0 pty_x) <+>
     text "|" <+> (hsep $ punctuate comma $ map pPrint fml)
 
 pprintPTypeArg :: ArgType -> Doc
 pprintPTypeArg (xs,pty_xs,fml) =
     braces $ 
-        hsep (punctuate comma $ zipWith (\(SId _ name_x) pty_x -> pPrint name_x <+> colon <+> (pprintPType 0 pty_x)) xs pty_xs) <+>
+        hsep (punctuate comma $ zipWith (\(TId _ name_x) pty_x -> pPrint name_x <+> colon <+> (pprintPType 0 pty_x)) xs pty_xs) <+>
         text "|" <+> (hsep $ punctuate comma $ map pPrint fml)
 
 pprintPType :: Int -> PType -> Doc
@@ -170,7 +167,7 @@ typeOfAValue env = go where
 initTypeMap :: MonadId m => Program -> m (TypeMap,ScopeMap)
 initTypeMap (Program fs t0) = do
     es <- execWriterT $ do
-        let gather :: MonadId m => [SId] -> Exp -> WriterT (DL.DList (UniqueKey, Either PType TermType, [SId])) m ()
+        let gather :: MonadId m => [TId] -> Exp -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
             gather fv (Exp l arg _ _) = case (l,arg) of
                 (SLiteral, _) -> return ()
                 (SVar, _) -> return ()
@@ -190,7 +187,7 @@ initTypeMap (Program fs t0) = do
                 (SFail, _) -> return ()
                 (SOmega, _) -> return ()
                 (SRand, _) -> return ()
-            gatherF fv (SId sty _, key, xs, e) = do
+            gatherF fv (TId sty _, key, xs, e) = do
                 gather (xs ++ fv) e
                 ty <- genPType sty 
                 tell (DL.singleton (key,Left ty, fv))
@@ -200,19 +197,19 @@ initTypeMap (Program fs t0) = do
     let (es1,es2) = unzip [ ((i,v1),(i,v2)) | (i, v1, v2) <- DL.toList es ]
     return (M.fromList es1, M.fromList es2)
 
-genTermType :: MonadId m => SType ty -> m TermType
+genTermType :: MonadId m => Type -> m TermType
 genTermType s = do
-    r <- SId s <$> identify "r"
+    r <- TId s <$> identify "r"
     pty <- genPType s
     return (r,pty,[])
-genPType :: MonadId m => SType ty -> m PType
-genPType STInt = return PInt
-genPType STBool = return PBool
-genPType ty@(STPair t1 t2) = PPair ty <$> genPType t1 <*> genPType t2
-genPType ty@(STFun ts t2) = do
-    xs <- foldArg (\t1 action -> identify "x" >>= (\x -> (SId t1 x :) <$> action)) (pure []) ts
-    r <- SId t2 <$> identify "r"
-    ty_xs <- foldArg (\t1 action -> genPType t1 >>= (\pty -> (pty :) <$> action)) (pure []) ts
+genPType :: MonadId m => Type -> m PType
+genPType TInt = return PInt
+genPType TBool = return PBool
+genPType ty@(TPair t1 t2) = PPair ty <$> genPType t1 <*> genPType t2
+genPType ty@(TFun ts t2) = do
+    xs <- mapM (\t1 -> TId t1 <$> identify "x") ts
+    r <- TId t2 <$> identify "r"
+    ty_xs <- mapM genPType ts
     ty_r <- genPType t2
     return $ PFun ty (xs, ty_xs, []) (r, ty_r, [])
 
@@ -235,10 +232,10 @@ mergePType :: PType -> PType -> PType
 mergePType PInt PInt = PInt
 mergePType PBool PBool = PBool
 mergePType (PPair ty1 pty_fst1 pty_snd1) (PPair ty2 pty_fst2 pty_snd2) 
-    | SomeSType ty1 == SomeSType ty2 = PPair ty1 (mergePType pty_fst1 pty_fst2) (mergePType pty_snd1 pty_snd2)
+    | ty1 == ty2 = PPair ty1 (mergePType pty_fst1 pty_fst2) (mergePType pty_snd1 pty_snd2)
 mergePType (PFun ty1 (xs_1,xsty_1,ps_1) (r_1,rty_1,qs_1)) 
            (PFun ty2 (xs_2,xsty_2,ps_2) (r_2,rty_2,qs_2))
-    | SomeSType ty1 == SomeSType ty2 = PFun ty1 (xs_1,xsty, ps) (r_1,rty,qs)
+    | ty1 == ty2 = PFun ty1 (xs_1,xsty, ps) (r_1,rty,qs)
         where
         subst1 = M.fromList (zip xs_2 xs_1)
         subst2 = M.insert r_2 r_1 subst1

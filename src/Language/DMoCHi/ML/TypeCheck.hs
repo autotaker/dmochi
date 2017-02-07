@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, ScopedTypeVariables, Rank2Types, GADTs, TypeOperators #-}
+{-# LANGUAGE FlexibleContexts, ScopedTypeVariables, Rank2Types, GADTs, TypeOperators, BangPatterns #-}
 module Language.DMoCHi.ML.TypeCheck where
 import qualified Data.Map as M
 import Prelude hiding(mapM)
@@ -14,7 +14,6 @@ import qualified Language.DMoCHi.ML.Syntax.UnTyped as U(SynName, SynonymDef(..),
 import qualified Language.DMoCHi.Common.Id as Id
 import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey)
 import Language.DMoCHi.ML.DesugarSynonym
-import Data.Type.Equality
 
 instance Show TypeError where
     show (UndefinedVariable s)      = "UndefinedVariables: "++ s
@@ -26,11 +25,11 @@ instance Show TypeError where
     show (Infer err)  = "InferError: " ++ show err
     show (OtherError s) = "OtherError: " ++ s
 
-type Env = M.Map (Id.Id String) SomeSType
-type Annot = M.Map UniqueKey SomeSType
+type Env = M.Map (Id.Id String) Type
+type Annot = M.Map UniqueKey Type
 type SynEnv = M.Map U.SynName U.SynonymDef
 data TypeError = UndefinedVariable String  
-               | TypeMisMatch UniqueKey SomeSType SomeSType
+               | TypeMisMatch UniqueKey Type Type
                | ArityMisMatch UniqueKey Int Int
                | TypeMisMatchList String [Type] [Type]
                | TypeMisUse   Type [Type]
@@ -45,7 +44,7 @@ fromUnTyped prog = do
     fs' <- forM (U.functions prog) $ \(f, _, e) -> do
         Exp l arg sty key <- convertE annot env e
         case (l, arg) of
-            (SLambda, (xs, e)) -> return (SId sty f, key, xs, e)
+            (SLambda, (xs, e)) -> return (TId sty f, key, xs, e)
             _ -> throwError $ OtherError "RHS of definition should be a function"
     e0 <- convertE annot env (U.mainTerm prog)
     return $ Program { functions = fs', mainTerm = e0 }
@@ -116,7 +115,7 @@ elemType x (U.TFun tys ty) = any (elemType x) (ty:tys)
 elemType x (U.TVar y) = x == y
 elemType x (U.TSyn tys _) = any (elemType x) tys
 
-infer :: MonadId m => U.Program -> ExceptT InferError m (M.Map UniqueKey SomeSType)
+infer :: MonadId m => U.Program -> ExceptT InferError m (M.Map UniqueKey Type)
 infer prog = do
     let synEnv = M.fromList [ (U.synName syn, syn) | syn <- U.synonyms prog ]
     (res,_,_) <- runRWST (do
@@ -203,45 +202,40 @@ inferE env (U.Exp l arg key) = do
         (SRand, _) -> pure U.TInt
     ty <$ unify tvar ty
 
-shouldBe :: Monad m => UniqueKey -> SType ty1 -> SType ty2 -> ExceptT TypeError m (ty1 :~: ty2)
-shouldBe s t1 t2 = 
-    case testEquality t1 t2 of
-        Just Refl -> return Refl
-        Nothing -> throwError (TypeMisMatch s (SomeSType t1) (SomeSType t2))
+shouldBe :: Monad m => UniqueKey -> Type -> Type-> ExceptT TypeError m ()
+shouldBe s t1 t2 =
+    unless (t1 == t2) $ throwError (TypeMisMatch s t1 t2)
 
-convertType :: forall m. Monad m => SynEnv -> U.Type -> ExceptT SynonymError m SomeSType
+convertType :: forall m. Monad m => SynEnv -> U.Type -> ExceptT SynonymError m Type
 convertType synEnv ty = do
     ty <- desugarType synEnv ty
-    go ty (return. SomeSType)
+    go ty 
         where
-        go :: U.Type -> (forall ty. SType ty -> ExceptT SynonymError m b) -> ExceptT SynonymError m b
-        go ty k = case ty of
-            U.TInt -> k STInt
-            U.TBool -> k STBool
-            U.TPair ty1 ty2 -> go ty1 $ \sty1 -> go ty2 $ \sty2 -> k (STPair sty1 sty2)
+        go :: U.Type -> ExceptT SynonymError m Type
+        go ty = case ty of
+            U.TInt -> return TInt
+            U.TBool -> return TBool
+            U.TPair ty1 ty2 -> go ty1 >>= \sty1 -> go ty2 >>= \sty2 -> return (TPair sty1 sty2)
             U.TFun tys ty -> do
-                stys <- goArg tys
-                go ty $ \sty -> k (STFun stys sty)
+                stys <- mapM go tys
+                go ty >>=  \sty -> return (TFun stys sty)
             U.TSyn _ _ -> error "convertType: undesugared synonym"
-            U.TVar _ -> k STInt
-        goArg :: [U.Type] -> ExceptT SynonymError m STypeArg
-        goArg [] = return SArgNil
-        goArg (ty:tys) = go ty $ \sty -> goArg tys >>= return . SArgCons sty
+            U.TVar _ -> return TInt
 
 convertE :: forall m. MonadId m => Annot -> Env -> U.Exp -> ExceptT TypeError m Exp
 convertE annot env (U.Exp l arg key) = 
-    case annot M.! key of { SomeSType sty -> 
+    let !sty = annot M.! key in
     case (l,arg) of
         (SLiteral, U.CInt _)  -> do
-            Refl <- shouldBe key sty STInt
+            shouldBe key sty TInt
             return $ Exp l arg sty key
         (SLiteral, U.CBool _) -> do
-            Refl <- shouldBe key sty STBool
+            shouldBe key sty TBool
             return $ Exp l arg sty key
-        (SVar, x) -> case env M.! x of 
-            SomeSType sty' -> do
-                shouldBe key sty sty'
-                return $ Exp l (SId sty' x) sty key
+        (SVar, x) -> do
+            let !sty' = env M.! x
+            shouldBe key sty sty'
+            return $ Exp l (TId sty' x) sty key
         (SBinary, BinArg op e1 e2) ->  do
             e1'@(Exp _ _ sty1 key1) <- convertE annot env e1
             e2'@(Exp _ _ sty2 key2) <- convertE annot env e2
@@ -256,51 +250,50 @@ convertE annot env (U.Exp l arg key) =
         (SPair, (e1, e2)) -> do
             e1'@(Exp _ _ sty1 _) <- convertE annot env e1
             e2'@(Exp _ _ sty2 _) <- convertE annot env e2
-            Refl <- shouldBe key sty (STPair sty1 sty2)
+            shouldBe key sty (TPair sty1 sty2)
             return $ Exp l (e1', e2') sty key
         (SLambda, (xs, e1)) -> do
             case sty of
-                STFun stys sty1' -> do
-                    let ty_args = mapArg SomeSType stys
-                        n = length ty_args
+                TFun ty_args sty1' -> do
+                    let n = length ty_args
                         m = length xs
                     when (length ty_args /= length xs) $ 
                         throwError $ ArityMisMatch key n m
                     let env' = foldr (uncurry M.insert) env $ zip xs ty_args
-                        ys = zipWith (\x (SomeSType ty) -> SId ty x) xs ty_args
+                        ys = zipWith (\x ty -> TId ty x) xs ty_args
                     e1'@(Exp _ _ sty1 key1) <- convertE annot env' e1
                     shouldBe key1 sty1 sty1'
                     return $ Exp l (ys, e1') sty key
                 _ -> throwError $ OtherError $ "This function expected to have type " ++ show sty
         (SApp, (f, es)) -> do
             case env M.! f of
-                SomeSType sty_f@(STFun tys sty') -> do
+                sty_f@(TFun tys sty') -> do
                     es' <- mapM (convertE annot env) es
-                    let g :: Exp -> SomeSType -> ExceptT TypeError m ()
-                        g (Exp _ _ sty_i key_i) (SomeSType sty_i') = 
+                    let g :: Exp -> Type -> ExceptT TypeError m ()
+                        g (Exp _ _ sty_i key_i) sty_i' = 
                             void $ shouldBe key_i sty_i sty_i'
-                    zipWithM_ g es' (mapArg SomeSType tys)
+                    zipWithM_ g es' tys
                     let n = length es
-                        m = foldArg (\_ acc -> acc + 1) 0 tys
+                        m = length tys
                     when (n /= m) $ throwError $ ArityMisMatch key n m
                     shouldBe key sty sty'
-                    return $ Exp l (SId sty_f f, es') sty key
-                SomeSType sty_f -> throwError $ OtherError $ "App" ++ show sty_f
+                    return $ Exp l (TId sty_f f, es') sty key
+                sty_f -> throwError $ OtherError $ "App" ++ show sty_f
         (SLet, (x, e1, e2)) -> do
             e1'@(Exp _ _ sty1 _) <- convertE annot env e1
-            let env' = M.insert x (SomeSType sty1) env
+            let env' = M.insert x sty1 env
             e2'@(Exp _ _ sty2 _) <- convertE annot env' e2
             shouldBe key sty sty2
-            return $ Exp l (SId sty1 x, e1', e2') sty key
+            return $ Exp l (TId sty1 x, e1', e2') sty key
         (SAssume, (e1, e2)) -> do
             e1'@(Exp _ _ sty1 key1) <- convertE annot env e1
-            shouldBe key1 sty1 STBool
+            shouldBe key1 sty1 TBool
             e2'@(Exp _ _ sty2 _) <- convertE annot env e2
             shouldBe key sty sty2
             return $ Exp l (e1', e2') sty key
         (SIf, (e1, e2, e3)) -> do
             e1'@(Exp _ _ sty1 key1) <- convertE annot env e1
-            shouldBe key1 sty1 STBool
+            shouldBe key1 sty1 TBool
             e2'@(Exp _ _ sty2 _) <- convertE annot env e2
             shouldBe key sty sty2
             e3'@(Exp _ _ sty3 _) <- convertE annot env e3
@@ -314,47 +307,45 @@ convertE annot env (U.Exp l arg key) =
             return $ Exp l (e2', e3') sty key
         (SFail, ()) -> return $ Exp l () sty key
         (SOmega, ()) -> return $ Exp l () sty key
-        (SRand, ()) -> shouldBe key sty STInt >> return (Exp l () sty key)
-    }
+        (SRand, ()) -> shouldBe key sty TInt >> return (Exp l () sty key)
                 
-typeOfUniOp :: Monad m => SUniOp op -> SType ty -> UniqueKey -> 
-               (forall ty'. SType ty' -> ExceptT TypeError m b) -> ExceptT TypeError m b
+typeOfUniOp :: Monad m => SUniOp op -> Type -> UniqueKey -> (Type -> ExceptT TypeError m b) -> ExceptT TypeError m b
 typeOfUniOp SFst sty1 _key1 k = do
     case sty1 of
-        STPair sty' _ -> k sty'
+        TPair sty' _ -> k sty'
         _ -> throwError $ OtherError $ "Expected a pair type but found " ++ show sty1
 typeOfUniOp SSnd sty1 _key1 k = do
     case sty1 of
-        STPair _ sty' -> k sty'
+        TPair _ sty' -> k sty'
         _ -> throwError $ OtherError $ "Expected a pair type but found " ++ show sty1
 typeOfUniOp SNot sty1 key1 k = do
-    shouldBe key1 sty1 STBool
-    k STBool
+    shouldBe key1 sty1 TBool
+    k TBool
 typeOfUniOp SNeg sty1 key1 k = do
-    shouldBe key1 sty1 STInt
-    k STInt
+    shouldBe key1 sty1 TInt
+    k TInt
 
         
-typeOfBinOp :: Monad m => SBinOp op -> SType ty1 -> UniqueKey -> SType ty2 -> UniqueKey -> 
-               (forall ty3. SType ty3 -> ExceptT TypeError m b) -> ExceptT TypeError m b 
+typeOfBinOp :: Monad m => SBinOp op -> Type -> UniqueKey -> Type -> UniqueKey -> 
+               (Type -> ExceptT TypeError m b) -> ExceptT TypeError m b 
 typeOfBinOp op = (case op of
-    SAdd -> intOp STInt
-    SSub -> intOp STInt
-    SEq -> intOp STBool
-    SLt -> intOp STBool
-    SGt -> intOp STBool
-    SLte -> intOp STBool
-    SGte -> intOp STBool
+    SAdd -> intOp TInt
+    SSub -> intOp TInt
+    SEq -> intOp TBool
+    SLt -> intOp TBool
+    SGt -> intOp TBool
+    SLte -> intOp TBool
+    SGte -> intOp TBool
     SAnd -> boolOp
     SOr  -> boolOp
     ) where intOp sty sty1 key1 sty2 key2 k = do
-                shouldBe key1 sty1 STInt
-                shouldBe key2 sty2 STInt
+                shouldBe key1 sty1 TInt
+                shouldBe key2 sty2 TInt
                 k sty
             boolOp sty1 key1 sty2 key2 k = do
-                shouldBe key1 sty1 STBool
-                shouldBe key2 sty2 STBool
-                k STBool
+                shouldBe key1 sty1 TBool
+                shouldBe key2 sty2 TBool
+                k TBool
     
 {-
     

@@ -2,8 +2,6 @@
 module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..)) where
 
 import Language.DMoCHi.ML.Syntax.PNormal
-import Language.DMoCHi.ML.Syntax.Base
-import Language.DMoCHi.ML.Syntax.Type
 import Z3.Monad hiding(mkVar)
 import Control.Monad.IO.Class
 import Control.Monad
@@ -23,26 +21,26 @@ toIValue v@(Value l arg _ _) = case atomOfValue v of
         (SPair, (v1,v2)) -> IPair <$> toIValue v1 <*> toIValue v2
         _ -> error "impossible"
 
-toIValueId :: MonadZ3 z3 => SType ty -> String -> z3 IValue
-toIValueId STInt x = do
+toIValueId :: MonadZ3 z3 => Type -> String -> z3 IValue
+toIValueId TInt x = do
     y <- mkStringSymbol x
     s <- mkIntSort
     v <- mkConst y s
     return $ ASTValue v
-toIValueId STBool x = do
+toIValueId TBool x = do
     y <- mkStringSymbol x
     s <- mkBoolSort
     v <- mkConst y s
     return $ ASTValue v
-toIValueId (STFun _ _) _ = return Func
-toIValueId (STPair t1 t2) x = do
+toIValueId (TFun _ _) _ = return Func
+toIValueId (TPair t1 t2) x = do
     iv1 <- toIValueId t1 (x ++ ".fst")
     iv2 <- toIValueId t2 (x ++ ".snd")
     return $ IPair iv1 iv2
     
 toIValueA :: MonadZ3 z3 => Atom -> z3 IValue
 toIValueA (Atom l arg sty) = case (l,arg) of
-    (SVar,(SId _ name_x)) -> toIValueId sty (show name_x)
+    (SVar,(TId _ name_x)) -> toIValueId sty (show name_x)
     (SLiteral, CInt i)  -> ASTValue <$> mkInteger i
     (SLiteral, CBool b) -> ASTValue <$> mkBool b
     (SBinary, BinArg op v1 v2) -> do
