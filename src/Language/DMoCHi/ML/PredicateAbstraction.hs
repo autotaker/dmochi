@@ -1,13 +1,14 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, GADTs #-}
 module Language.DMoCHi.ML.PredicateAbstraction where
 import Control.Monad
 import Control.Monad.Writer
 import qualified Data.Map as M
-import qualified Data.IntMap as IM
-import Text.PrettyPrint
+import Text.PrettyPrint.HughesPJClass
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
-import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
+import qualified Language.DMoCHi.ML.Syntax.Base as ML
+import qualified Language.DMoCHi.ML.Syntax.Type as ML
+-- import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
 import qualified Language.DMoCHi.Boolean.PrettyPrint.Typed as B
 import qualified Language.DMoCHi.ML.SMT as SMT
@@ -48,9 +49,9 @@ abstFormulae cs pvs fml = do
 
     term <- go pvs bdd
     liftIO $ putStrLn $ render (
-        let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintA 0) cs)
-            doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintA 0 . snd) pvs)
-            doc_fml = brackets $ hsep $ punctuate comma (map (ML.pprintA 0) fml)
+        let doc_cs = brackets $ hsep $ punctuate comma (map (pPrint) cs)
+            doc_pvar = brackets $ hsep $ punctuate comma (map (pPrint . snd) pvs)
+            doc_fml = brackets $ hsep $ punctuate comma (map (pPrint) fml)
             doc_term = B.pprintTerm 0 term
         in braces (
            text "constraints:" <+> doc_cs $+$ 
@@ -75,7 +76,8 @@ abstFormula cs pvs fml = do
 -- assertion:
 --      getSort e' == toSort newTy
 
-cast, cast' :: (MonadIO m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
+cast :: (MonadIO m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
+{-
 cast' cs pv e curTy newTy = case (curTy,newTy) of
     _ | curTy == newTy -> return e
     (PPair _ ty1 ty2, PPair _ ty1' ty2') -> do
@@ -107,9 +109,10 @@ cast' cs pv e curTy newTy = case (curTy,newTy) of
                 r'_preds <- abstFormulae cs pv'' qs'
                 return $ B.T [r'_body,r'_preds]                                           {- <r_body, r_preds> -}
     _ -> error "cast: unexpected pattern"
+    -}
 cast cs pv e curTy newTy = do
-    let doc_cs = brackets $ hsep $ punctuate comma (map (ML.pprintA 0) cs)
-        doc_pvar = brackets $ hsep $ punctuate comma (map (ML.pprintA 0 . snd) pv)
+    let doc_cs = brackets $ hsep $ punctuate comma (map (pPrint) cs)
+        doc_pvar = brackets $ hsep $ punctuate comma (map (pPrint . snd) pv)
         doc_e = B.pprintTerm 0 e
         doc_curTy = pprintPType 0 curTy
         doc_newTy = pprintPType 0 newTy
@@ -123,7 +126,8 @@ cast cs pv e curTy newTy = do
                text "prev type:" <+> doc_curTy $+$
                text "new  type:" <+> doc_newTy)
         error "unexpected cast"
-      else do
+      else return e
+      {-
         r <- cast' cs pv e curTy newTy
         let doc_r = B.pprintTerm 0 r
         liftIO $ putStrLn $ render $
@@ -135,6 +139,7 @@ cast cs pv e curTy newTy = do
                text "new  type:" <+> doc_newTy $+$
                text "abst result:" <+> doc_r)
         return r
+-}
 
 toSort :: PType -> B.Sort
 toSort PInt = B.Tuple []
@@ -147,116 +152,128 @@ toSortTerm (_, ty, ps) = B.Tuple [toSort ty, B.Tuple [ B.Bool | _ <- ps ]]
 toSortArg :: ArgType -> B.Sort
 toSortArg (_, tys, ps) = B.Tuple [B.Tuple $ map toSort tys, B.Tuple [B.Bool | _ <- ps]]
 
-toSymbol :: ML.Id -> PType -> B.Symbol
-toSymbol x ty = B.Symbol (toSort ty) (ML.name x)
+toSymbol :: ML.SId -> PType -> B.Symbol
+toSymbol (ML.SId _ x) ty = B.Symbol (toSort ty) (show x)
 
-abstAValue :: (MonadIO m, MonadId m) => Env -> Constraints -> PVar -> ML.AValue -> PType -> m B.Term
+abstAValue :: (MonadIO m, MonadId m) => Env -> Constraints -> PVar -> ML.Atom-> PType -> m B.Term
 abstAValue env cs pv = go 
     where 
-    go v ty = case v of
-        ML.Var x -> cast cs pv (B.V (toSymbol x (env M.! x))) (env M.! x) ty
-        ML.CInt _ -> return $ B.T []
-        ML.CBool b -> return $ (B.C b)
---        ML.Pair v1 v2 -> 
---            let PPair _ ty1 ty2 = ty in
---            (\x y -> B.T [x,y]) <$> go v1 ty1 <*> go v2 ty2
-        ML.Op op -> case op of
-            ML.OpAdd _v1 _v2 -> return $ B.T []
-            ML.OpSub _v1 _v2 -> return $ B.T []
-            ML.OpEq  _v1 _v2 -> abstFormula cs pv v
-            ML.OpLt  _v1 _v2 -> abstFormula cs pv v
-            ML.OpLte _v1 _v2 -> abstFormula cs pv v
-            ML.OpAnd _v1 _v2 -> abstFormula cs pv v
-            ML.OpOr  _v1 _v2 -> abstFormula cs pv v
-            ML.OpFst _ v   -> 
+    go v@(ML.Atom l arg _) ty = case (l,arg) of
+        (ML.SVar,x) -> cast cs pv (B.V (toSymbol x (env M.! x))) (env M.! x) ty
+        (ML.SLiteral, ML.CInt _) -> return $ B.T []
+        (ML.SLiteral, ML.CBool b) -> return $ (B.C b)
+        (ML.SBinary, ML.BinArg op _ _) -> case op of
+            ML.SAdd  -> return $ B.T []
+            ML.SSub  -> return $ B.T []
+            ML.SEq   -> abstFormula cs pv v
+            ML.SLt   -> abstFormula cs pv v
+            ML.SLte  -> abstFormula cs pv v
+            ML.SAnd  -> abstFormula cs pv v
+            ML.SOr   -> abstFormula cs pv v
+        (ML.SUnary, ML.UniArg op v) -> case op of
+            ML.SFst -> 
                 let PPair _ _ ty2 = typeOfAValue env v in
-                B.f_proj 0 2 <$> go v (PPair (ML.getType v) ty ty2)
-            ML.OpSnd _ v   -> 
+                B.f_proj 0 2 <$> go v (mkPPair ty ty2)
+            ML.SSnd  -> 
                 let PPair _ ty1 _ = typeOfAValue env v in
-                B.f_proj 1 2 <$> go v (PPair (ML.getType v) ty1 ty)
-            ML.OpNot v -> B.Not <$> go v PBool
+                B.f_proj 1 2 <$> go v (mkPPair ty1 ty)
+            ML.SNot -> B.Not <$> go v PBool
+            ML.SNeg -> return $ B.T []
 abstValue :: (MonadIO m, MonadId m) => TypeMap -> Env -> Constraints -> PVar -> ML.Value -> PType -> m B.Term
+abstValue tbl env cs pv v@(ML.Value l arg _ key) ty = case (l,arg) of
+    (ML.SLambda, (xs,e)) -> fst <$> abstFunDef tbl env cs pv (key,xs,e) (Just ty)
+    (ML.SPair, (v1,v2)) -> 
+        let PPair _ ty1 ty2 = ty in
+        (\x y -> B.T [x,y]) <$> abstValue tbl env cs pv v1 ty1 <*> abstValue tbl env cs pv v2 ty2
+    _ -> case ML.atomOfValue v of
+        Just av -> abstAValue env cs pv av ty
+        Nothing -> error "abstValue"
+
+{-
 abstValue _ env cs pv (ML.Atomic av) ty = abstAValue env cs pv av ty
 abstValue tbl env cs pv (ML.Fun fdef) ty = fst <$> abstFunDef tbl env cs pv fdef (Just ty)
 abstValue tbl env cs pv (ML.Pair v1 v2) ty = 
     let PPair _ ty1 ty2 = ty in
     (\x y -> B.T [x,y]) <$> abstValue tbl env cs pv v1 ty1 <*> abstValue tbl env cs pv v2 ty2
-
+-}
 abstTerm :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
-abstTerm tbl env cs pv t (r,ty,qs) = doit where
-    doit = case t of
-        ML.Value v -> do
-            let subst = M.singleton r v
-            let ty' = substVPType subst ty
-            e1 <- abstValue tbl env cs pv v ty'
-            e2 <- abstFormulae cs pv (map (substVFormula subst) qs)
-            return $ B.T [e1,e2]
-
-        ML.Let _ x (ML.LValue v) t' -> do
-            let ty_x = typeOfAValue env v
-            ex <- abstValue tbl env cs pv (ML.Atomic v) ty_x
-            e' <- abstTerm tbl (M.insert x ty_x env) (addEq x v cs) pv t' (r,ty,qs)
-            return $ B.f_let (toSymbol x ty_x) ex e'
-
-        ML.Let _ x (ML.LApp _ _ f vs) t' -> do
-            let PFun _ (ys,ty_ys,ps) (r',ty_r',qs') = env M.! f
-            let subst = M.fromList $ zip ys vs
-            let ty_ys' = map (substVPType subst) ty_ys
-            arg_body  <- B.T <$> zipWithM (abstValue tbl env cs pv) vs ty_ys'
-            arg_preds <- abstFormulae cs pv (map (substVFormula subst) ps)
-            let f' = toSymbol f (env M.! f)
-            x' <- B.freshSym (ML.name x ++ "_pair") (toSortTerm (r',ty_r',qs'))
-            let x_body  = B.f_proj 0 2 (B.V x')
-                x_preds = B.f_proj 1 2 (B.V x')
-                n = length qs'
-                subst1 = M.insert r' (ML.Atomic (ML.Var x)) subst
-                pv' = [ (B.f_proj i n x_preds, 
-                         substVFormula subst1 fml) | (i,fml) <- zip [0..] qs' ] ++ pv
-                ty_r'' = substVPType subst1 ty_r'
-            B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .           -- let x = f <body, preds> in
-              B.f_let (toSymbol x ty_r') x_body <$>                               -- let v = x.fst
-                (B.f_assume <$> (abstFormula cs pv' (ML.CBool True)) <*>          -- assume phi; // avoid incosinsitent states
-                    abstTerm tbl (M.insert x ty_r'' env) cs pv' t' (r,ty,qs))     -- abst(cs,pv',t,tau)
-
-        ML.Let _ x (ML.LExp ident t_x) t' -> do
-            let Right (y,ty_y,ps) = tbl IM.! ident
-            x_pair <- B.freshSym (ML.name x ++ "_pair") (toSortTerm (y,ty_y,ps))
-            B.f_let x_pair <$> abstTerm tbl env cs pv t_x (y,ty_y,ps) <*> do
-                let x_body  = B.f_proj 0 2 (B.V x_pair)
-                    x_preds = B.f_proj 1 2 (B.V x_pair)
-                    n = length ps
-                    pv' = [ (B.f_proj i n x_preds, substFormula (M.singleton y x) fml) | (i,fml) <- zip [0..] ps ] ++ pv
-                    env' = M.insert x (substPType (M.singleton y x) ty_y) env
-                B.f_let (toSymbol x ty_y) x_body <$>                         -- let x = abst(cs,pv,t1,tau1)
-                    (B.f_assume <$> (abstFormula cs pv' (ML.CBool True)) <*> -- assume phi;
-                        abstTerm tbl env' cs pv' t' (r,ty,qs))               -- abst(cs,pv',t,tau)
-
-        ML.Let _ x ML.LRand t' -> 
-            B.f_let (toSymbol x PInt) (B.T []) <$>
-                abstTerm tbl (M.insert x PInt env) cs pv t' (r,ty,qs)
-
-        ML.Assume _ v t' -> do
-            e_v <- abstValue tbl env cs pv (ML.Atomic v) PBool
-            B.f_assume e_v <$> abstTerm tbl env (v : cs) pv t' (r,ty,qs)
-
-        ML.Fail _ -> do
+abstTerm tbl env cs pv e@(ML.Exp l arg _ _) (r,ty,qs) = case (l,arg) of
+        (ML.SLet, (x,e1@(ML.Exp l1 arg1 _ key1),e2)) -> case ML.valueOfExp e1 of
+            Just v -> case ML.atomOfValue v of
+                Just av -> do
+                    let ty_x = typeOfAValue env av
+                    ex <- abstValue tbl env cs pv v ty_x
+                    e' <- abstTerm tbl (M.insert x ty_x env) (addEq x av cs) pv e2 (r,ty,qs)
+                    return $ B.f_let (toSymbol x ty_x) ex e'
+                Nothing -> error "unimplemented" -- TODO Abstraction for Values
+            Nothing -> case (l1, arg1) of
+                (ML.SApp, (f,vs)) -> do
+                    let PFun _ (ys,ty_ys,ps) (r',ty_r',qs') = env M.! f
+                    let subst = M.fromList $ zip ys vs
+                    let ty_ys' = map (substVPType subst) ty_ys
+                    let sx = case x of { ML.SId _ name_x -> show name_x }
+                    arg_body  <- B.T <$> zipWithM (abstValue tbl env cs pv) vs ty_ys'
+                    arg_preds <- abstFormulae cs pv (map (substVFormula subst) ps)
+                    let f' = toSymbol f (env M.! f)
+                    x' <- B.freshSym (sx ++ "_pair") (toSortTerm (r',ty_r',qs'))
+                    let x_body  = B.f_proj 0 2 (B.V x')
+                        x_preds = B.f_proj 1 2 (B.V x')
+                        n = length qs'
+                        subst1 = M.insert r' (ML.cast (ML.mkVar x)) subst
+                        pv' = [ (B.f_proj i n x_preds, 
+                                 substVFormula subst1 fml) | (i,fml) <- zip [0..] qs' ] ++ pv
+                        ty_r'' = substVPType subst1 ty_r'
+                    B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .           -- let x = f <body, preds> in
+                      B.f_let (toSymbol x ty_r') x_body <$>                               -- let v = x.fst
+                        (B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral (ML.CBool True))) <*>          -- assume phi; // avoid incosinsitent states
+                            abstTerm tbl (M.insert x ty_r'' env) cs pv' e2 (r,ty,qs))     -- abst(cs,pv',t,tau)
+                (ML.SRand, _) -> 
+                    B.f_let (toSymbol x PInt) (B.T []) <$>
+                        abstTerm tbl (M.insert x PInt env) cs pv e2 (r,ty,qs)
+                _ -> do
+                    let Right (y,ty_y,ps) = tbl M.! key1
+                    let sx = case x of { ML.SId _ name_x -> show name_x }
+                    x_pair <- B.freshSym (sx ++ "_pair") (toSortTerm (y,ty_y,ps))
+                    B.f_let x_pair <$> abstTerm tbl env cs pv e1 (y,ty_y,ps) <*> do
+                        let x_body  = B.f_proj 0 2 (B.V x_pair)
+                            x_preds = B.f_proj 1 2 (B.V x_pair)
+                            n = length ps
+                            pv' = [ (B.f_proj i n x_preds, substFormula (M.singleton y x) fml) | (i,fml) <- zip [0..] ps ] ++ pv
+                            env' = M.insert x (substPType (M.singleton y x) ty_y) env
+                        B.f_let (toSymbol x ty_y) x_body <$>                         -- let x = abst(cs,pv,t1,tau1)
+                            (B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral $ ML.CBool True)) <*> -- assume phi;
+                                abstTerm tbl env' cs pv' e2 (r,ty,qs))               -- abst(cs,pv',t,tau)
+        (ML.SAssume,(v,e)) -> do
+            e_v <- abstValue tbl env cs pv (ML.cast v) PBool
+            B.f_assume e_v <$> abstTerm tbl env (v : cs) pv e (r,ty,qs)
+        (ML.SFail, _) -> do
             fail <- B.freshSym "fail" (toSortTerm (r,ty,qs))
             return $ B.Fail fail
-
-        ML.Branch _ _ t1 t2 -> do
+        (ML.SBranch, (t1,t2)) -> do
             B.f_branch_label <$> abstTerm tbl env cs pv t1 (r,ty,qs)
                              <*> abstTerm tbl env cs pv t2 (r,ty,qs)
+        _ -> case ML.valueOfExp e of 
+            Just v -> do
+                let subst = M.singleton r v
+                let ty' = substVPType subst ty
+                e1 <- abstValue tbl env cs pv v ty'
+                e2 <- abstFormulae cs pv (map (substVFormula subst) qs)
+                return $ B.T [e1,e2]
+            Nothing -> error "abstTerm: impossible"
+{-
+        (ML.Value v -> do
 
-addEq :: ML.Id -> ML.AValue -> Constraints -> Constraints
-addEq y v cs = ML.Op (ML.OpEq (ML.Var y) v):cs
+-}
 
-abstFunDef :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.FunDef -> Maybe PType -> m (B.Term, PType)
-abstFunDef tbl env cs pv func mpty = do
-    let ML.FunDef ident xs t1 = func
+addEq :: ML.SId -> ML.Atom -> Constraints -> Constraints
+addEq y v cs = (ML.mkBin ML.SEq (ML.mkVar y) v) :cs
+
+abstFunDef :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> (UniqueKey,[ML.SId],ML.Exp) -> Maybe PType -> m (B.Term, PType)
+abstFunDef tbl env cs pv (ident,xs,t1) mpty = do
     let ty_f@(PFun _ (ys,ty_ys,ps) rty) = 
             case mpty of
                 Just pty -> pty
-                Nothing -> let Left pty = tbl IM.! ident in pty
+                Nothing -> let Left pty = tbl M.! ident in pty
     x_pair <- B.freshSym "arg" (toSortArg (ys,ty_ys,ps))
     e <- B.Lam x_pair <$> do
         let x_body  = B.f_proj 0 2 (B.V x_pair)
@@ -268,31 +285,31 @@ abstFunDef tbl env cs pv func mpty = do
             ty_ys' = map (substPType subst) ty_ys
             arity = length xs
         let env' = foldr (uncurry M.insert) env (zip xs ty_ys')
-        e' <- B.f_assume <$> (abstFormula cs pv' (ML.CBool True)) 
+        e' <- B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral $ ML.CBool True)) 
                          <*> (abstTerm tbl env' cs pv' t1 rty')
         return $ foldr (\(i,x,ty_y) -> 
             B.f_let (toSymbol x ty_y) (B.f_proj i arity x_body)) e' (zip3 [0..] xs ty_ys')
     return (e,ty_f)
 
 printTypeMap :: TypeMap -> IO ()
-printTypeMap tbl = forM_ (IM.assocs tbl) $ \(i,pty') -> 
+printTypeMap tbl = forM_ (M.assocs tbl) $ \(i,pty') -> 
     case pty' of
-        Left pty -> putStrLn $ render $ int i <+> colon <+> pprintPType 0 pty
-        Right termType -> putStrLn $ render $ int i <+> colon <+> pprintTermType termType
+        Left pty -> putStrLn $ render $ pPrint i <+> colon <+> pprintPType 0 pty
+        Right termType -> putStrLn $ render $ pPrint i <+> colon <+> pprintTermType termType
 
 abstProg :: (MonadId m, MonadIO m) => TypeMap -> ML.Program -> m B.Program
 abstProg tbl (ML.Program fs t0) = do
     liftIO $ putStrLn "current abstraction type environment {"
     liftIO $ printTypeMap tbl 
     liftIO $ putStrLn "}"
-    
-    let env = M.fromList [ (f,ty)  | (f,func) <- fs, let Left ty = tbl IM.! ML.ident func ]
-    ds <- forM fs $ \(f,func) -> do
+
+    let env = M.fromList [ (f,ty)  | (f,key,_,_) <- fs, let Left ty = tbl M.! key ]
+    ds <- forM fs $ \(f,key,xs,e) -> do
         let f' = toSymbol f (env M.! f)
-        (e_f,_) <- abstFunDef tbl env [] [] func (Just $ env M.! f)
+        (e_f,_) <- abstFunDef tbl env [] [] (key,xs,e) (Just $ env M.! f)
         return (f',e_f)
     e0 <- do
-        r <- ML.Id ML.TInt <$> freshId "main"
+        r <- ML.SId ML.STInt <$> identify "main"
         abstTerm tbl env [] [] t0 (r,PInt,[])
     return $ B.Program ds e0
 

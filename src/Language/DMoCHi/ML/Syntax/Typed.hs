@@ -18,7 +18,7 @@ module Language.DMoCHi.ML.Syntax.Typed {- ( Program(..)
 -- import qualified Data.Set as S
 import GHC.Exts(Constraint)
 import Language.DMoCHi.Common.Id 
-import Language.DMoCHi.ML.Syntax.Type hiding(Id)
+import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.Base
 import Text.PrettyPrint.HughesPJClass
 

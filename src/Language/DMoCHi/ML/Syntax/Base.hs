@@ -35,6 +35,7 @@ data BinOp = Add | Sub | Eq | Lt | Gt | Lte | Gte | And | Or
 data UniOp = Fst | Snd | Not | Neg
 
 data Lit = CInt Integer | CBool Bool
+    deriving(Eq,Ord)
 
 type family Ident e
 type family Labels e :: [Label]
@@ -63,6 +64,19 @@ data BinArg e where
     BinArg :: Elem op (BinOps e) ~ 'True => SBinOp op -> e -> e -> BinArg e
 data UniArg e where
     UniArg :: Elem op (UniOps e) ~ 'True => SUniOp op -> e -> UniArg e
+
+
+instance Eq e => Eq (BinArg e) where
+    (==) (BinArg op1 e1 e2) (BinArg op2 e3 e4) = 
+        case testEquality op1 op2 of
+            Just Refl -> e1 == e3 && e2 == e4
+            Nothing -> False
+
+instance Eq e => Eq (UniArg e) where
+    (==) (UniArg op1 e1) (UniArg op2 e2) = 
+        case testEquality op1 op2 of
+            Just Refl -> e1 == e2 
+            Nothing -> False
 
 type family WellFormed (l :: Label)  (e :: *)  (arg :: *) :: Constraint where
     WellFormed 'Literal e arg = arg ~ Lit
@@ -136,6 +150,19 @@ type family EqBinOp a b where
     EqBinOp 'Or  'Or = 'True
     EqBinOp a b = 'False
 
+instance TestEquality SBinOp where
+    testEquality SAdd SAdd = Just Refl
+    testEquality SSub SSub = Just Refl
+    testEquality SEq  SEq  = Just Refl
+    testEquality SLt  SLt  = Just Refl
+    testEquality SGt  SGt  = Just Refl
+    testEquality SLte SLte = Just Refl
+    testEquality SGte SGte = Just Refl
+    testEquality SAnd SAnd = Just Refl
+    testEquality SOr  SOr  = Just Refl
+    testEquality _ _ = Nothing
+
+
 data SUniOp (op :: UniOp) where
     SFst     :: SUniOp 'Fst
     SSnd     :: SUniOp 'Snd
@@ -148,6 +175,13 @@ type family EqUniOp a b where
     EqUniOp 'Not 'Not = 'True
     EqUniOp 'Neg 'Neg = 'True
     EqUniOp a b = 'False
+
+instance TestEquality SUniOp where
+    testEquality SFst SFst = Just Refl
+    testEquality SSnd SSnd = Just Refl
+    testEquality SNot SNot = Just Refl
+    testEquality SNeg SNeg = Just Refl
+    testEquality _ _ = Nothing
 
 type instance (==) a b = EqUniOp a b
 type instance (==) a b = EqBinOp a b

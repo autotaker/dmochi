@@ -1,12 +1,14 @@
+{-# LANGUAGE GADTs #-}
 module Language.DMoCHi.ML.ElimCast(elimCast) where
 
 import Control.Monad
 import Language.DMoCHi.ML.Syntax.PNormal
 import Language.DMoCHi.Common.Id
+import Language.DMoCHi.ML.Syntax.Type
+import Language.DMoCHi.ML.Syntax.Base
 
 import Language.DMoCHi.ML.Syntax.PType
 import qualified Data.Map as M
-import qualified Data.IntMap as IM
 
 {- Eliminate abstraction type casting by eta-expansion.
  -
@@ -15,9 +17,9 @@ import qualified Data.IntMap as IM
  - This type casting is eliminated by replacing av with 
  - (fun x1 .. xn -> let f = av in ElimCast(f x1 .. xn)) :: Value
  -}
-elimCastFunDef :: MonadId m => TypeMap -> Env -> FunDef -> PType -> m FunDef
-elimCastFunDef tbl env (FunDef ident ys e) sigma = 
-    FunDef ident ys <$> elimCastTerm tbl env' e retTy'
+elimCastFunDef :: MonadId m => TypeMap -> Env -> (UniqueKey, [SId], Exp) -> PType -> m (UniqueKey, [SId], Exp)
+elimCastFunDef tbl env (ident,ys,e) sigma = 
+    (,,) ident ys <$> elimCastTerm tbl env' e retTy'
         where
         PFun _ (xs,ty_xs,_) retTy = sigma 
         subst = M.fromList $ zip xs ys
@@ -26,73 +28,129 @@ elimCastFunDef tbl env (FunDef ident ys e) sigma =
         retTy' = substTermType subst retTy
 
 elimCastValue :: MonadId m => TypeMap -> Env -> Value -> PType -> m Value
-elimCastValue tbl env _v sigma = case _v of
-    Atomic av | sigma == typeOfAValue env av -> return $ Atomic av
-              | otherwise -> case sigma of
-                PFun ty@(TFun _ ty_r) (xs,_,_) _ -> do
-                    (f, cnstr_f) <- case av of
-                        Var g -> return (g, id)
-                        _ -> do g <- Id ty <$> freshId "f"
-                                return (g, Let ty_r g (LValue av))
-                    ys <- mapM alphaId xs
+elimCastValue tbl env v@(Value l arg sty key) sigma = case (l,arg) of
+    (SLambda, (xs, e)) -> do
+        (_, _, e') <- elimCastFunDef tbl env (key,xs,e) sigma
+        return $ Value l (xs,e') sty key
+    (SPair, (v1,v2)) -> do
+        let PPair _ sigma1 sigma2 = sigma 
+        v1' <- elimCastValue tbl env v1 sigma1 
+        v2' <- elimCastValue tbl env v2 sigma2 
+        return $ mkPair v1' v2' key
+    _ -> case atomOfValue v of
+        Nothing -> error "elimCastValue: impossible"
+        Just av -> case sigma of
+                PInt -> return v
+                PBool -> return v
+                _ | sigma == typeOfAValue env av -> return v
+                PFun ty@(STFun _ ty_r) (xs,_,_) _ -> do
+                    (f, cnstr_f) <- case l of
+                        SVar -> return (arg, id)
+                        _ -> do g <- SId ty <$> identify "f"
+                                key' <- freshKey
+                                return (g, (\e -> mkLet g (cast v) e key'))
+                    ys <- mapM alphaSId xs
                     e <- cnstr_f <$> do
-                        j <- freshInt
-                        r <- Id ty_r <$> freshId "r"
-                        return $ Let ty_r r (LApp ty_r j f (map (Atomic . Var) ys)) $ 
-                                 Value (Atomic (Var r))
-                    i <- freshInt
-                    Fun <$> elimCastFunDef tbl env (FunDef i ys e) sigma
-                PPair (TPair ty1 ty2) sigma1 sigma2 -> 
-                    Pair <$> elimCastValue tbl env (Atomic (Op (OpFst ty1 av))) sigma1
-                         <*> elimCastValue tbl env (Atomic (Op (OpSnd ty2 av))) sigma2
-                _ -> error "elimCastValue: Impossible"
-    Fun fdef -> Fun <$> elimCastFunDef tbl env fdef sigma
-    Pair v1 v2 -> 
-        let PPair _ sigma1 sigma2 = sigma in
-        Pair <$> elimCastValue tbl env v1 sigma1 
-             <*> elimCastValue tbl env v2 sigma2
+                        j <- freshKey
+                        r <- SId ty_r <$> identify "r"
+                        kr <- freshKey 
+                        vs <- mapM (\y -> freshKey >>= (\k -> return $ castWith k (mkVar y))) ys
+                        mkLet r (mkApp f vs j) (castWith kr (mkVar r)) <$> freshKey
+                    i <- freshKey
+                    (_, _, e') <- elimCastFunDef tbl env (i,ys, e) sigma
+                    return $ mkLambda ys e' i
+                PPair _ sigma1 sigma2 -> do
+                    v1 <- freshKey >>= (\k -> return $ castWith k $ mkUni SFst av)
+                    v2 <- freshKey >>= (\k -> return $ castWith k $ mkUni SSnd av)
+                    v1' <- elimCastValue tbl env v1 sigma1
+                    v2' <- elimCastValue tbl env v2 sigma2
+                    return $ mkPair v1' v2' key
 
 elimCastTerm :: MonadId m => TypeMap -> Env -> Exp -> TermType -> m Exp
-elimCastTerm tbl env _e tau = case _e of
-    Value v -> 
+elimCastTerm tbl env (Exp l arg sty key) tau = case (l,arg) of
+    (SLiteral, _) -> do
         let (r, r_ty, _) = tau 
+            v = Value l arg sty key
             r_ty' = substVPType (M.singleton r v) r_ty
-        in
-        Value <$> elimCastValue tbl env v r_ty'
-    Let s x (LValue av) e -> do
-        let x_ty = typeOfAValue env av
-            env' = M.insert x x_ty env
-        Let s x (LValue av) <$> elimCastTerm tbl env' e tau
-    Let s x (LApp ty ident f vs) e -> do
-        let PFun _ (ys, ys_ty, _) (r, r_ty, _) = env M.! f
-            subst = M.fromList $ zip ys vs
-            ys_ty' = map (substVPType subst) ys_ty
-        vs' <- zipWithM (elimCastValue tbl env) vs ys_ty' 
-        let subst' = M.insert r (Atomic (Var x)) subst
-            r_ty' = substVPType subst' r_ty
-            env' = M.insert x r_ty' env
-        Let s x (LApp ty ident f vs') <$> elimCastTerm tbl env' e tau
-    Let s x (LExp ident e1) e -> do
-        let Right tau1@(r, r_ty, _) = tbl IM.! ident
-        e1' <- elimCastTerm tbl env e1 tau1
-        let subst = M.singleton r x
-            r_ty' = substPType subst r_ty
-            env' = M.insert x r_ty' env
-        Let s x (LExp ident e1') <$> elimCastTerm tbl env' e tau
-    Let s x LRand e -> 
-        let env' = M.insert x PInt env in
-        Let s x LRand <$> elimCastTerm tbl env' e tau
-    Assume s p e -> Assume s p <$> elimCastTerm tbl env e tau
-    Fail ty -> return $ Fail ty
-    Branch ty l e1 e2 -> Branch ty l <$> elimCastTerm tbl env e1 tau 
-                                     <*> elimCastTerm tbl env e2 tau
+        cast <$> elimCastValue tbl env v r_ty'
+    (SVar, _) -> do
+        let (r, r_ty, _) = tau 
+            v = Value l arg sty key
+            r_ty' = substVPType (M.singleton r v) r_ty
+        cast <$> elimCastValue tbl env (Value l arg sty key) r_ty'
+    (SBinary, _) -> do
+        let (r, r_ty, _) = tau 
+            v = Value l arg sty key
+            r_ty' = substVPType (M.singleton r v) r_ty
+        cast <$> elimCastValue tbl env (Value l arg sty key) r_ty'
+    (SUnary, _) -> do
+        let (r, r_ty, _) = tau 
+            v = Value l arg sty key
+            r_ty' = substVPType (M.singleton r v) r_ty
+        cast <$> elimCastValue tbl env (Value l arg sty key) r_ty'
+    (SPair, _) -> do
+        let (r, r_ty, _) = tau 
+            v = Value l arg sty key
+            r_ty' = substVPType (M.singleton r v) r_ty
+        cast <$> elimCastValue tbl env (Value l arg sty key) r_ty'
+    (SLambda, _) -> do
+        let (r, r_ty, _) = tau 
+            v = Value l arg sty key
+            r_ty' = substVPType (M.singleton r v) r_ty
+        cast <$> elimCastValue tbl env (Value l arg sty key) r_ty'
+    (SLet, (x, e1@(Exp l1 arg1 _ key1), e2)) -> case valueOfExp e1 >>= atomOfValue of
+        Just av -> do
+            let x_ty = typeOfAValue env av
+                env' = M.insert x x_ty env
+            e2' <- elimCastTerm tbl env' e2 tau
+            return $ mkLet x e1 e2' key
+        Nothing -> case (l1,arg1) of
+            (SApp, (f,vs)) -> do
+                let PFun _ (ys, ys_ty, _) (r, r_ty, _) = env M.! f
+                    subst = M.fromList $ zip ys vs
+                    ys_ty' = map (substVPType subst) ys_ty
+                vs' <- zipWithM (elimCastValue tbl env) vs ys_ty' 
+                let subst' = M.insert r (cast (mkVar x)) subst
+                    r_ty' = substVPType subst' r_ty
+                    env' = M.insert x r_ty' env
+                e2' <- elimCastTerm tbl env' e2 tau
+                return $ mkLet x (mkApp f vs' key1) e2' key
+            (SRand, ()) -> do
+                let env' = M.insert x PInt env 
+                e2' <- elimCastTerm tbl env' e2 tau
+                return $ mkLet x (mkRand key1) e2' key
+            _ -> do
+                let Right tau1@(r, r_ty, _) = tbl M.! key
+                e1' <- elimCastTerm tbl env e1 tau1
+                let subst = M.singleton r x
+                    r_ty' = substPType subst r_ty
+                    env' = M.insert x r_ty' env
+                e2' <- elimCastTerm tbl env' e2 tau
+                return $ mkLet x e1' e2' key
+    (SAssume, (p, e1)) -> do
+        e1' <- elimCastTerm tbl env e1 tau
+        return $ mkAssume p e1' key
+    (SFail,_) -> return $ mkFail sty key
+    (SOmega,_) -> return $ mkOmega sty key
+    (SRand,_) -> return $ mkRand key
+    (SApp, (f, vs)) -> do
+        key1 <- freshKey
+        key2 <- freshKey
+        r <- SId sty <$> identify "r"
+        let e' = mkLet r (mkApp f vs key) (castWith key1 $ mkVar r) key2
+        elimCastTerm tbl env e' tau
+    (SBranch, (e1, e2)) -> do
+        e1' <- elimCastTerm tbl env e1 tau
+        e2' <- elimCastTerm tbl env e2 tau
+        return $ mkBranch e1' e2' key
         
 elimCast :: MonadId m => TypeMap -> Program -> m Program
 elimCast tbl prog = do
-    let env = M.fromList [ (f, ty) | (f, func) <- functions prog, 
-                                     let Left ty = tbl IM.! ident func ]
-    fs <- forM (functions prog) $ \(f, fdef) -> (,) f <$> elimCastFunDef tbl env fdef (env M.! f)
-    r <- Id TInt <$> freshId "main"
+    let env = M.fromList [ (f, ty) | (f, key, _, _) <- functions prog, let Left ty = tbl M.! key ]
+    fs <- forM (functions prog) $ \(f, key, xs, e) -> do
+                    (_,_,e') <- elimCastFunDef tbl env (key,xs,e) (env M.! f)
+                    return (f, key, xs, e')
+    r <- SId STInt <$> identify "main"
     e <- elimCastTerm tbl env (mainTerm prog) (r, PInt, [])
     return $ Program fs e
     

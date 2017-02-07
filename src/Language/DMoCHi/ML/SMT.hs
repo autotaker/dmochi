@@ -1,8 +1,10 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns, GADTs #-}
 module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..)) where
 
 import Language.DMoCHi.ML.Syntax.PNormal
-import Z3.Monad
+import Language.DMoCHi.ML.Syntax.Base
+import Language.DMoCHi.ML.Syntax.Type
+import Z3.Monad hiding(mkVar)
 import Control.Monad.IO.Class
 import Control.Monad
 import Data.Function(on)
@@ -13,67 +15,57 @@ import Debug.Trace
 
 data IValue = Func | ASTValue AST | IPair IValue IValue deriving(Show)
 
-
 toIValue :: MonadZ3 z3 => Value -> z3 IValue
-toIValue (Atomic av) = toIValueA av
-toIValue (Fun _) = return Func
-toIValue (Pair v1 v2) = IPair <$> toIValue v1 <*> toIValue v2
+toIValue v@(Value l arg _ _) = case atomOfValue v of
+    Just av -> toIValueA av
+    Nothing -> case (l,arg) of
+        (SLambda, _) -> return Func
+        (SPair, (v1,v2)) -> IPair <$> toIValue v1 <*> toIValue v2
+        _ -> error "impossible"
 
-toIValueA :: MonadZ3 z3 => AValue -> z3 IValue
-toIValueA (Var x) = case getType x of
-    TInt -> do
-        y <- mkStringSymbol (name x)
-        s <- mkIntSort
-        v <- mkConst y s
-        return $ ASTValue v
-    TBool -> do
-        y <- mkStringSymbol (name x)
-        s <- mkBoolSort
-        v <- mkConst y s
-        return $ ASTValue v
-    TFun _ _ -> return Func
-    TPair t1 t2 -> do
-        iv1 <- toIValueA (Var $ Id t1 (name x ++ ".fst"))
-        iv2 <- toIValueA (Var $ Id t2 (name x ++ ".snd"))
-        return $ IPair iv1 iv2
-toIValueA (CInt i) = ASTValue <$> mkInteger i
-toIValueA (CBool b) = ASTValue <$> mkBool b
-toIValueA (Op op) = case op of
-    OpAdd v1 v2 -> do
-        ASTValue v1' <- toIValueA v1
-        ASTValue v2' <- toIValueA v2
-        ASTValue <$> mkAdd [v1', v2']
-    OpSub v1 v2 -> do
-        ASTValue v1' <- toIValueA v1
-        ASTValue v2' <- toIValueA v2
-        ASTValue <$> mkSub [v1', v2']
-    OpEq v1 v2 -> do
-        iv1 <- toIValueA v1
-        iv2 <- toIValueA v2
-        mkEqIValue iv1 iv2
-    OpLt v1 v2 -> do
-        ASTValue v1' <- toIValueA v1
-        ASTValue v2' <- toIValueA v2
-        ASTValue <$> mkLt v1' v2'
-    OpLte v1 v2 -> do
-        ASTValue v1' <- toIValueA v1
-        ASTValue v2' <- toIValueA v2
-        ASTValue <$> mkLe v1' v2'
-    OpAnd v1 v2 -> do
-        ASTValue v1' <- toIValueA v1
-        ASTValue v2' <- toIValueA v2
-        ASTValue <$> mkAnd [v1',v2']
-    OpOr v1 v2 -> do
-        ASTValue v1' <- toIValueA v1
-        ASTValue v2' <- toIValueA v2
-        ASTValue <$> mkOr [v1',v2']
-    OpNot v1 -> do
-        ASTValue v1' <- toIValueA v1
-        ASTValue <$> mkNot v1'
-    OpFst _ v -> do
+toIValueId :: MonadZ3 z3 => SType ty -> String -> z3 IValue
+toIValueId STInt x = do
+    y <- mkStringSymbol x
+    s <- mkIntSort
+    v <- mkConst y s
+    return $ ASTValue v
+toIValueId STBool x = do
+    y <- mkStringSymbol x
+    s <- mkBoolSort
+    v <- mkConst y s
+    return $ ASTValue v
+toIValueId (STFun _ _) _ = return Func
+toIValueId (STPair t1 t2) x = do
+    iv1 <- toIValueId t1 (x ++ ".fst")
+    iv2 <- toIValueId t2 (x ++ ".snd")
+    return $ IPair iv1 iv2
+    
+toIValueA :: MonadZ3 z3 => Atom -> z3 IValue
+toIValueA (Atom l arg sty) = case (l,arg) of
+    (SVar,(SId _ name_x)) -> toIValueId sty (show name_x)
+    (SLiteral, CInt i)  -> ASTValue <$> mkInteger i
+    (SLiteral, CBool b) -> ASTValue <$> mkBool b
+    (SBinary, BinArg op v1 v2) -> do
+        iv1@(ASTValue v1') <- toIValueA v1
+        iv2@(ASTValue v2') <- toIValueA v2
+        case op of
+            SAdd -> ASTValue <$> mkAdd [v1',v2']
+            SSub -> ASTValue <$> mkSub [v1',v2']
+            SEq -> mkEqIValue iv1 iv2
+            SLt -> ASTValue <$> mkLt v1' v2'
+            SLte -> ASTValue <$> mkLe v1' v2'
+            SAnd -> ASTValue <$> mkAnd [v1', v2']
+            SOr  -> ASTValue <$> mkOr  [v1', v2']
+    (SUnary, UniArg SNot v) -> do
+        ASTValue v' <- toIValueA v
+        ASTValue <$> mkNot v'
+    (SUnary, UniArg SNeg v) -> do
+        ASTValue v' <- toIValueA v
+        ASTValue <$> mkUnaryMinus v'
+    (SUnary, UniArg SFst v) -> do
         IPair iv1 _ <- toIValueA v
         return iv1
-    OpSnd _ v -> do
+    (SUnary, UniArg SSnd v) -> do
         IPair _ iv2 <- toIValueA v
         return iv2
 
@@ -151,19 +143,19 @@ fromBDD (Node _ v hi lo) | hi == lo = fromBDD hi
     map (\l -> (v,True)  : l) (fromBDD hi) ++
     map (\l -> (v,False) : l) (fromBDD lo)
 
-abst :: [AValue] -> [AValue] -> IO (BDDNode AValue)
+abst :: [Atom] -> [Atom] -> IO (BDDNode Atom)
 abst constraints predicates = evalZ3 $ do
     let f (ASTValue v) = v
         f _ = error "Expecting an SMT value"
     assert =<< mkAnd' =<< mapM (toIValueA >=> (return . f)) constraints
     z3_predicates  <- mapM (toIValueA >=> (return . f)) predicates
-    hashTable <- liftIO $ HT.new :: Z3 (HT.BasicHashTable BDDHashKey (BDDNode AValue))
+    hashTable <- liftIO $ HT.new :: Z3 (HT.BasicHashTable BDDHashKey (BDDNode Atom))
     nodeCounter <- liftIO $ newIORef (0 :: Int)
     let mkPVar d = do
             x <- mkStringSymbol $ "p_" ++ show d
             s <- mkBoolSort
             mkConst x s
-        bDDConst :: Bool -> IO (BDDNode AValue)
+        bDDConst :: Bool -> IO (BDDNode Atom)
         bDDConst b = do
             let key = KeyLeaf b
             r <- HT.lookup hashTable key
@@ -175,7 +167,7 @@ abst constraints predicates = evalZ3 $ do
                     let val = Leaf i b
                     HT.insert hashTable key val
                     return val
-        bDDNode :: Int -> AValue -> (BDDNode AValue) -> (BDDNode AValue) -> IO (BDDNode AValue)
+        bDDNode :: Int -> Atom -> (BDDNode Atom) -> (BDDNode Atom) -> IO (BDDNode Atom)
         bDDNode varId v hi low = do
             let key = KeyNode varId (bDDNodeId hi) (bDDNodeId low)
             r <- HT.lookup hashTable key
@@ -189,7 +181,7 @@ abst constraints predicates = evalZ3 $ do
                     return val
             
 
-    let search :: [(AValue,AST)] -> Int -> Z3 (BDDNode AValue)
+    let search :: [(Atom,AST)] -> Int -> Z3 (BDDNode Atom)
         search ((v,z3_v):l) !d = do
             -- assumption: the current assumptions are consistent
             push

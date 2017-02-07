@@ -11,7 +11,9 @@ import Language.DMoCHi.ML.Syntax.Base
 import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
 import Language.DMoCHi.ML.Syntax.Typed(WellLabeled)
 import Control.Monad.Cont
+import Control.Monad.Trans.Cont(shiftT,resetT,evalContT)
 import Text.PrettyPrint.HughesPJClass
+
 
 data Program = Program { functions :: [(SId, UniqueKey, [SId], Exp)]
                        , mainTerm  :: Exp }
@@ -26,7 +28,20 @@ data Value where
 
 data Atom where
     Atom :: (Normalized l Atom arg, WellLabeled l ty, Elem l (Labels Atom) ~ 'True) => 
-            SLabel l -> arg -> SType ty -> UniqueKey -> Atom
+            SLabel l -> arg -> SType ty -> Atom
+
+instance Eq Atom where
+    (==) (Atom l1 arg1 _) (Atom l2 arg2 _) =
+        case (l1,l2) of
+            (SLiteral, SLiteral) -> arg1 == arg2
+            (SLiteral, _) -> False
+            (SVar, SVar) -> arg1 == arg2
+            (SVar, _) -> False
+            (SBinary, SBinary) -> arg1 == arg2
+            (SBinary, _) -> False
+            (SUnary, SUnary) -> arg1 == arg2
+            (SUnary, _) -> False
+
 
 type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Literal e arg = arg ~ Lit
@@ -53,35 +68,35 @@ type instance Ident  Exp = SId
 type instance Ident  Value = SId
 type instance Ident  Atom = SId
 
-mkBin :: SBinOp op -> Atom -> Atom -> UniqueKey -> Atom
-mkBin op v1 v2 key = case op of
-    SAdd -> Atom SBinary (BinArg SAdd v1 v2) STInt key
-    SSub -> Atom SBinary (BinArg SSub v1 v2) STInt key
-    SEq  -> Atom SBinary (BinArg SEq v1 v2) STBool key
-    SLt  -> Atom SBinary (BinArg SLt v1 v2) STBool key
-    SLte -> Atom SBinary (BinArg SLte v1 v2) STBool key
-    SGt  -> Atom SBinary (BinArg SLt v2 v1) STBool key
-    SGte -> Atom SBinary (BinArg SLte v2 v1) STBool key
-    SAnd -> Atom SBinary (BinArg SAnd v1 v2) STBool key
-    SOr  -> Atom SBinary (BinArg SOr  v1 v2) STBool key
+mkBin :: SBinOp op -> Atom -> Atom -> Atom
+mkBin op v1 v2 = case op of
+    SAdd -> Atom SBinary (BinArg SAdd v1 v2) STInt
+    SSub -> Atom SBinary (BinArg SSub v1 v2) STInt
+    SEq  -> Atom SBinary (BinArg SEq v1 v2) STBool
+    SLt  -> Atom SBinary (BinArg SLt v1 v2) STBool
+    SLte -> Atom SBinary (BinArg SLte v1 v2) STBool
+    SGt  -> Atom SBinary (BinArg SLt v2 v1) STBool
+    SGte -> Atom SBinary (BinArg SLte v2 v1) STBool
+    SAnd -> Atom SBinary (BinArg SAnd v1 v2) STBool
+    SOr  -> Atom SBinary (BinArg SOr  v1 v2) STBool
 
-mkUni :: SUniOp op -> Atom -> UniqueKey -> Atom
-mkUni op v1@(Atom _ _ sty _) key = case op of
-    SNeg -> Atom SUnary (UniArg SNeg v1) STInt key
-    SNot -> Atom SUnary (UniArg SNot v1) STBool key
+mkUni :: SUniOp op -> Atom -> Atom
+mkUni op v1@(Atom _ _ sty) = case op of
+    SNeg -> Atom SUnary (UniArg SNeg v1) STInt
+    SNot -> Atom SUnary (UniArg SNot v1) STBool
     SFst -> case sty of
-        STPair sty1 _ -> Atom SUnary (UniArg SFst v1) sty1 key
+        STPair sty1 _ -> Atom SUnary (UniArg SFst v1) sty1
         _ -> error "mkUni: Fst"
     SSnd -> case sty of
-        STPair _ sty2 -> Atom SUnary (UniArg SSnd v1) sty2 key
+        STPair _ sty2 -> Atom SUnary (UniArg SSnd v1) sty2
         _ -> error "mkUni: Snd"
 
-mkLiteral :: Lit -> UniqueKey -> Atom
-mkLiteral l@(CInt _) key = Atom SLiteral l STInt key
-mkLiteral l@(CBool _) key = Atom SLiteral l STInt key
+mkLiteral :: Lit -> Atom
+mkLiteral l@(CInt _) = Atom SLiteral l STInt
+mkLiteral l@(CBool _) = Atom SLiteral l STInt
 
-mkVar :: SId -> UniqueKey -> Atom
-mkVar x@(SId sty _) key = Atom SVar x sty key
+mkVar :: SId -> Atom
+mkVar x@(SId sty _) = Atom SVar x sty
 
 mkPair :: Value -> Value -> UniqueKey -> Value
 mkPair v1@(Value _ _ sty1 _) v2@(Value _ _ sty2 _) key = Value SPair (v1, v2) (STPair sty1 sty2) key
@@ -112,10 +127,15 @@ mkRand :: UniqueKey -> Exp
 mkRand key = Exp SRand () STInt key
 
 class Castable from to where
+    type Attr from to
+    castWith :: Attr from to -> from -> to
+    castWith _ from = cast from
     cast :: from -> to
 
 instance Castable Atom Value where
-    cast (Atom l arg sty key) = case l of
+    type Attr Atom Value = UniqueKey
+    cast = castWith reservedKey
+    castWith key (Atom l arg sty) = case l of
         SLiteral -> Value l arg sty key
         SVar -> Value l arg sty key
         SBinary -> Value l arg sty key
@@ -123,6 +143,7 @@ instance Castable Atom Value where
 
 
 instance Castable Value Exp where
+    type Attr Value Exp = ()
     cast (Value l arg sty key) = case l of
         SLiteral -> Exp l arg sty key
         SVar -> Exp l arg sty key
@@ -132,15 +153,21 @@ instance Castable Value Exp where
         SPair -> Exp l arg sty key
 
 instance Castable Atom Exp where
-    cast = cast . (cast :: Atom -> Value)
+    type Attr Atom Exp = UniqueKey
+    castWith key = cast . (castWith key :: Atom -> Value)
+    cast = castWith reservedKey
 
 instance Castable Atom Typed.Exp where
-    cast = cast . (cast :: Atom -> Exp)
+    type Attr Atom Typed.Exp = UniqueKey
+    castWith key = cast . (castWith key :: Atom -> Exp)
+    cast = castWith reservedKey
 
 instance Castable Value Typed.Exp where
+    type Attr Value Typed.Exp = ()
     cast = cast . (cast :: Value -> Exp)
 
 instance Castable Exp Typed.Exp where
+    type Attr Exp Typed.Exp = ()
     cast (Exp l arg sty key) = case (l,arg) of
         (SLiteral, _) -> Typed.Exp l arg sty key
         (SVar, _) -> Typed.Exp l arg sty key
@@ -184,39 +211,36 @@ instance Pretty Atom where
     pPrintPrec plevel prec e = pPrintPrec plevel prec (cast e :: Typed.Exp)
 
 normalize :: MonadId m => Typed.Program -> m Program
-normalize prog = Program <$> mapM (\(f,i,xs,e) -> (,,,) f i xs <$> convertE' e) (Typed.functions prog)
-                         <*> convertE' (Typed.mainTerm prog)
-
-convertE' :: MonadId m => Typed.Exp -> m Exp
-convertE' e = runContT (convertE e) pure
+normalize prog = Program <$> mapM (\(f,i,xs,e) -> (,,,) f i xs <$> evalContT (convertE e)) (Typed.functions prog)
+                         <*> evalContT (convertE (Typed.mainTerm prog))
 
 convertE :: MonadId m => Typed.Exp -> ContT Exp m Exp
 convertE e@(Typed.Exp l arg sty key) = 
     case (l, arg) of
-        (SLiteral, _) -> cast <$> convertA e
-        (SVar, _)     -> cast <$> convertA e
-        (SUnary, _)   -> cast <$> convertA e
-        (SBinary, _)  -> cast <$> convertA e
+        (SLiteral, _) -> castWith key <$> convertA e
+        (SVar, _)     -> castWith key <$> convertA e
+        (SUnary, _)   -> castWith key <$> convertA e
+        (SBinary, _)  -> castWith key <$> convertA e
         (SPair, _)    -> cast <$> convertV e
         (SLambda, _)  -> cast <$> convertV e
         (SApp, (f, es)) -> mkApp f <$> mapM convertV es <*> pure key
         (SLet, (x, e1, e2)) -> do
             e1' <- convertE e1
-            e2' <- lift $ convertE' e2
+            e2' <- resetT $ convertE e2
             return $ mkLet x e1' e2' key
         (SAssume, (e1,e2)) -> do
             e1' <- convertA e1
-            e2' <- lift (convertE' e2)
+            e2' <- resetT $ convertE e2
             return $ mkAssume e1' e2'  key
         (SBranch, (e1,e2)) -> do
-            e1' <- lift (convertE' e1)
-            e2' <- lift (convertE' e2)
+            e1' <- resetT $ convertE e1
+            e2' <- resetT $ convertE e2
             return $ mkBranch e1' e2' key
         (SIf, (cond, e1, e2)) -> do
             cond' <- convertA cond
-            e1' <- lift (convertE' e1)
-            e2' <- lift (convertE' e2)
-            ncond' <- mkUni SNot cond' <$> freshKey
+            e1' <- resetT $ convertE e1
+            e2' <- resetT $ convertE e2
+            let ncond' = mkUni SNot cond'
             mkBranch <$> (mkAssume  cond' e1' <$> freshKey)
                      <*> (mkAssume ncond' e2' <$> freshKey)
                      <*> pure key
@@ -225,35 +249,68 @@ convertE e@(Typed.Exp l arg sty key) =
         (SRand, ()) -> pure $ mkRand key
 
 convertA :: MonadId m => Typed.Exp -> ContT Exp m Atom
-convertA e@(Typed.Exp l arg sty key) = 
+convertA e@(Typed.Exp l arg sty _) = 
     case (l,arg) of
-        (SLiteral, lit) -> pure (mkLiteral lit key)
-        (SVar, x) -> pure (mkVar x key)
-        (SUnary,  UniArg op e1)    -> mkUni op <$> convertA e1 <*> pure key
+        (SLiteral, lit) -> pure (mkLiteral lit)
+        (SVar, x) -> pure (mkVar x)
+        (SUnary,  UniArg op e1)    -> mkUni op <$> convertA e1
         (SBinary, BinArg op e1 e2) -> mkBin op <$> convertA e1 
                                                <*> convertA e2 
-                                               <*> pure key
         _ -> do
             v <- convertE e
             r <- SId sty <$> identify "tmp"
-            vr <- mkVar r <$> freshKey
-            ContT $ \cont -> mkLet r v <$> cont vr <*> freshKey
+            ContT $ \cont -> mkLet r v <$> cont (mkVar r) <*> freshKey
 
 convertV :: MonadId m => Typed.Exp -> ContT Exp m Value
 convertV e@(Typed.Exp l arg sty key) =
     case (l,arg) of
-        (SLiteral, _) -> cast <$> convertA e
-        (SVar, _) -> cast <$> convertA e
-        (SUnary, _) -> cast <$> convertA e
-        (SBinary, _) -> cast <$> convertA e
+        (SLiteral, _) -> castWith key <$> convertA e
+        (SVar, _) -> castWith key <$> convertA e
+        (SUnary, _) -> castWith key <$> convertA e
+        (SBinary, _) -> castWith key <$> convertA e
         (SPair, (e1, e2)) -> mkPair <$> convertV e1 <*> convertV e2 <*> pure key
-        (SLambda, (x, e1)) -> mkLambda x <$> lift (convertE' e1) <*> pure key
+        (SLambda, (x, e1)) -> mkLambda x <$> resetT (convertE e1) <*> pure key
         _ -> do
             e' <- convertE e
             r <- SId sty <$> identify "tmp"
-            vr <- mkVar r <$> freshKey
-            ContT $ \cont -> mkLet r e' <$> cont (cast vr) <*> freshKey
+            kr <- freshKey
+            shiftT $ \cont -> lift (mkLet r e' <$> cont (castWith kr (mkVar r)) <*> freshKey)
 
+atomOfValue :: Value -> Maybe Atom
+atomOfValue (Value l arg sty _) = case l of
+    SLiteral -> Just $ Atom l arg sty
+    SVar     -> Just $ Atom l arg sty
+    SUnary   -> Just $ Atom l arg sty
+    SBinary  -> Just $ Atom l arg sty
+    SPair    -> Nothing
+    SLambda  -> Nothing
+
+valueOfExp :: Exp -> Maybe Value
+valueOfExp (Exp l arg sty key) = case l of
+    SLiteral -> Just $ Value l arg sty key
+    SVar     -> Just $ Value l arg sty key
+    SUnary   -> Just $ Value l arg sty key
+    SBinary  -> Just $ Value l arg sty key
+    SPair    -> Just $ Value l arg sty key
+    SLambda  -> Just $ Value l arg sty key
+    SLet     -> Nothing
+    SApp     -> Nothing
+    SAssume  -> Nothing
+    SBranch  -> Nothing
+    SFail    -> Nothing
+    SOmega   -> Nothing
+    SRand    -> Nothing
+    
+
+isValue :: Exp -> Bool
+isValue (Exp l _ _ _) = case l of
+    SLiteral -> True
+    SVar -> True
+    SUnary -> True
+    SBinary -> True
+    SLambda -> True
+    SPair -> True
+    _ -> False
             
 {-
 data Program = Program { functions :: [(Id,FunDef)] 

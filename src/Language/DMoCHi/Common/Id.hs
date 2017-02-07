@@ -1,5 +1,6 @@
 module Language.DMoCHi.Common.Id(UniqueKey, FreshT, runFreshT, Fresh, runFresh, Id
-                                , MonadId(..), freshId, reserved, maybeReserved, fromReserved
+                                , MonadId(..), freshId, reserved, reservedKey, maybeReserved, fromReserved
+                                , getName
                                 , refresh, identify) where
 
 import Control.Monad.State
@@ -33,6 +34,8 @@ type Fresh a = FreshT Identity a
 {- Ident -}
 data Id a = Id !UniqueKey a
 
+
+
 instance Eq a => Eq (Id a) where
     Id (UniqueKey 0) b == Id (UniqueKey 0) d = b == d
     Id a _ == Id c _ = a == c
@@ -57,6 +60,9 @@ freshId s = do
 reserved :: a -> Id a
 reserved x = Id (UniqueKey 0) x
 
+reservedKey :: UniqueKey
+reservedKey = UniqueKey 0
+
 maybeReserved :: Id a -> Maybe a
 maybeReserved (Id (UniqueKey 0) v) = Just v
 maybeReserved (Id _ _) = Nothing
@@ -65,6 +71,10 @@ maybeReserved (Id _ _) = Nothing
 fromReserved :: Id a -> a
 fromReserved (Id (UniqueKey 0) v) = v
 fromReserved _ = error "fromReserved: this is unreserved value"
+
+{-# INLINE getName #-}
+getName :: Id a -> a
+getName (Id _ v) = v
 
 {-# INLINE identify #-}
 identify :: MonadId m => a -> m (Id a)

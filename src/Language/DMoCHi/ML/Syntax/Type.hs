@@ -1,10 +1,12 @@
 {-# LANGUAGE GADTs, DataKinds, KindSignatures, TypeOperators, Rank2Types #-}
 module Language.DMoCHi.ML.Syntax.Type where
-import Language.DMoCHi.Common.Util
+-- import Language.DMoCHi.Common.Util
 import qualified Language.DMoCHi.Common.Id as Id
-import Text.PrettyPrint.HughesPJClass
+import Text.PrettyPrint.HughesPJClass hiding((<>))
+import Data.Monoid((<>))
 import Data.Type.Equality
 
+{-
 data Id = Id { _type :: Type, name :: String } deriving(Show)
 
 instance Eq Id where
@@ -12,6 +14,7 @@ instance Eq Id where
 
 instance Ord Id where
     compare = compare `on` name
+-}
 
 data Type = TInt | TBool | TPair Type Type | TFun [Type] Type deriving(Eq)
 data TypeLabel = LBase | LPair | LFun
@@ -23,6 +26,9 @@ instance Eq SId where
     SId _ x == SId _ y = x == y
 instance Ord SId where
     compare (SId _ x) (SId _ y) = compare x y
+
+alphaSId :: Id.MonadId m => SId -> m SId
+alphaSId (SId sty x) = SId sty <$> Id.refresh x
 
 foldArg :: (forall ty. SType ty -> b -> b) -> b -> STypeArg -> b
 foldArg _ acc SArgNil = acc
@@ -59,10 +65,7 @@ instance Pretty SId where
                         <+> text ":" 
                         <+> pPrintPrec plevel 0 sty
      
-instance Show SomeSType where
-    show = render . pPrint
-instance Show (SType ty) where
-    show = render . pPrint
+
 
 data SType (ty :: TypeLabel) where
     STInt :: SType 'LBase
@@ -87,16 +90,56 @@ instance TestEquality SType where
 data SomeSType where
     SomeSType :: SType ty -> SomeSType
 
+instance Show SomeSType where
+    show = render . pPrint
+instance Show (SType ty) where
+    show = render . pPrint
+
+instance Eq SomeSType where
+    (SomeSType ty1) == (SomeSType ty2) = case testEquality ty1 ty2 of
+        Just Refl -> True
+        Nothing -> False
+instance Ord SomeSType where
+    compare (SomeSType ty1) (SomeSType ty2) = compareSType ty1 ty2
+
+compareSType :: SType ty1 -> SType ty2 -> Ordering
+compareSType STBool STBool = EQ
+compareSType STBool _ = LT
+compareSType STInt STBool = GT
+compareSType STInt STInt = EQ
+compareSType STInt _ = GT
+compareSType (STPair _ _) STBool = GT
+compareSType (STPair _ _) STInt = GT
+compareSType (STPair ty1 ty2) (STPair ty3 ty4) = compareSType ty1 ty3 <> compareSType ty2 ty4
+compareSType (STPair _ _) _ = LT
+compareSType (STFun tys ty) (STFun tys' ty') = compare tys tys' <> compareSType ty ty'
+compareSType (STFun _ _) _ = GT
+
 data STypeArg where
     SArgNil :: STypeArg
     SArgCons :: SType ty -> STypeArg -> STypeArg 
 
-class HasType m where
-    getType :: m -> Type
+class HasSType m where
+    getSType :: m -> SomeSType
 
+
+instance Eq STypeArg where
+    SArgNil == SArgNil = True
+    SArgCons x xs == SArgCons y ys = 
+        case testEquality x y of
+            Just Refl -> xs == ys
+            Nothing -> False
+    _ == _ = False
+
+instance Ord STypeArg where
+    compare SArgNil SArgNil = EQ
+    compare SArgNil _ = LT
+    compare (SArgCons _ _) SArgNil = GT
+    compare (SArgCons x xs) (SArgCons y ys) = compareSType x y <> compare xs ys
+{-
 instance HasType Id where
     getType = _type
-
+    -}
 pprintT :: Int -> Type -> Doc
 pprintT _ TInt = text "int"
 pprintT _ TBool = text "bool"

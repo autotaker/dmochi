@@ -1,36 +1,57 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, DataKinds, GADTs, Rank2Types, BangPatterns #-}
 module Language.DMoCHi.ML.Syntax.PType where
 
 import Language.DMoCHi.ML.Syntax.Type
+import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.ML.Syntax.PNormal
-import Language.DMoCHi.ML.PrettyPrint.PNormal
-import Language.DMoCHi.Common.Id
-import Language.DMoCHi.Common.Util
+-- import Language.DMoCHi.ML.PrettyPrint.PNormal
+import Language.DMoCHi.Common.Id hiding(Id)
 import qualified Data.Map as M
-import qualified Data.IntMap as IM
-import Text.PrettyPrint
+
+import Text.PrettyPrint.HughesPJClass
 import Control.Monad.Writer
 import qualified Data.DList as DL
 
 data PType = PInt | PBool
-           | PFun Type ArgType TermType
-           | PPair Type PType PType
+           | PFun (SType 'LFun) ArgType TermType
+           | PPair (SType 'LPair) PType PType
+
+instance HasSType PType where
+    getSType ty = go ty SomeSType where
+        go :: PType -> (forall l. SType l -> SomeSType) -> SomeSType
+        go PInt k = k STInt
+        go PBool k = k STBool
+        go (PFun sty _ _) k = k sty
+        go (PPair sty _ _) k = k sty
+
+mkPFun :: ArgType -> TermType -> PType
+mkPFun argTy@(xs,_,_) termTy@(SId ty_r _,_,_) = PFun (STFun ty_xs ty_r) argTy termTy
+    where
+    ty_xs = foldr (\(SId ty _) acc -> SArgCons ty acc) SArgNil xs
+mkPPair :: PType -> PType -> PType
+mkPPair ty1 ty2 = 
+    case getSType ty1 of { SomeSType sty1 -> 
+    case getSType ty2 of { SomeSType sty2 ->
+        PPair (STPair sty1 sty2) ty1 ty2
+    }}
+    
 
 type Env = M.Map Id PType
 type Constraints = [Formula]
-type Formula = AValue
+type Formula = Atom
+type Id = SId
 
 type TermType = (Id, PType, [Formula])
 type ArgType = ([Id],[PType],[Formula])
 
-type TypeMap = IM.IntMap (Either PType TermType)
-type ScopeMap = IM.IntMap [Id]
+type TypeMap = M.Map UniqueKey (Either PType TermType)
+type ScopeMap = M.Map UniqueKey [Id]
 
 instance Eq PType where
     PInt == PInt = True
     PBool == PBool = True
     (PFun ty_1 (xs_1,xsty_1,ps_1) (r_1,rty_1,qs_1)) == (PFun ty_2 (xs_2,xsty_2,ps_2) (r_2,rty_2,qs_2)) =
-        ty_1 == ty_2 && 
+        SomeSType ty_1 == SomeSType ty_2 && 
         ps_1 == map (substFormula subst1) ps_2 &&
         qs_1 == map (substFormula subst2) qs_2 &&
         xsty_1 == map (substPType subst1) xsty_2 &&
@@ -39,19 +60,20 @@ instance Eq PType where
         subst1 = M.fromList $ zip xs_2 xs_1
         subst2 = M.insert r_2 r_1 subst1
     PPair ty pty_fst pty_snd == PPair ty' pty_fst' pty_snd' =
-        ty == ty' && pty_fst == pty_fst' && pty_snd == pty_snd'
+        SomeSType ty == SomeSType ty' && pty_fst == pty_fst' && pty_snd == pty_snd'
     _ == _ = False
 
+
 pprintTermType :: TermType -> Doc
-pprintTermType (x,pty_x,fml) = braces $ 
-    text (name x) <+> colon <+> (pprintPType 0 pty_x) <+>
-    text "|" <+> (hsep $ punctuate comma $ map (pprintA 0) fml)
+pprintTermType (SId _ name,pty_x,fml) = braces $ 
+    pPrint name <+> colon <+> (pprintPType 0 pty_x) <+>
+    text "|" <+> (hsep $ punctuate comma $ map pPrint fml)
 
 pprintPTypeArg :: ArgType -> Doc
 pprintPTypeArg (xs,pty_xs,fml) =
     braces $ 
-        hsep (punctuate comma $ zipWith (\x pty_x -> text (name x) <+> colon <+> (pprintPType 0 pty_x)) xs pty_xs) <+>
-        text "|" <+> (hsep $ punctuate comma $ map (pprintA 0) fml)
+        hsep (punctuate comma $ zipWith (\(SId _ name_x) pty_x -> pPrint name_x <+> colon <+> (pprintPType 0 pty_x)) xs pty_xs) <+>
+        text "|" <+> (hsep $ punctuate comma $ map pPrint fml)
 
 pprintPType :: Int -> PType -> Doc
 pprintPType _ PInt = text "int"
@@ -71,7 +93,7 @@ substTermType subst (x,pty,ps) = (x, substPType subst' pty, map (substFormula su
     subst' = M.delete x subst
 
 substPType :: M.Map Id Id -> PType -> PType
-substPType subst = substVPType (fmap (Atomic . Var) subst)
+substPType subst = substVPType (fmap (cast . mkVar) subst)
 
 substVPType :: M.Map Id Value -> PType -> PType
 substVPType _ PInt = PInt
@@ -89,121 +111,121 @@ substVPType subst (PFun ty (xs,ty_xs,ps) (r,ty_r,qs)) =
     qs' = map (substVFormula subst2) qs
 
 substFormula :: M.Map Id Id -> Formula -> Formula
-substFormula subst = substVFormula (fmap (Atomic . Var) subst)
+substFormula subst = substVFormula (fmap (cast . mkVar) subst)
 
 substVFormula :: M.Map Id Value -> Formula -> Formula
 substVFormula subst = atomic . go where
-    atomic (Atomic v) = v
-    atomic _ = error "substVFormula: type error"
-    go e = case e of
-        Var x ->
+    atomic v = case atomOfValue v of
+        Just a -> a
+        Nothing -> error "substVFormula: type error"
+    go e@(Atom l arg _) = case (l,arg) of
+        (SVar,x) ->
             case M.lookup x subst of
                 Just b -> b
-                Nothing -> Atomic e
-        CInt _ -> Atomic e
-        CBool _ -> Atomic e
+                Nothing -> cast e
+        (SLiteral, CInt  _) -> cast e
+        (SLiteral, CBool _) -> cast e
         -- Pair v1 v2 -> Pair (go v1) (go v2)
-        Op op ->  case op of
-            OpAdd v1 v2 -> Atomic $ Op $ (OpAdd `on` atomic) (go v1) (go v2)
-            OpSub v1 v2 -> Atomic $ Op $ (OpSub `on` atomic) (go v1) (go v2)
-            OpEq  v1 v2 -> Atomic $ Op $ (OpEq `on` atomic) (go v1) (go v2)
-            OpLt  v1 v2 -> Atomic $ Op $ (OpLt `on` atomic) (go v1) (go v2)
-            OpLte v1 v2 -> Atomic $ Op $ (OpLte `on` atomic) (go v1) (go v2)
-            OpAnd v1 v2 -> Atomic $ Op $ (OpAnd `on` atomic) (go v1) (go v2)
-            OpOr  v1 v2 -> Atomic $ Op $ (OpOr  `on` atomic) (go v1) (go v2)
-            OpFst ty v  -> case go v of 
-                Atomic av -> Atomic $ Op $ OpFst ty av
-                Pair v1 _ -> v1
-                Fun _ -> error "substVFormula: unexpected Fun"
-            OpSnd ty v  -> case go v of
-                Atomic av -> Atomic $ Op $ OpSnd ty av
-                Pair _ v2 -> v2
-                Fun _ -> error "substVFormula: unexpected Fun"
-            OpNot v     -> Atomic $ Op $ (OpNot . atomic) (go v)
-typeOfAValue :: Env -> AValue -> PType
+        (SBinary, BinArg op v1 v2) ->  
+            let !v1' = atomic $ go v1
+                !v2' = atomic $ go v2 in
+            case op of
+            SAdd -> cast $ mkBin op v1' v2'
+            SSub -> cast $ mkBin op v1' v2'
+            SEq  -> cast $ mkBin op v1' v2'
+            SLt  -> cast $ mkBin op v1' v2'
+            SLte -> cast $ mkBin op v1' v2'
+            SAnd -> cast $ mkBin op v1' v2'
+            SOr  -> cast $ mkBin op v1' v2'
+        (SUnary, UniArg op a) -> case op of
+            SFst -> case go a of 
+                Value SPair (v1,_) _ _ -> v1
+                v -> cast $ mkUni SFst $! atomic v
+            SSnd  -> case go a of
+                Value SPair (_,v2) _ _ -> v2
+                v -> cast $ mkUni SSnd $! atomic v
+            SNot -> cast $ mkUni SNot $! atomic (go a)
+            SNeg -> cast $ mkUni SNeg $! atomic (go a)
+
+typeOfAValue :: Env -> Atom -> PType
 typeOfAValue env = go where
-    go v = case v of
-        Var x -> env M.! x
-        CInt _ -> PInt
-        CBool _ -> PBool
---        Pair v1 v2 -> PPair (getType v) (go v1) (go v2)
-        Op op -> case op of
-            OpAdd _v1 _v2 -> PInt
-            OpSub _v1 _v2 -> PInt
-            OpEq  _v1 _v2 -> PBool
-            OpLt  _v1 _v2 -> PBool
-            OpLte _v1 _v2 -> PBool
-            OpAnd _v1 _v2 -> PBool
-            OpOr  _v1 _v2 -> PBool
-            OpFst _ v   ->
-                let PPair _ ty1 _ = go v in ty1
-            OpSnd _ v   -> 
-                let PPair _ _ ty2 = go v in ty2
-            OpNot _v -> PBool
+    go (Atom l arg _) = case (l,arg) of
+        (SVar,x) -> env M.! x
+        (SLiteral,CInt _) -> PInt
+        (SLiteral,CBool _) -> PBool
+        (SBinary, BinArg op _ _) -> case op of
+            SAdd -> PInt
+            SSub -> PInt
+            SEq  -> PBool
+            SLt  -> PBool
+            SLte -> PBool
+            SAnd -> PBool
+            SOr  -> PBool
+        (SUnary, UniArg op v) -> case op of
+            SFst -> let PPair _ ty1 _ = go v in ty1
+            SSnd -> let PPair _ _ ty2 = go v in ty2
+            SNot -> PBool
+            SNeg -> PInt
 
 initTypeMap :: MonadId m => Program -> m (TypeMap,ScopeMap)
 initTypeMap (Program fs t0) = do
     es <- execWriterT $ do
-        let gather fv (Value v) = case v of
-                Fun fdef -> gather (args fdef ++ fv) (body fdef)
-                Pair v1 v2 -> gather fv (Value v1) >> gather fv (Value v2)
-                Atomic _ -> return ()
-            gather fv (Let _ x lv e) = do
-                case lv of
-                    LValue _ -> return ()
-                    LApp _ _ _ vs -> mapM_ (gather fv . Value) vs
-                    LExp i e' -> do
-                        gather fv e'
-                        ty <- genTermType (getType e')
-                        tell (DL.singleton (i, Right ty, fv))
-                    LRand -> return ()
-                gather (x : fv) e
-            gather fv (Assume _ _ e) = gather fv e
-            gather _ (Fail _) = return ()
-            {-
-            gather fv (Fun fdef) = 
-                -- DO NOT count tail functions,
-                -- because their types are determined elsewhere
-                gather (arg fdef : fv) (body fdef)
-            -}
-            gather fv (Branch _ _ e1 e2) = gather fv e1 >> gather fv e2
-            gatherF fv f = do
-                gather (args f ++ fv) (body f)
-                ty <- genPType (getType f)
-                tell (DL.singleton (ident f,Left ty, fv))
-        let fv = map fst fs
-        forM_ fs $ \(_, f) -> gatherF fv f
+        let gather :: MonadId m => [SId] -> Exp -> WriterT (DL.DList (UniqueKey, Either PType TermType, [SId])) m ()
+            gather fv (Exp l arg _ _) = case (l,arg) of
+                (SLiteral, _) -> return ()
+                (SVar, _) -> return ()
+                (SBinary, _) -> return ()
+                (SUnary, _) -> return ()
+                (SLambda, (xs,e)) -> gather (xs ++ fv) e
+                (SPair, (v1,v2)) -> gather fv (cast v1) >> gather fv (cast v2)
+                (SLet, (x, e1@(Exp _ _ sty1 key1), e2)) -> do
+                    gather fv e1 
+                    unless (isValue e1) $ do
+                        ty <- genTermType sty1
+                        tell (DL.singleton (key1, Right ty, fv))
+                    gather (x : fv) e2
+                (SApp, (_, vs)) -> mapM_ (gather fv . cast) vs
+                (SAssume, (_,e)) -> gather fv e
+                (SBranch, (e1, e2)) -> gather fv e1 >> gather fv e2
+                (SFail, _) -> return ()
+                (SOmega, _) -> return ()
+                (SRand, _) -> return ()
+            gatherF fv (SId sty _, key, xs, e) = do
+                gather (xs ++ fv) e
+                ty <- genPType sty 
+                tell (DL.singleton (key,Left ty, fv))
+        let fv = map (\(f,_,_,_) -> f) fs
+        mapM_ (gatherF fv) fs
         gather fv t0
     let (es1,es2) = unzip [ ((i,v1),(i,v2)) | (i, v1, v2) <- DL.toList es ]
-    return (IM.fromList es1, IM.fromList es2)
+    return (M.fromList es1, M.fromList es2)
 
-genTermType :: MonadId m => Type -> m TermType
+genTermType :: MonadId m => SType ty -> m TermType
 genTermType s = do
-    r <- Id s <$> freshId "r"
+    r <- SId s <$> identify "r"
     pty <- genPType s
     return (r,pty,[])
-genPType :: MonadId m => Type -> m PType
-genPType TInt = return PInt
-genPType TBool = return PBool
-genPType ty@(TPair t1 t2) = PPair ty <$> genPType t1 <*> genPType t2
-genPType ty@(TFun ts t2) = do
-    xs <- mapM (\t1 -> Id t1 <$> freshId "x") ts
-    r <- Id t2 <$> freshId "r"
-    ty_xs <- mapM genPType ts
+genPType :: MonadId m => SType ty -> m PType
+genPType STInt = return PInt
+genPType STBool = return PBool
+genPType ty@(STPair t1 t2) = PPair ty <$> genPType t1 <*> genPType t2
+genPType ty@(STFun ts t2) = do
+    xs <- foldArg (\t1 action -> identify "x" >>= (\x -> (SId t1 x :) <$> action)) (pure []) ts
+    r <- SId t2 <$> identify "r"
+    ty_xs <- foldArg (\t1 action -> genPType t1 >>= (\pty -> (pty :) <$> action)) (pure []) ts
     ty_r <- genPType t2
     return $ PFun ty (xs, ty_xs, []) (r, ty_r, [])
 
 updateFormula :: Formula -> [Formula] -> [Formula]
-updateFormula phi fml = case phi of
-    CBool _ -> fml
-    -- decompose boolean combinations
-    Op (OpAnd v1 v2) -> updateFormula v1 (updateFormula v2 fml)
-    Op (OpOr v1 v2) -> updateFormula v1 (updateFormula v2 fml)
+updateFormula phi@(Atom l arg _ ) fml = case (l,arg) of
+    (SLiteral, CBool _) -> fml
+    (SBinary, BinArg SAnd v1 v2) -> updateFormula v1 (updateFormula v2 fml)
+    (SBinary, BinArg SOr  v1 v2) -> updateFormula v1 (updateFormula v2 fml)
     _ | phi `elem` fml -> fml
       | otherwise -> phi : fml
 
 mergeTypeMap :: TypeMap -> TypeMap -> TypeMap
-mergeTypeMap typeMap1 typeMap2 = IM.unionWith f typeMap1 typeMap2
+mergeTypeMap typeMap1 typeMap2 = M.unionWith f typeMap1 typeMap2
     where
         f (Left pty1) (Left pty2) = Left $ mergePType pty1 pty2
         f (Right tty1) (Right tty2) = Right $ mergeTermType tty1 tty2
@@ -213,10 +235,10 @@ mergePType :: PType -> PType -> PType
 mergePType PInt PInt = PInt
 mergePType PBool PBool = PBool
 mergePType (PPair ty1 pty_fst1 pty_snd1) (PPair ty2 pty_fst2 pty_snd2) 
-    | ty1 == ty2 = PPair ty1 (mergePType pty_fst1 pty_fst2) (mergePType pty_snd1 pty_snd2)
+    | SomeSType ty1 == SomeSType ty2 = PPair ty1 (mergePType pty_fst1 pty_fst2) (mergePType pty_snd1 pty_snd2)
 mergePType (PFun ty1 (xs_1,xsty_1,ps_1) (r_1,rty_1,qs_1)) 
            (PFun ty2 (xs_2,xsty_2,ps_2) (r_2,rty_2,qs_2))
-    | ty1 == ty2 = PFun ty1 (xs_1,xsty, ps) (r_1,rty,qs)
+    | SomeSType ty1 == SomeSType ty2 = PFun ty1 (xs_1,xsty, ps) (r_1,rty,qs)
         where
         subst1 = M.fromList (zip xs_2 xs_1)
         subst2 = M.insert r_2 r_1 subst1
