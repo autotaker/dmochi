@@ -1,3 +1,4 @@
+{-# LANGUAGE GADTs #-}
 module Language.DMoCHi.ML.HornClauseParser where
 import Text.Parsec
 import qualified Text.Parsec.Token as P
@@ -5,9 +6,10 @@ import Text.Parsec.Expr
 import Text.Parsec.Language(emptyDef)
 import Text.Parsec.String
 import Language.DMoCHi.ML.Syntax.PNormal
+import qualified Language.DMoCHi.Common.Id as Id 
 import qualified Data.Map as M
 
-parseSolution :: FilePath -> IO (Either ParseError [(Int,[Id],AValue)])
+parseSolution :: FilePath -> IO (Either ParseError [(Int,[TId],Atom)])
 parseSolution = parseFromFile mainP
 
 
@@ -51,7 +53,7 @@ semiSep = P.semiSep lexer
 commaSep :: Parser a -> Parser [a]
 commaSep = P.commaSep lexer
 
-mainP :: Parser [(Int,[Id],AValue)]
+mainP :: Parser [(Int,[TId],Atom)]
 mainP = string "solution:" >> whiteSpace >> many defP <* eof
 
 predP :: Parser Int
@@ -64,44 +66,42 @@ predP = do
         return (fromIntegral i)
 
 
-defP :: Parser (Int,[Id],AValue)
+defP :: Parser (Int,[TId],Atom)
 defP = do
     pname <- predP
-    xs <- parens (commaSep $ flip Id <$> identifier <*> (colon *> typeP))
+    xs <- parens (commaSep $ flip TId <$> (Id.reserved <$> identifier) <*> (colon *> typeP))
     reserved "="
-    v <- exprP (M.fromList [ (name x, getType x) | x <- xs ])
+    v <- exprP (M.fromList [ (Id.fromReserved (name x), x) | x <- xs ])
     return $ (pname,xs,v)
 
 typeP :: Parser Type
 typeP = (TInt <$ reserved "int") <|> (TBool <$ reserved "bool")
       <|> (TInt <$ identifier)
 
-exprP :: M.Map String Type -> Parser AValue
+exprP :: M.Map String TId -> Parser Atom
 exprP env = it where
     it = buildExpressionParser opTable termP <?> "value"
-    opTable = [ [prefix "-" (after Op neg), prefix "+" id, prefix' "not" (after Op OpNot)]
+    opTable = [ [prefix "-" (mkUni SNeg), prefix "+" id, prefix' "not" (mkUni SNot)]
               , [binary "*" scalar AssocNone]
-              , [binary "+" (after2 Op OpAdd) AssocLeft, binary "-" (after2 Op OpSub) AssocLeft]
-              , [binary "=" (after2 Op OpEq)  AssocNone, 
-                 binary "<>" (\a b -> Op $ OpNot $ Op $ OpEq a b) AssocNone,
-                 binary "<" (after2 Op OpLt) AssocNone,
-                 binary "<=" (after2 Op OpLte) AssocNone,
-                 binary ">=" (after2 Op (flip OpLte)) AssocNone,
-                 binary ">" (after2 Op (flip OpLt)) AssocNone]
-              , [binary "/\\" (after2 Op OpAnd) AssocLeft]
-              , [binary "\\/" (after2 Op OpOr) AssocLeft]
+              , [binary "+" (mkBin SAdd) AssocLeft, binary "-" (mkBin SSub) AssocLeft]
+              , [binary "=" (mkBin SEq)  AssocNone, 
+                 binary "<>" (\a b -> mkUni SNot $ mkBin SEq a b) AssocNone,
+                 binary "<" (mkBin SLt) AssocNone,
+                 binary "<=" (mkBin SLte) AssocNone,
+                 binary ">=" (flip $ mkBin SLte) AssocNone,
+                 binary ">" (flip $ mkBin SLt) AssocNone]
+              , [binary "/\\" (mkBin SAnd) AssocLeft]
+              , [binary "\\/" (mkBin SOr) AssocLeft]
               ]
-    neg = OpSub (CInt 0)
-    after2 = (.) . (.)
-    after = (.)
     binary name fun assoc = Infix (reservedOp name >> pure fun) assoc
     prefix name fun       = Prefix (reservedOp name >> pure fun)
     prefix' name fun      = Prefix (reserved name >> pure fun)
-    scalar (CInt c) t = foldl1 (after2 Op OpAdd) [ t | _ <- [1..c]]
+    scalar :: Atom -> Atom -> Atom
+    scalar (Atom SLiteral (CInt c) _) t = foldl1 (mkBin SAdd) [ t | _ <- [1..c]]
     scalar _ _ = error "exprP: scalar: non-linear term is unsupported"
-    termP = Var <$> (fmap (\x -> Id (env M.! x) x) identifier) <* optional (parens (pure ()))
-        <|> CInt <$> natural 
-        <|> CBool True <$ reserved "true" 
-        <|> CBool False <$ reserved "false"
+    termP = mkVar <$> (fmap (env M.!) identifier) <* optional (parens (pure ()))
+        <|> mkLiteral . CInt <$> natural 
+        <|> mkLiteral (CBool True) <$ reserved "true" 
+        <|> mkLiteral (CBool False) <$ reserved "false"
         <|> parens it
 

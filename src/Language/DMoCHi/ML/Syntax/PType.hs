@@ -10,6 +10,7 @@ import qualified Data.Map as M
 
 import Text.PrettyPrint.HughesPJClass
 import Control.Monad.Writer
+import Data.Proxy
 import qualified Data.DList as DL
 
 data PType = PInt | PBool
@@ -167,33 +168,38 @@ typeOfAValue env = go where
 initTypeMap :: MonadId m => Program -> m (TypeMap,ScopeMap)
 initTypeMap (Program fs t0) = do
     es <- execWriterT $ do
-        let gather :: MonadId m => [TId] -> Exp -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
-            gather fv (Exp l arg _ _) = case (l,arg) of
+        let gatherE :: MonadId m => [TId] -> Exp -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
+            gatherE fv (Exp l arg _ _) = gather (Proxy :: Proxy Exp) fv l arg
+            gatherV :: MonadId m => [TId] -> Value -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
+            gatherV fv (Value l arg _ _) = gather (Proxy :: Proxy Value) fv l arg
+            gather :: (MonadId m, Ident e ~ TId, Normalized l e arg)  => Proxy e -> [TId] -> SLabel l -> arg -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
+            gather _ fv l arg = case (l,arg) of
                 (SLiteral, _) -> return ()
-                (SVar, _) -> return ()
-                (SBinary, _) -> return ()
-                (SUnary, _) -> return ()
-                (SLambda, (xs,e)) -> gather (xs ++ fv) e
-                (SPair, (v1,v2)) -> gather fv (cast v1) >> gather fv (cast v2)
-                (SLet, (x, e1@(Exp _ _ sty1 key1), e2)) -> do
-                    gather fv e1 
-                    unless (isValue e1) $ do
+                (SVar, _)     -> return ()
+                (SBinary, _)  -> return ()
+                (SUnary, _)   -> return ()
+                (SLambda, (xs,e)) -> gatherE (xs ++ fv) e
+                (SPair, (v1,v2))  -> gatherV fv v1 >> gatherV fv v2 
+                (SLet, (x, (LExp l1 arg1 sty1 key1), e2)) -> do
+                    gather (Proxy :: Proxy LExp) fv l1 arg1
+                    unless (isValue l1) $ do
                         ty <- genTermType sty1
                         tell (DL.singleton (key1, Right ty, fv))
-                    gather (x : fv) e2
-                (SApp, (_, vs)) -> mapM_ (gather fv . cast) vs
-                (SAssume, (_,e)) -> gather fv e
-                (SBranch, (e1, e2)) -> gather fv e1 >> gather fv e2
+                    gatherE (x : fv) e2
+                (SApp, (_, vs)) -> mapM_ (gatherV fv) vs
+                (SAssume, (_,e)) -> gatherE fv e
+                (SBranch, (e1, e2)) -> gatherE fv e1 >> gatherE fv e2
                 (SFail, _) -> return ()
                 (SOmega, _) -> return ()
                 (SRand, _) -> return ()
+                (SIf, _) -> error "impossible"
             gatherF fv (TId sty _, key, xs, e) = do
-                gather (xs ++ fv) e
+                gatherE (xs ++ fv) e
                 ty <- genPType sty 
                 tell (DL.singleton (key,Left ty, fv))
         let fv = map (\(f,_,_,_) -> f) fs
         mapM_ (gatherF fv) fs
-        gather fv t0
+        gatherE fv t0
     let (es1,es2) = unzip [ ((i,v1),(i,v2)) | (i, v1, v2) <- DL.toList es ]
     return (M.fromList es1, M.fromList es2)
 

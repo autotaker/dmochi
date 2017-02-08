@@ -11,8 +11,8 @@ import           Data.Int
 import           Data.Bits
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
-import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
-import           Language.DMoCHi.Common.Id
+-- import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
+import           Language.DMoCHi.Common.Id hiding(Id)
 
 type Trace = [Bool]
 newtype CallId = CallId { unCallId :: Int } deriving (Eq,Ord)
@@ -71,9 +71,10 @@ data SValue = SVar Id
             | And SValue SValue
             | Or SValue SValue
             | Not SValue
+            | Neg SValue
             | C Closure
 
-data Closure = Cls { clsBody :: ML.FunDef
+data Closure = Cls { clsBody :: (UniqueKey, [ML.TId], ML.Exp)
                    , clsId :: ClosureId {- Ident -} 
                    , clsEnv :: Env 
                    , clsAccessors :: [Accessor] }
@@ -139,6 +140,8 @@ instance Show SValue where
         showParen (d >= 3) $ (showsPrec 3 v1) . (showString " || ") . (showsPrec 3 v2)
     showsPrec d (Not v1) = 
         showParen (d >= 8) $ (showString "not ") . showsPrec 8 v1
+    showsPrec d (Neg v1) = 
+        showParen (d >= 8) $ (showString "- ") . showsPrec 8 v1
     showsPrec d (C cls) = showsPrec d cls
                        
 
@@ -146,8 +149,8 @@ instance ML.HasType Closure where
     getType = ML.getType . clsBody
 
 instance Show Closure where
-    showsPrec d (Cls i x _ _) = showParen (d > app_prec) $
-        showString "Cls " . showsPrec (app_prec+1) (ML.ident i) . showChar ' ' . showsPrec (app_prec + 1) x
+    showsPrec d (Cls (i,_,_) x _ _) = showParen (d > app_prec) $
+        showString "Cls " . showsPrec (app_prec+1) (show i) . showChar ' ' . showsPrec (app_prec + 1) x
         where
         app_prec = 10
 
@@ -158,7 +161,7 @@ data CompTreeInfo = InfoBind [(Id,SValue)]
                   | InfoNone
 
 type Env = M.Map Id SValue
-type Id = ML.Id
+type Id = ML.TId
 
 -- type Log = ([Constraint],[CallInfo],[ClosureInfo],[ReturnInfo],([BranchInfo],[LetExpInfo]))
 
@@ -192,27 +195,30 @@ pop (S x y z) = S x y (tail z)
 
 fromSValue :: SValue -> ML.Value
 fromSValue = \case
-    SVar x -> ML.Atomic $ ML.Var x
-    Int i  -> ML.Atomic $ ML.CInt i
-    Bool b -> ML.Atomic $ ML.CBool b
-    P v1 v2 -> ML.Pair (fromSValue v1) (fromSValue v2)
-    Add v1 v2 -> bin ML.OpAdd v1 v2
-    Sub v1 v2 -> bin ML.OpSub v1 v2
-    Eq v1 v2 -> bin ML.OpEq v1 v2
-    Lt v1 v2 -> bin ML.OpLt v1 v2
-    Lte v1 v2 -> bin ML.OpLte v1 v2
-    And v1 v2 -> bin ML.OpAnd v1 v2
-    Or v1 v2 -> bin ML.OpOr v1 v2
-    Not v1 -> unary ML.OpNot v1
+    SVar x -> ML.cast $ ML.Var x
+    Int i  -> ML.cast $ ML.CInt i
+    Bool b -> ML.cast $ ML.CBool b
+    P v1 v2 -> ML.mkPair (fromSValue v1) (fromSValue v2)
+    Add v1 v2 -> bin (ML.mkBin ML.SAdd) v1 v2
+    Sub v1 v2 -> bin (ML.mkBin ML.SSub) v1 v2
+    Eq v1 v2 -> bin (ML.mkBin ML.SEq) v1 v2
+    Lt v1 v2 -> bin (ML.mkBin ML.SLt) v1 v2
+    Lte v1 v2 -> bin (ML.mkBin ML.SLte) v1 v2
+    And v1 v2 -> bin (ML.mkBin ML.SAnd) v1 v2
+    Or v1 v2 -> bin (ML.mkBin ML.SOr) v1 v2
+    Not v1 -> unary (ML.mkUni ML.SNot) v1
+    Neg v1 -> unary (ML.mkUni ML.SNeg) v1
     C _ -> error "Cannot convert a closure to a syntactic value"
     where
+    bin :: (ML.Atom -> ML.Atom -> ML.Atom) -> SValue -> SValue -> ML.Value
     bin f v1 v2 = 
-        let ML.Atomic !av1 = fromSValue v1 in
-        let ML.Atomic !av2 = fromSValue v2 in
-        ML.Atomic $ ML.Op (f av1 av2)
+        let Just !av1 = ML.atomOfValue (fromSValue v1) in
+        let Just !av2 = ML.atomOfValue (fromSValue v2) in
+        ML.cast $ f av1 av2
+    unary :: (ML.Atom -> ML.Atom) -> SValue -> ML.Value
     unary f v1 = 
-        let ML.Atomic !av1 = fromSValue v1 in
-        ML.Atomic $ ML.Op (f av1)
+        let Just !av1 = ML.atomOfValue (fromSValue v1) in
+        ML.cast $ f av1
     
 
 leaf :: ML.Exp -> CompTree
@@ -276,28 +282,35 @@ symbolicExec prog trace = do
                 Nothing -> return (CompTree _e [], Nothing)
 
     evalV :: CallId -> Env -> ML.Value -> M m SValue
-    evalV _ env (ML.Atomic av) = pure $ evalA env av
-    evalV callSite env (ML.Pair v1 v2) = P <$> evalV callSite env v1 <*> evalV callSite env v2
-    evalV callSite env (ML.Fun fdef) = C <$> genClosure callSite fdef env
-    evalA :: Env -> ML.AValue -> SValue
-    evalA env = \case
-        ML.Var x -> case M.lookup x env of Just v -> v 
-                                           Nothing -> error $ "lookup error: key " ++ (show x)
-        ML.CInt x -> Int x
-        ML.CBool x -> Bool x
-        ML.Op op -> case op of
-            ML.OpAdd v1 v2 -> Add (evalA env v1) (evalA env v2)
-            ML.OpSub v1 v2 -> Sub (evalA env v1) (evalA env v2)
-            ML.OpEq  v1 v2  -> Eq (evalA env v1) (evalA env v2)
-            ML.OpLt  v1 v2  -> Lt (evalA env v1) (evalA env v2)
-            ML.OpLte v1 v2 -> Lte (evalA env v1) (evalA env v2)
-            ML.OpAnd v1 v2 -> And (evalA env v1) (evalA env v2)
-            ML.OpOr  v1 v2 -> Or (evalA env v1) (evalA env v2)
-            ML.OpFst _ v -> 
-                let P sv _ = evalA env v in sv
-            ML.OpSnd _ v -> 
-                let P _ sv = evalA env v in sv
-            ML.OpNot v1 -> Not (evalA env v1)
+    evalV callSite env (ML.Value l arg sty key) =
+        case l of
+            ML.SLiteral -> pure $ evalA env (ML.Atom l arg sty)
+            ML.SVar     -> pure $ evalA env (ML.Atom l arg sty)
+            ML.SBinary  -> pure $ evalA env (ML.Atom l arg sty)
+            ML.SUnary   -> pure $ evalA env (ML.Atom l arg sty)
+            ML.SPair    -> 
+                let (v1,v2) = arg in
+                P <$> evalV callSite env v1 <*> evalV callSite env v2
+            ML.SLambda  -> C <$> genClosure callSite arg env
+    evalA :: Env -> ML.Atom -> SValue
+    evalA env (ML.Atom l arg sty) = case (l,arg) of
+        (ML.SVar, x) -> case M.lookup x env of Just v -> v 
+                                               Nothing -> error $ "lookup error: key " ++ (show x)
+        (ML.SLiteral, ML.CInt x) -> Int x
+        (ML.SLiteral, ML.CBool x) -> Int x
+        (ML.SBinary, ML.BinArg op v1 v2) -> case op of
+            ML.SAdd -> Add (evalA env v1) (evalA env v2)
+            ML.SSub -> Sub (evalA env v1) (evalA env v2)
+            ML.SEq  -> Eq  (evalA env v1) (evalA env v2)
+            ML.SLt  -> Lt  (evalA env v1) (evalA env v2)
+            ML.SLte -> Lte (evalA env v1) (evalA env v2)
+            ML.SAnd -> And (evalA env v1) (evalA env v2)
+            ML.SOr  -> Or  (evalA env v1) (evalA env v2)
+        (ML.SUnary, ML.UniArg op v1) -> case op of
+            ML.SFst -> let P sv _ = evalA env v1 in sv
+            ML.SSnd -> let P _ sv = evalA env v1 in sv
+            ML.SNot -> Not (evalA env v1)
+            ML.SNeg -> Neg (evalA env v1)
     evalLV :: CallId -> Env -> CompTreePath -> ML.LetValue -> M m (CompTreeInfo, CompTree,Maybe SValue)
     evalLV callSite env path = \case 
         ML.LValue v -> pure $ (InfoNone, leaf (ML.Value (ML.Atomic v)), Just (evalA env v))
