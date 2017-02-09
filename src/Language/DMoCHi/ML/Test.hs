@@ -17,13 +17,11 @@ import           Language.DMoCHi.Boolean.Test
 import           Language.DMoCHi.ML.Parser
 import           Language.DMoCHi.ML.PrettyPrint.UnTyped
 import           Language.DMoCHi.ML.Alpha
-import qualified Language.DMoCHi.ML.CallNormalize as CallNormalize
-import qualified Language.DMoCHi.ML.Inline  as Inline
-import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
-import qualified Language.DMoCHi.ML.PrettyPrint.Typed as Typed
+-- import qualified Language.DMoCHi.ML.CallNormalize as CallNormalize
+-- import qualified Language.DMoCHi.ML.Inline  as Inline
+-- import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
-import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.ElimCast as PAbst
 import qualified Language.DMoCHi.ML.Saturate as Saturate

@@ -1,4 +1,4 @@
-module Language.DMoCHi.Common.Id(UniqueKey, FreshT, runFreshT, Fresh, runFresh, Id
+module Language.DMoCHi.Common.Id(UniqueKey, FreshT, runFreshT, Fresh, FreshIO, runFresh, Id
                                 , MonadId(..), freshId, reserved, reservedKey, maybeReserved, fromReserved
                                 , getName
                                 , refresh, identify) where
@@ -28,13 +28,12 @@ class Monad m => MonadId m where
     freshKey = UniqueKey <$> freshInt
 
 newtype FreshT m a = FreshT { unFreshT :: Strict.StateT Int m a }
+type FreshIO = FreshT IO
 
 type Fresh a = FreshT Identity a
 
 {- Ident -}
 data Id a = Id !UniqueKey a
-
-
 
 instance Eq a => Eq (Id a) where
     Id (UniqueKey 0) b == Id (UniqueKey 0) d = b == d

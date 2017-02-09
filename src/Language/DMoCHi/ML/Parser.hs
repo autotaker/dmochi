@@ -4,9 +4,9 @@ import Text.Parsec
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Expr
 import Language.DMoCHi.ML.Syntax.UnTyped 
-import Language.DMoCHi.Common.Id(FreshT,UniqueKey, runFresh)
+import Language.DMoCHi.Common.Id(UniqueKey, FreshIO)
 import Data.Either
-import Data.Functor.Identity
+import Control.Monad.IO.Class
 
 reservedNames :: [String]
 reservedNames = ["let","rec","in","and","fun","not",
@@ -28,7 +28,7 @@ language = P.LanguageDef { P.commentStart = "(*"
                          , P.caseSensitive = True }
 
 
-type Parser a = ParsecT String [(UniqueKey,Type)] (FreshT Identity) a
+type Parser a = ParsecT String [(UniqueKey,Type)] FreshIO a
 
 type UserState = [(UniqueKey, Type)]
 type UserMonad = [(UniqueKey, Type)]
@@ -70,10 +70,10 @@ brackets = P.brackets lexer
 typVar :: Parser String
 typVar = char '\'' *> identifier
 
-parseProgramFromFile :: FilePath -> IO (Either ParseError Program)
+parseProgramFromFile :: FilePath -> FreshIO (Either ParseError Program)
 parseProgramFromFile f = do
-    input <- readFile f
-    return $ runFresh (runParserT progP [] f input)
+    input <- liftIO $ readFile f
+    runParserT progP [] f input
 
 progP :: Parser Program
 progP = do
@@ -161,9 +161,9 @@ valueP = buildExpressionParser opTable termP <?> "value" where
               , [binary "&&" SAnd AssocLeft]
               , [binary "||" SOr AssocLeft]
               ]
-    binary :: Supported op (BinOps Exp) => String -> SBinOp op -> Assoc -> Operator String [(UniqueKey,Type)] (FreshT Identity) Exp
+    binary :: Supported op (BinOps Exp) => String -> SBinOp op -> Assoc -> Operator String [(UniqueKey,Type)] FreshIO Exp
     binary name op assoc = Infix (reservedOp name >> mkBinary' op) assoc
-    prefix, prefix' :: Supported op (UniOps Exp) => String -> SUniOp op  -> Operator String [(UniqueKey,Type)] (FreshT Identity) Exp
+    prefix, prefix' :: Supported op (UniOps Exp) => String -> SUniOp op  -> Operator String [(UniqueKey,Type)] FreshIO Exp
     prefix name op       = Prefix (reservedOp name >> mkUnary' op)
     prefix' name op      = Prefix (reserved name >> mkUnary' op)
     fstOrSnd = Postfix $ dot >> ((reserved "fst" >> mkUnary' SFst) <|>

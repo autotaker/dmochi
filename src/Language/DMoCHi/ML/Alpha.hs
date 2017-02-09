@@ -41,10 +41,9 @@ instance Pretty Exp where
                  }
             doc = genericPPrint pp plevel prec l arg
 
-type M m a = ReaderT (M.Map String (Id String)) (ExceptT AlphaError m) a
+type M a = ReaderT (M.Map String (Id String)) (ExceptT AlphaError FreshIO) a
 
-{-# SPECIALIZE alpha :: U.Program -> FreshT IO (Either AlphaError Program) #-}
-alpha :: (MonadId m) => U.Program -> m (Either AlphaError Program)
+alpha :: U.Program -> FreshIO (Either AlphaError Program)
 alpha (U.Program fs syns ann t0) = runExceptT $ do
     env <- M.fromList <$> mapM (\(x,_,_) -> (,) x <$> identify x) fs
     when (M.size env /= length fs) $ do
@@ -55,7 +54,7 @@ alpha (U.Program fs syns ann t0) = runExceptT $ do
         t0' <- renameE t0
         return $ Program fs' syns ann t0'
 
-rename :: Monad m => String -> M m (Id String)
+rename :: String -> M (Id String)
 rename x = do
     env <- ask
     let m = M.lookup x env
@@ -63,7 +62,7 @@ rename x = do
         Nothing -> throwError $ UndefinedVariable x
         Just x' -> return x'
 
-renameE :: MonadId m => U.Exp -> M m Exp
+renameE :: U.Exp -> M Exp
 renameE (U.Exp label arg key) =
     case (label, arg) of
         (SLiteral, arg) -> return $ Exp label arg key
@@ -86,13 +85,13 @@ renameE (U.Exp label arg key) =
         (SOmega, _) -> return $ Exp label () key
         (SRand, _) -> return $ Exp label () key
 
-register :: MonadId m => String -> M m a -> M m (Id String,a)
+register :: String -> M a -> M (Id String,a)
 register x m = do
     x' <- identify x
     v  <- local (M.insert x x') m
     return (x',v)
 
-register' :: MonadId m => [String] -> M m a -> M m ([Id String],a)
+register' :: [String] -> M a -> M ([Id String],a)
 register' xs m = do
     xs' <- mapM identify xs
     v  <- local (\env -> foldr (uncurry M.insert) env (zip xs xs')) m
