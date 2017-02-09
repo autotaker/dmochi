@@ -148,6 +148,15 @@ mkOmegaL sty key = LExp SOmega () sty key
 mkRand :: UniqueKey -> LExp
 mkRand key = LExp SRand () TInt key
 
+instance HasType Exp where
+    getType (Exp _ _ sty _) = sty
+instance HasType Value where
+    getType (Value _ _ sty _) = sty
+instance HasType Atom where
+    getType (Atom _ _ sty) = sty
+instance HasType LExp where
+    getType (LExp _ _ sty _) = sty
+
 class Castable from to where
     type Attr from to
     castWith :: Attr from to -> from -> to
@@ -280,6 +289,15 @@ instance Pretty Atom where
     pPrintPrec plevel prec e = pPrintPrec plevel prec (cast e :: Typed.Exp)
 instance Pretty LExp where
     pPrintPrec plevel prec e = pPrintPrec plevel prec (cast e :: Typed.Exp)
+
+instance Show Exp where
+    show = render . pPrint 
+instance Show Value where
+    show = render . pPrint 
+instance Show Atom where
+    show = render . pPrint 
+instance Show LExp where
+    show = render . pPrint 
 
 normalize :: MonadId m => Typed.Program -> m Program
 normalize prog = Program <$> mapM (\(f,i,xs,e) -> (,,,) f i xs <$> evalContT (convertE e)) (Typed.functions prog)
