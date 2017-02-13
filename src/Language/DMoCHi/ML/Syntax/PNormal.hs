@@ -6,7 +6,8 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , mkFail, mkOmega, mkRand
                                         , mkFailL, mkOmegaL
                                         , Castable(..)
-                                        , normalize, atomOfValue, valueOfLExp, valueOfExp, isValue
+                                        , normalize, atomOfValue, valueOfLExp, valueOfExp
+                                        , isValue, isAtom
                                         , module Language.DMoCHi.ML.Syntax.Type
                                         , module Language.DMoCHi.ML.Syntax.Base )where
 -- import Control.Monad
@@ -290,6 +291,16 @@ instance Pretty Atom where
 instance Pretty LExp where
     pPrintPrec plevel prec e = pPrintPrec plevel prec (cast e :: Typed.Exp)
 
+instance Pretty Program where
+    pPrintPrec plevel _ (Program fs t) = 
+        text "(* functions *)" $+$ 
+        vcat (map (\(f,key,xs,e) -> 
+            comment key $+$
+            text "let" <+> pPrintPrec plevel 0 f <+> hsep (map (pPrintPrec prettyBind 1) xs) <+> colon <+> pPrint (getType e) <+> equals $+$
+            nest 4 (pPrintPrec plevel 0 e <> text ";;")) fs) $+$
+        text "(*main*)" $+$
+        pPrintPrec plevel 0 t
+
 instance Show Exp where
     show = render . pPrint 
 instance Show Value where
@@ -299,7 +310,7 @@ instance Show Atom where
 instance Show LExp where
     show = render . pPrint 
 
-normalize :: MonadId m => Typed.Program -> m Program
+normalize :: Typed.Program -> FreshIO Program
 normalize prog = Program <$> mapM (\(f,i,xs,e) -> (,,,) f i xs <$> evalContT (convertE e)) (Typed.functions prog)
                          <*> evalContT (convertE (Typed.mainTerm prog))
 
@@ -458,6 +469,13 @@ isValue l = case l of
     SBinary -> True
     SLambda -> True
     SPair -> True
+    _ -> False
+isAtom :: SLabel l -> Bool
+isAtom l = case l of
+    SLiteral -> True
+    SVar -> True
+    SUnary -> True
+    SBinary -> True
     _ -> False
             
 {-

@@ -106,7 +106,7 @@ mkBranch' = do
 mkFail, mkOmega, mkRand :: MonadId m => m Exp
 mkFail  = Exp SFail () <$> freshKey
 mkOmega = Exp SOmega () <$> freshKey
-mkRand = Exp SFail () <$> freshKey
+mkRand = Exp SRand () <$> freshKey
 
 instance Pretty Type where
     pPrintPrec plevel prec = \case
@@ -139,6 +139,30 @@ instance Pretty Exp where
                    pPrintIdent = \_ _ -> text
                  }
             doc = genericPPrint pp plevel prec l arg
+
+
+instance Pretty Program where
+    pPrintPrec plevel _ (Program fs syns annot t) = 
+        text "(* functions *)" $+$ 
+        vcat (map (\(f,ty,e) -> 
+            text "let" <+> text f <+> colon <+> pPrintPrec plevel 0 ty <+> equals $+$
+            nest 4 (pPrintPrec plevel 0 e <> text ";;")) fs) $+$
+        text "(* synonyms *)" $+$
+        vcat (map (\syn -> 
+            let dargs = case typVars syn of
+                    [] -> empty
+                    [x] -> text ('\'':x)
+                    xs  -> parens $ hsep $ punctuate comma (map (text . ('\'':)) xs)
+            in
+            text "type" <+> dargs <+> text (synName syn) <+> equals 
+                        <+> pPrintPrec plevel 0 (synDef syn) <> text ";;") syns) $+$
+        (if plevel == prettyNormal
+         then empty
+         else text "(* annotations *)" $+$
+              vcat (map (\(key, ty) -> pPrint key <+> colon <+> pPrintPrec plevel 0 ty) annot)) $+$
+        text "(*main*)" $+$
+        pPrintPrec plevel 0 t
+        
 
 
 {-

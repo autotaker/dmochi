@@ -33,6 +33,9 @@ type instance BinOps Exp = AllBinOps
 type instance UniOps Exp = AllUniOps
 type instance Ident Exp = TId
 
+instance HasType Exp where
+    getType (Exp _ _ sty _) = sty
+
 instance Pretty Exp where
     pPrintPrec plevel prec (Exp op arg sty key) =
         if plevel == prettyNormal
@@ -44,7 +47,16 @@ instance Pretty Exp where
         pp = WellFormedPrinter { pPrintExp   = pPrintPrec
                                , pPrintIdent = pPrintPrec }
 
-        
+instance Pretty Program where
+    pPrintPrec plevel _ (Program fs t) = 
+        text "(* functions *)" $+$ 
+        vcat (map (\(f,key,xs,e) -> 
+            comment key $+$
+            text "let" <+> pPrintPrec plevel 0 f <+> hsep (map (pPrintPrec prettyBind 1) xs) <+> colon <+> pPrint (getType e) <+> equals $+$
+            nest 4 (pPrintPrec plevel 0 e <> text ";;")) fs) $+$
+        text "(*main*)" $+$
+        pPrintPrec plevel 0 t
+            
 
 {-
 data Exp = Value Value

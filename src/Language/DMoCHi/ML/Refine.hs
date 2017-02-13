@@ -228,7 +228,7 @@ decomposePairName :: Id -> (Id, Id)
 decomposePairName x = (x1, x2)
     where
     x1 = ML.TId t1 (reserved $ show (ML.name x) ++ "_fst")
-    x2 = ML.TId t2 (reserved $ show (ML.name x) ++ "_fst")
+    x2 = ML.TId t2 (reserved $ show (ML.name x) ++ "_snd")
     ML.TPair t1 t2 = ML.getType x
 
 -- input x : Id

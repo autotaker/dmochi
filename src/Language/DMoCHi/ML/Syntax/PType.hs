@@ -182,7 +182,7 @@ initTypeMap (Program fs t0) = do
                 (SPair, (v1,v2))  -> gatherV fv v1 >> gatherV fv v2 
                 (SLet, (x, (LExp l1 arg1 sty1 key1), e2)) -> do
                     gather (Proxy :: Proxy LExp) fv l1 arg1
-                    unless (isValue l1) $ do
+                    unless (isAtom l1) $ do
                         ty <- genTermType sty1
                         tell (DL.singleton (key1, Right ty, fv))
                     gatherE (x : fv) e2

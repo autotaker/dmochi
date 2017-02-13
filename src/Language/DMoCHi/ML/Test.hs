@@ -8,14 +8,14 @@ import Control.Monad.Except
 import Data.Monoid
 import Data.Maybe(fromMaybe)
 import Text.Parsec(ParseError)
-import Text.PrettyPrint hiding((<>))
+import Text.PrettyPrint.HughesPJClass hiding((<>))
 import Text.Printf
 
 import           Language.DMoCHi.Boolean.Syntax.Typed as B(tCheck)
 import           Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
 import           Language.DMoCHi.Boolean.Test 
 import           Language.DMoCHi.ML.Parser
-import           Language.DMoCHi.ML.PrettyPrint.UnTyped
+-- import           Language.DMoCHi.ML.PrettyPrint.UnTyped
 import           Language.DMoCHi.ML.Alpha
 -- import qualified Language.DMoCHi.ML.CallNormalize as CallNormalize
 -- import qualified Language.DMoCHi.ML.Inline  as Inline
@@ -24,7 +24,7 @@ import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.ElimCast as PAbst
-import qualified Language.DMoCHi.ML.Saturate as Saturate
+-- import qualified Language.DMoCHi.ML.Saturate as Saturate
 import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
@@ -59,6 +59,7 @@ data Flag = Help
           | Interactive
           | FoolTraces Int
           | Fusion
+          | Verbose
           deriving Eq
 data HCCSSolver = IT | GCH  deriving Eq
 
@@ -70,6 +71,7 @@ data Config = Config { targetProgram :: FilePath
                      , foolTraces :: Bool
                      , foolThreshold :: Int
                      , fusion :: Bool
+                     , verbose :: Bool
                      , interactive :: Bool }
 
 
@@ -86,6 +88,7 @@ defaultConfig path = Config { targetProgram = path
                             , foolTraces = False
                             , foolThreshold = 1
                             , fusion = False
+                            , verbose = False
                             , interactive = False }
 
 run :: IO ()
@@ -105,6 +108,7 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
                    "Enable context sensitive predicate discovery, this also enables --acc-traces flag"
           , Option [] ["fool-traces"] (OptArg (FoolTraces . fromMaybe 1 . fmap read) "N")  "Distinguish fool error traces in refinement phase, and set threshold (default = 1)"
           , Option [] ["fusion"] (NoArg Fusion) "enable model checking fusion"
+          , Option ['v'] ["verbose"] (NoArg Verbose) "set pretty level to verbose"
           , Option [] ["interactive"] (NoArg Interactive) "interactive counterexample generation" ]
     where
     parseSolver "it" = HCCS IT
@@ -137,6 +141,7 @@ parseArgs = doit
                      Fusion -> acc { fusion = True }
                      Interactive -> acc { interactive = True } 
                      Help -> error "unexpected"
+                     Verbose -> acc { verbose = True }
                      ) 
                   (defaultConfig file) opts
         (_, [], []) -> die ["No target specified\n"]
@@ -145,7 +150,8 @@ parseArgs = doit
 
 data CEGARResult a = Safe | Unsafe | Refine a
 
-doit :: ExceptT MainError (FreshT IO) ()
+
+doit :: ExceptT MainError FreshIO ()
 doit = do
     -- check args
     conf <- measure "ParseArg" $ liftIO parseArgs
@@ -153,31 +159,34 @@ doit = do
     
     -- parsing
     let path = targetProgram conf
+    let prettyPrint :: Pretty a => a -> ExceptT MainError FreshIO ()
+        prettyPrint | verbose conf = liftIO . putStrLn . render . pPrintPrec (PrettyLevel 1) 0
+                    | otherwise    = liftIO . putStrLn . render . pPrint
     parsedProgram <- measure "Parse" $ do
-        parseRes <- liftIO $ parseProgramFromFile path
-        program  <- case parseRes of
-            Left err -> throwError $ ParseFailed err
-            Right p  -> return p
+        program <- withExceptT ParseFailed $ ExceptT $ parseProgramFromFile path
         liftIO $ putStrLn "Parsed Program"
-        liftIO $ printProgram program
+        prettyPrint program
         return program
 
     normalizedProgram <- measure "Preprocess" $ do
         -- alpha conversion
-        alphaProgram <- withExceptT AlphaFailed $ alpha parsedProgram
+        alphaProgram <- withExceptT AlphaFailed $ ExceptT $ alpha parsedProgram
         liftIO $ putStrLn "Alpha Converted Program"
-        liftIO $ printProgram alphaProgram
+        prettyPrint alphaProgram
 
+{-
         -- Call normalizing
         alphaNormProgram <- CallNormalize.normalize alphaProgram
         liftIO $ putStrLn "Call Normalized Program"
         liftIO $ printProgram alphaNormProgram
+        -}
 
         -- type checking
         liftIO $ putStrLn "Typed Program"
-        _typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaNormProgram
-        liftIO $ Typed.printProgram _typedProgram
+        typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
+        prettyPrint typedProgram
 
+{-
         -- inlining
         liftIO $ putStrLn "Inlined Program"
         typedProgram' <- Inline.inline 1000 _typedProgram
@@ -188,13 +197,14 @@ doit = do
         typedProgram <- return $ Unreachable.elimUnreachable typedProgram'
         liftIO $ Typed.printProgram typedProgram
 
+-} 
         -- normalizing
         liftIO $ putStrLn "Normalizing"
-        normalizedProgram <- PNormal.normalize typedProgram
-        liftIO $ PNormal.printProgram normalizedProgram
+        normalizedProgram <- lift $ PNormal.normalize typedProgram
+        prettyPrint normalizedProgram
         return normalizedProgram
 
-    (typeMap0, fvMap) <- PAbst.initTypeMap normalizedProgram
+    (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
     let cegar _ k _  | k >= cegarLimit conf = return ()
         cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs) = do
             res <- measure (printf "CEGAR-%d" k) $ do
@@ -204,9 +214,10 @@ doit = do
                 let curTypeMap = PAbst.mergeTypeMap typeMap typeMapFool
 
                 liftIO $ putStrLn "Elim cast"
-                castFreeProgram <- PAbst.elimCast curTypeMap normalizedProgram
-                liftIO $ PNormal.printProgram castFreeProgram
+                castFreeProgram <- lift $ PAbst.elimCast curTypeMap normalizedProgram
+                prettyPrint castFreeProgram
 
+{-
                 reachable <- if (fusion conf) 
                     then do
                         liftIO $ putStrLn "Saturate"
@@ -214,8 +225,9 @@ doit = do
                         liftIO $ print res
                         return (Just reachable)
                     else return Nothing
+                        -}
 
-                boolProgram <- measure "Predicate Abstraction" $ PAbst.abstProg curTypeMap castFreeProgram
+                boolProgram <- measure "Predicate Abstraction" $ lift $ PAbst.abstProg curTypeMap castFreeProgram
                 let file_boolean = printf "%s_%d.bool" path k
                 liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram
                 liftIO $ putStrLn "Converted program"
@@ -230,11 +242,13 @@ doit = do
                     Right _ -> return ()
 
                 r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram
+                {-
                 case (r, reachable) of
                     (Just _, Just True) -> return ()
                     (Nothing, Just False) -> return ()
                     (_, Nothing) -> return ()
                     _ -> throwError Debugging
+                -}
                 case r of
                     Just trace -> measure "Refinement" $ do
                         let traceFile = printf "%s_%d.trace.dot" path k

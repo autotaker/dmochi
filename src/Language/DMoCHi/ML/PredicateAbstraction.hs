@@ -325,7 +325,7 @@ printTypeMap tbl = forM_ (M.assocs tbl) $ \(i,pty') ->
         Left pty -> putStrLn $ render $ pPrint i <+> colon <+> pprintPType 0 pty
         Right termType -> putStrLn $ render $ pPrint i <+> colon <+> pprintTermType termType
 
-abstProg :: (MonadId m, MonadIO m) => TypeMap -> ML.Program -> m B.Program
+abstProg :: TypeMap -> ML.Program -> FreshIO B.Program
 abstProg tbl (ML.Program fs t0) = do
     liftIO $ putStrLn "current abstraction type environment {"
     liftIO $ printTypeMap tbl 

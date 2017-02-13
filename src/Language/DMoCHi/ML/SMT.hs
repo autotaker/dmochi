@@ -44,8 +44,10 @@ toIValueA (Atom l arg sty) = case (l,arg) of
     (SLiteral, CInt i)  -> ASTValue <$> mkInteger i
     (SLiteral, CBool b) -> ASTValue <$> mkBool b
     (SBinary, BinArg op v1 v2) -> do
-        iv1@(ASTValue v1') <- toIValueA v1
-        iv2@(ASTValue v2') <- toIValueA v2
+        iv1 <- toIValueA v1
+        iv2 <- toIValueA v2
+        let (ASTValue v1') = iv1
+            (ASTValue v2') = iv2
         case op of
             SAdd -> ASTValue <$> mkAdd [v1',v2']
             SSub -> ASTValue <$> mkSub [v1',v2']

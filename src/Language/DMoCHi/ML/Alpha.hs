@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs, FlexibleContexts, TypeFamilies #-}
 module Language.DMoCHi.ML.Alpha(alpha,AlphaError, Exp(..), Program(..)) where
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
-import Language.DMoCHi.ML.Syntax.UnTyped(Type(..), SynonymDef)
+import Language.DMoCHi.ML.Syntax.UnTyped(Type(..), SynonymDef(..))
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.Common.Id
 import Control.Monad.Except
@@ -41,6 +41,27 @@ instance Pretty Exp where
                  }
             doc = genericPPrint pp plevel prec l arg
 
+instance Pretty Program where
+    pPrintPrec plevel _ (Program fs syns annot t) = 
+        text "(* functions *)" $+$ 
+        vcat (map (\(f,ty,e) -> 
+            text "let" <+> pPrintPrec plevel 0 f <+> colon <+> pPrintPrec plevel 0 ty <+> equals $+$
+            nest 4 (pPrintPrec plevel 0 e <> text ";;")) fs) $+$
+        text "(* synonyms *)" $+$
+        vcat (map (\syn -> 
+            let dargs = case typVars syn of
+                    [] -> empty
+                    [x] -> text ('\'':x)
+                    xs  -> parens $ hsep $ punctuate comma (map (text . ('\'':)) xs)
+            in
+            text "type" <+> dargs <+> text (synName syn) <+> equals 
+                        <+> pPrintPrec plevel 0 (synDef syn) <> text ";;") syns) $+$
+        (if plevel == prettyNormal
+         then empty
+         else text "(* annotations *)" $+$
+              vcat (map (\(key, ty) -> pPrint key <+> colon <+> pPrintPrec plevel 0 ty) annot)) $+$
+        text "(*main*)" $+$
+        pPrintPrec plevel 0 t
 type M a = ReaderT (M.Map String (Id String)) (ExceptT AlphaError FreshIO) a
 
 alpha :: U.Program -> FreshIO (Either AlphaError Program)

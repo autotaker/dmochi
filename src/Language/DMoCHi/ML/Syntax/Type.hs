@@ -3,8 +3,9 @@ module Language.DMoCHi.ML.Syntax.Type where
 import qualified Language.DMoCHi.Common.Id as Id
 import Text.PrettyPrint.HughesPJClass 
 import Language.DMoCHi.Common.Util
+import Language.DMoCHi.ML.Syntax.Base(prettyBind)
 
-data TId = TId { _type :: Type, name :: Id.Id String } deriving(Show)
+data TId = TId { _type :: Type, name :: Id.Id String }
 
 instance Eq TId where
     (==) = (==) `on` name
@@ -36,13 +37,14 @@ instance Pretty Type where
 
 instance Pretty TId where
     pPrintPrec plevel prec (TId sty f) 
-        | plevel == prettyNormal = pPrintPrec plevel prec f
-        | otherwise = maybeParens (prec > 0) $
+        | plevel == prettyBind = maybeParens (prec > 0) $
                         pPrintPrec plevel 0 f 
                         <+> text ":" 
                         <+> pPrintPrec plevel 0 sty
-     
+        | otherwise = pPrintPrec plevel prec f
 
+instance Show TId where
+    show (TId sty f) = show f ++ " : " ++ prettyShow sty
 
 class HasType m where
     getType :: m -> Type

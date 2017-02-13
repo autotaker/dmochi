@@ -17,6 +17,7 @@ module Language.DMoCHi.ML.Syntax.Base(Label(..),
                                       binaryPrec,
                                       genericPPrint,
                                       WellFormedPrinter(..),
+                                      prettyBind,
                                       comment,
                                       Impossible(..))
                                        where
@@ -190,6 +191,22 @@ type instance (==) a b = EqLabel a b
 class Impossible d  where
     impossible :: d -> b
 
+instance Show (SBinOp op) where
+    show SAdd = "SAdd"
+    show SSub = "SSub"
+    show SEq = "SEq"
+    show SLt = "SLt"
+    show SGt = "SGt"
+    show SLte = "SLte"
+    show SGte = "SLte"
+    show SAnd = "SAnd"
+    show SOr = "SOr"
+instance Show (SUniOp op) where
+    show SFst = "SFst"
+    show SSnd = "SSnd"
+    show SNot = "SNot"
+    show SNeg = "SNeg"
+
 unaryPrec :: SUniOp op -> (Rational, String, Bool)
 unaryPrec SNeg = (8, "-", True)
 unaryPrec SNot = (8, "not", True)
@@ -219,6 +236,9 @@ data WellFormedPrinter e =
     WellFormedPrinter { pPrintExp    :: PrettyLevel -> Rational -> e -> Doc
                       , pPrintIdent  :: PrettyLevel -> Rational -> Ident e -> Doc }
 
+prettyBind :: PrettyLevel
+prettyBind = PrettyLevel 86029468
+
 genericPPrint :: (WellFormed l e arg) => WellFormedPrinter e ->
                  PrettyLevel -> Rational -> 
                  SLabel l -> arg -> Doc
@@ -243,12 +263,12 @@ genericPPrint pp pLevel prec op arg =
                 AssocNone  -> g e1 <+> text opName <+> g e2
         (SPair, (e1, e2)) -> parens $ pPrintExp pp pLevel 0 e1 <+> comma <+> pPrintExp pp pLevel 0 e2
         (SLambda, (xs, e)) -> maybeParens (prec > 0) $
-            text "fun" <+> hsep (map (pPrintIdent pp pLevel 0) xs) <+> text "->" $+$
+            text "fun" <+> hsep (map (pPrintIdent pp prettyBind 0) xs) <+> text "->" $+$
             nest 4 (pPrintExp pp pLevel 0 e)
         (SApp, (f, [])) -> maybeParens (prec > 8) $ pPrintIdent pp pLevel prec f <+> text "()"
         (SApp, (f, es)) -> maybeParens (prec > 8) $ pPrintIdent pp pLevel 8 f <+> hsep (map (pPrintExp pp pLevel 9) es)
         (SLet, (x, e1, e2)) -> maybeParens (prec > 0) $ 
-            text "let" <+> pPrintIdent pp pLevel 0 x <+> text "=" 
+            text "let" <+> pPrintIdent pp prettyBind 0 x <+> text "=" 
                        <+> pPrintExp pp pLevel 0 e1 <+> text "in" $+$
             pPrintExp pp pLevel 0 e2
         (SAssume, (cond, e)) -> maybeParens (prec > 0) $
@@ -259,7 +279,7 @@ genericPPrint pp pLevel prec op arg =
             nest 2 (text "then" <+> pPrintExp pp pLevel 0 e1) $+$
             nest 2 (text "else" <+> pPrintExp pp pLevel 0 e2)
         (SBranch, (e1, e2)) -> maybeParens (prec > 0) $
-            pPrintExp pp pLevel 1 e1 <+> text "<>" <+> pPrintExp pp pLevel 1 e2
+            pPrintExp pp pLevel 1 e1 <+> text "<>" $+$ pPrintExp pp pLevel 1 e2
         (SFail, _) -> text "Fail"
         (SOmega, _) -> text "Omega"
         (SRand, _) -> text "*"

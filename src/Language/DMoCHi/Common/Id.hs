@@ -1,3 +1,4 @@
+{-# Language FlexibleContexts, FlexibleInstances, UndecidableInstances #-}
 module Language.DMoCHi.Common.Id(UniqueKey, FreshT, runFreshT, Fresh, FreshIO, runFresh, Id
                                 , MonadId(..), freshId, reserved, reservedKey, maybeReserved, fromReserved
                                 , getName
@@ -16,10 +17,12 @@ import Text.Parsec(ParsecT)
 import Text.PrettyPrint.HughesPJClass
 
 newtype UniqueKey = UniqueKey { unUniqueKey :: Int }
-    deriving(Show,Eq,Ord)
+    deriving(Eq,Ord)
 
 instance Pretty UniqueKey where
     pPrint (UniqueKey i) = int i
+instance Show UniqueKey where
+    show (UniqueKey i) = show i
 
 class Monad m => MonadId m where
     freshInt :: m Int
@@ -43,12 +46,12 @@ instance Ord a => Ord (Id a) where
     compare (Id (UniqueKey 0) b) (Id (UniqueKey 0) d) = compare b d
     compare (Id a _) (Id c _) = compare a c
 
-instance Pretty a => Pretty (Id a) where
-    pPrintPrec level prec (Id (UniqueKey 0) x) = pPrintPrec level prec x
+instance Pretty (Id String) where
+    pPrintPrec _ _ (Id (UniqueKey 0) x) = text x
     pPrintPrec level prec (Id i x) = 
-        pPrintPrec level prec x <> text "_" <> (pPrintPrec level prec i)
+        text x <> text "_" <> (pPrintPrec level prec i)
 
-instance (Show a, Pretty a) => Show (Id a) where
+instance (Pretty (Id a)) => Show (Id a) where
     show = render . pPrint
 
 freshId :: MonadId m => String -> m String
