@@ -126,7 +126,7 @@ buildEnv :: (MonadId m, Applicative m) => [B.Def] -> m [(String,SSort)]
 buildEnv = mapM $ \(f,_) -> (,) (B.name f) <$> convertS (B.getSort f)
 
 (!) :: M.Map String a -> String -> a
-env ! x = case M.lookup x env of
+(!) env x = case M.lookup x env of
     Just v -> v
     Nothing -> error $ "no key :"++x
     

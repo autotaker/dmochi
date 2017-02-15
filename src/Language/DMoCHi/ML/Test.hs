@@ -18,7 +18,7 @@ import           Language.DMoCHi.ML.Parser
 -- import           Language.DMoCHi.ML.PrettyPrint.UnTyped
 import           Language.DMoCHi.ML.Alpha
 -- import qualified Language.DMoCHi.ML.CallNormalize as CallNormalize
--- import qualified Language.DMoCHi.ML.Inline  as Inline
+import qualified Language.DMoCHi.ML.Inline  as Inline
 -- import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
@@ -174,13 +174,6 @@ doit = do
         liftIO $ putStrLn "Alpha Converted Program"
         prettyPrint alphaProgram
 
-{-
-        -- Call normalizing
-        alphaNormProgram <- CallNormalize.normalize alphaProgram
-        liftIO $ putStrLn "Call Normalized Program"
-        liftIO $ printProgram alphaNormProgram
-        -}
-
         -- type checking
         liftIO $ putStrLn "Typed Program"
         typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
@@ -200,9 +193,14 @@ doit = do
 -} 
         -- normalizing
         liftIO $ putStrLn "Normalizing"
-        normalizedProgram <- lift $ PNormal.normalize typedProgram
-        prettyPrint normalizedProgram
-        return normalizedProgram
+        _normalizedProgram <- lift $ PNormal.normalize typedProgram
+        prettyPrint _normalizedProgram
+        
+        -- inlining
+        liftIO $ putStrLn "Inlined Program"
+        _normalizedProgram <- lift $ Inline.inline 1000 _normalizedProgram
+        prettyPrint _normalizedProgram
+        return _normalizedProgram
 
     (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
     let cegar _ k _  | k >= cegarLimit conf = return ()

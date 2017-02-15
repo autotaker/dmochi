@@ -7,14 +7,16 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , mkFailL, mkOmegaL
                                         , Castable(..)
                                         , normalize, atomOfValue, valueOfLExp, valueOfExp
+                                        , freeVariables
                                         , isValue, isAtom
                                         , module Language.DMoCHi.ML.Syntax.Type
                                         , module Language.DMoCHi.ML.Syntax.Base )where
 -- import Control.Monad
 import Language.DMoCHi.Common.Id
 -- import qualified Data.Map as M
--- import qualified Data.Set as S
+import qualified Data.Set as S
 import GHC.Exts(Constraint)
+import Data.Proxy
 -- import Data.Char
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.Base
@@ -70,6 +72,7 @@ type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Fail    e arg = arg ~ ()
     Normalized 'Omega   e arg = arg ~ ()
     Normalized 'Rand    e arg = arg ~ ()
+    Normalized l        e arg = 'True ~ 'False
 
 type instance Labels Exp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
                             , 'Let, 'Assume, 'Branch, 'Fail, 'Omega ]
@@ -470,6 +473,7 @@ isValue l = case l of
     SLambda -> True
     SPair -> True
     _ -> False
+
 isAtom :: SLabel l -> Bool
 isAtom l = case l of
     SLiteral -> True
@@ -477,3 +481,34 @@ isAtom l = case l of
     SUnary -> True
     SBinary -> True
     _ -> False
+
+freeVariables :: S.Set TId -> Exp -> S.Set TId
+freeVariables _scope _e = subE _scope _e S.empty
+    where
+    subE :: S.Set TId -> Exp -> S.Set TId -> S.Set TId
+    subE scope (Exp l arg _ _) acc   = sub (Proxy :: Proxy Exp)   scope l arg acc
+    subA :: S.Set TId -> Atom -> S.Set TId -> S.Set TId
+    subA scope (Atom l arg _) acc  = sub (Proxy :: Proxy Atom)  scope l arg acc
+    subV :: S.Set TId -> Value -> S.Set TId -> S.Set TId
+    subV scope (Value l arg _ _) acc = sub (Proxy :: Proxy Value) scope l arg acc
+    subL :: S.Set TId -> LExp -> S.Set TId -> S.Set TId
+    subL scope (LExp l arg _ _) acc  = sub (Proxy :: Proxy LExp)  scope l arg acc
+    sub :: (Normalized l e arg, Ident e ~ TId) => 
+           Proxy e -> S.Set TId -> SLabel l -> arg -> S.Set TId -> S.Set TId
+    sub _ _ SLiteral _ acc = acc
+    sub _ scope SVar     x acc | S.member x scope = acc 
+                               | otherwise = S.insert x acc
+    sub _ scope SBinary  (BinArg _ v1 v2) acc = subA scope v2 (subA scope v1 acc)
+    sub _ scope SUnary   (UniArg _ v1) acc = subA scope v1 acc
+    sub _ scope SPair    (v1, v2) acc = subV scope v1 (subV scope v2 acc)
+    sub _ scope SAssume  (cond, e) acc = subE scope e (subA scope cond acc)
+    sub _ scope SLet     (x, e1, e2) acc = subE (S.insert x scope) e2 (subL scope e1 acc)
+    sub _ scope SBranch  (e1, e2) acc = subE scope e1 (subE scope e2 acc)
+    sub _ _     SFail    _ acc = acc
+    sub _ _     SOmega   _ acc = acc
+    sub _ _     SRand    _ acc = acc
+    sub _ scope SLambda  (xs, e) acc = subE (foldr S.insert scope xs) e acc
+    sub p scope SApp     (f, vs) acc = foldr (subV scope) (sub p scope SVar f acc) vs
+
+
+    
