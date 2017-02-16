@@ -22,7 +22,7 @@ import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.ElimCast as PAbst
--- import qualified Language.DMoCHi.ML.Saturate as Saturate
+import qualified Language.DMoCHi.ML.Saturate as Saturate
 import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
@@ -206,7 +206,6 @@ doit = do
                 castFreeProgram <- lift $ PAbst.elimCast curTypeMap normalizedProgram
                 prettyPrint castFreeProgram
 
-{-
                 reachable <- if (fusion conf) 
                     then do
                         liftIO $ putStrLn "Saturate"
@@ -214,7 +213,6 @@ doit = do
                         liftIO $ print res
                         return (Just reachable)
                     else return Nothing
-                        -}
 
                 boolProgram <- measure "Predicate Abstraction" $ lift $ PAbst.abstProg curTypeMap castFreeProgram
                 let file_boolean = printf "%s_%d.bool" path k

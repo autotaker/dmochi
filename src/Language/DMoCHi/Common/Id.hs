@@ -15,6 +15,7 @@ import Control.Monad.Cont
 import Data.Functor.Identity
 import Text.Parsec(ParsecT)
 import Text.PrettyPrint.HughesPJClass
+import Data.Hashable
 
 newtype UniqueKey = UniqueKey { unUniqueKey :: Int }
     deriving(Eq,Ord)
@@ -23,6 +24,8 @@ instance Pretty UniqueKey where
     pPrint (UniqueKey i) = int i
 instance Show UniqueKey where
     show (UniqueKey i) = show i
+instance Hashable UniqueKey where
+    hashWithSalt salt (UniqueKey i) = hashWithSalt salt i
 
 class Monad m => MonadId m where
     freshInt :: m Int
@@ -53,6 +56,13 @@ instance Pretty (Id String) where
 
 instance (Pretty (Id a)) => Show (Id a) where
     show = render . pPrint
+
+instance (Hashable a) => Hashable (Id a) where
+    hashWithSalt salt (Id (UniqueKey 0) a) =
+        salt `hashWithSalt` (1 :: Int) `hashWithSalt` a
+    hashWithSalt salt (Id key _) =
+        salt `hashWithSalt` key
+         
 
 freshId :: MonadId m => String -> m String
 freshId s = do

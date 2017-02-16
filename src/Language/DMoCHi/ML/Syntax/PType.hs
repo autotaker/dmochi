@@ -85,6 +85,9 @@ pprintPType assoc (PFun _ x_tup r_tup) =
     let d = pprintPTypeArg x_tup <+> text "->" <+> pprintTermType r_tup in
     if assoc == 0 then d else parens d
 
+instance Pretty PType where
+    pPrint = pprintPType 0
+
 substTermType :: M.Map Id Id -> TermType -> TermType
 substTermType subst (x,pty,ps) = (x, substPType subst' pty, map (substFormula subst') ps)
     where
