@@ -131,7 +131,6 @@ infer prog = do
         forM_ (U.typeAnn prog) $ \(key, ty) -> unify ty (annotEnv M.! key)
         fmap M.fromList $ mapM (\(key,ty) -> do
             ty' <- subst ty
-            liftIO $ print (key, ty, ty')
             case runExcept (convertType synEnv ty') of
                 Left err -> throwError $ SynError err
                 Right v -> return (key,v)) (DL.toList annot)) synEnv M.empty

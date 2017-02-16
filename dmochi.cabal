@@ -65,7 +65,7 @@ library
                        Language.DMoCHi.ML.ElimCast,
 --                     Language.DMoCHi.ML.Flow,
 --                     Language.DMoCHi.ML.Saturate,
---                     Language.DMoCHi.ML.ElimUnreachable,
+                       Language.DMoCHi.ML.ElimUnreachable,
                        Language.DMoCHi.ML.HornClause,
                        Language.DMoCHi.ML.HornClauseParser,
                        Language.DMoCHi.ML.Test,

@@ -15,11 +15,9 @@ import           Language.DMoCHi.Boolean.Syntax.Typed as B(tCheck)
 import           Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
 import           Language.DMoCHi.Boolean.Test 
 import           Language.DMoCHi.ML.Parser
--- import           Language.DMoCHi.ML.PrettyPrint.UnTyped
 import           Language.DMoCHi.ML.Alpha
--- import qualified Language.DMoCHi.ML.CallNormalize as CallNormalize
 import qualified Language.DMoCHi.ML.Inline  as Inline
--- import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
+import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
@@ -179,18 +177,6 @@ doit = do
         typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
         prettyPrint typedProgram
 
-{-
-        -- inlining
-        liftIO $ putStrLn "Inlined Program"
-        typedProgram' <- Inline.inline 1000 _typedProgram
-        liftIO $ Typed.printProgram typedProgram'
-
-        -- unreachable code elimination
-        liftIO $ putStrLn "Unreachable Code Elimination"
-        typedProgram <- return $ Unreachable.elimUnreachable typedProgram'
-        liftIO $ Typed.printProgram typedProgram
-
--} 
         -- normalizing
         liftIO $ putStrLn "Normalizing"
         _normalizedProgram <- lift $ PNormal.normalize typedProgram
@@ -199,6 +185,11 @@ doit = do
         -- inlining
         liftIO $ putStrLn "Inlined Program"
         _normalizedProgram <- lift $ Inline.inline 1000 _normalizedProgram
+        prettyPrint _normalizedProgram
+        
+        -- unreachable code elimination
+        liftIO $ putStrLn "Unreachable Code Elimination"
+        _normalizedProgram <- return $ Unreachable.elimUnreachable _normalizedProgram
         prettyPrint _normalizedProgram
         return _normalizedProgram
 

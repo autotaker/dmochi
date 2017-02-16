@@ -165,14 +165,14 @@ typeOfAValue env = go where
             SNot -> PBool
             SNeg -> PInt
 
-initTypeMap :: MonadId m => Program -> m (TypeMap,ScopeMap)
+initTypeMap :: forall m. MonadId m => Program -> m (TypeMap,ScopeMap)
 initTypeMap (Program fs t0) = do
     es <- execWriterT $ do
-        let gatherE :: MonadId m => [TId] -> Exp -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
+        let gatherE :: [TId] -> Exp -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
             gatherE fv (Exp l arg _ _) = gather (Proxy :: Proxy Exp) fv l arg
-            gatherV :: MonadId m => [TId] -> Value -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
+            gatherV :: [TId] -> Value -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
             gatherV fv (Value l arg _ _) = gather (Proxy :: Proxy Value) fv l arg
-            gather :: (MonadId m, Ident e ~ TId, Normalized l e arg)  => Proxy e -> [TId] -> SLabel l -> arg -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
+            gather :: (Ident e ~ TId, Normalized l e arg)  => Proxy e -> [TId] -> SLabel l -> arg -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
             gather _ fv l arg = case (l,arg) of
                 (SLiteral, _) -> return ()
                 (SVar, _)     -> return ()
@@ -182,9 +182,20 @@ initTypeMap (Program fs t0) = do
                 (SPair, (v1,v2))  -> gatherV fv v1 >> gatherV fv v2 
                 (SLet, (x, (LExp l1 arg1 sty1 key1), e2)) -> do
                     gather (Proxy :: Proxy LExp) fv l1 arg1
-                    unless (isAtom l1) $ do
-                        ty <- genTermType sty1
-                        tell (DL.singleton (key1, Right ty, fv))
+                    let genType :: WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
+                        genType = genTermType sty1 >>= \ty -> tell (DL.singleton (key1, Right ty, fv))
+                    (case l1 of
+                        SLiteral -> pure ()
+                        SVar     -> pure ()
+                        SBinary  -> pure ()
+                        SUnary   -> pure ()
+                        SApp     -> pure ()
+                        SLambda  -> genType
+                        SPair    -> genType
+                        SBranch  -> genType
+                        SRand    -> pure ()
+                        SOmega   -> genType 
+                        SFail    -> genType) :: WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
                     gatherE (x : fv) e2
                 (SApp, (_, vs)) -> mapM_ (gatherV fv) vs
                 (SAssume, (_,e)) -> gatherE fv e
@@ -192,7 +203,6 @@ initTypeMap (Program fs t0) = do
                 (SFail, _) -> return ()
                 (SOmega, _) -> return ()
                 (SRand, _) -> return ()
-                (SIf, _) -> error "impossible"
             gatherF fv (TId sty _, key, xs, e) = do
                 gatherE (xs ++ fv) e
                 ty <- genPType sty 
