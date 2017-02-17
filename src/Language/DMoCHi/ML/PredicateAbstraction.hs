@@ -170,10 +170,10 @@ abstAValue env cs pv = go
             ML.SOr   -> abstFormula cs pv v
         (ML.SUnary, ML.UniArg op v) -> case op of
             ML.SFst -> 
-                let PPair _ _ ty2 = typeOfAValue env v in
+                let PPair _ _ ty2 = typeOfAtom env v in
                 B.f_proj 0 2 <$> go v (mkPPair ty ty2)
             ML.SSnd  -> 
-                let PPair _ ty1 _ = typeOfAValue env v in
+                let PPair _ ty1 _ = typeOfAtom env v in
                 B.f_proj 1 2 <$> go v (mkPPair ty1 ty)
             ML.SNot -> B.Not <$> go v PBool
             ML.SNeg -> return $ B.T []
@@ -213,7 +213,7 @@ abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) =
         (ML.SLet, (x,(ML.LExp l1 arg1 sty1 key1),e2)) -> 
             let atomCase :: ML.Atom -> m B.Term
                 atomCase av = do
-                    let ty_x = typeOfAValue env av
+                    let ty_x = typeOfAtom env av
                     ex <- abstValue tbl env cs pv (ML.castWith key1 av) ty_x
                     e' <- abstTerm tbl (M.insert x ty_x env) (addEq x av cs) pv e2 (r,ty,qs)
                     return $ B.f_let (toSymbol x ty_x) ex e'

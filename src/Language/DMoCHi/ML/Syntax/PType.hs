@@ -148,8 +148,8 @@ substVFormula subst = atomic . go where
             SNot -> cast $ mkUni SNot $! atomic (go a)
             SNeg -> cast $ mkUni SNeg $! atomic (go a)
 
-typeOfAValue :: Env -> Atom -> PType
-typeOfAValue env = go where
+typeOfAtom :: Env -> Atom -> PType
+typeOfAtom env = go where
     go (Atom l arg _) = case (l,arg) of
         (SVar,x) -> env M.! x
         (SLiteral,CInt _) -> PInt

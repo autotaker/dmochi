@@ -40,7 +40,7 @@ elimCastValue tbl env v@(Value l arg sty key) sigma = case (l,arg) of
         Just av -> case sigma of
                 PInt -> return v
                 PBool -> return v
-                _ | sigma == typeOfAValue env av -> return v
+                _ | sigma == typeOfAtom env av -> return v
                 PFun ty (xs,_,_) _ -> do
                     let TFun _ ty_r = ty
                     (f, cnstr_f) <- case l of
@@ -69,7 +69,7 @@ elimCastLet :: TypeMap -> Env -> TId -> LExp -> Exp -> UniqueKey -> TermType -> 
 elimCastLet tbl env x e1@(LExp l arg sty key1) e2 key tau =
     let atomCase :: Atom -> FreshIO Exp
         atomCase av = do
-            let x_ty = typeOfAValue env av
+            let x_ty = typeOfAtom env av
                 env' = M.insert x x_ty env
             e2' <- elimCastTerm tbl env' e2 tau
             return $ mkLet x e1 e2' key
