@@ -207,8 +207,7 @@ doit = do
                 prettyPrint castFreeProgram
 
                 reachable <- if (fusion conf) 
-                    then do
-                        liftIO $ putStrLn "Saturate"
+                    then measure "Fusion" $ do
                         (reachable,res) <- liftIO $ Saturate.saturate curTypeMap castFreeProgram
                         liftIO $ print res
                         return (Just reachable)

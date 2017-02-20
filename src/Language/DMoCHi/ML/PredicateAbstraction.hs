@@ -4,6 +4,7 @@ import Control.Monad
 import Control.Monad.Writer
 import qualified Data.Map as M
 import Text.PrettyPrint.HughesPJClass
+import Text.Printf
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
 -- import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
@@ -330,6 +331,7 @@ abstProg tbl (ML.Program fs t0) = do
     liftIO $ putStrLn "current abstraction type environment {"
     liftIO $ printTypeMap tbl 
     liftIO $ putStrLn "}"
+    liftIO SMT.resetSMTCount
 
     let env = M.fromList [ (f,ty)  | (f,key,_,_) <- fs, let Left ty = tbl M.! key ]
     ds <- forM fs $ \(f,key,xs,e) -> do
@@ -339,5 +341,6 @@ abstProg tbl (ML.Program fs t0) = do
     e0 <- do
         r <- ML.TId ML.TInt <$> identify "main"
         abstTerm tbl env [] [] t0 (r,PInt,[])
+    liftIO $ SMT.getSMTCount >>= printf "[Predicate Abstraction] Number of SMT Call = %d\n" 
     return $ B.Program ds e0
 

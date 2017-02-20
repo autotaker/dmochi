@@ -7,6 +7,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
 import           Data.IORef
+import           Text.Printf
 import           Text.PrettyPrint.HughesPJClass
 
 import           Language.DMoCHi.Common.Id
@@ -84,7 +85,8 @@ data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFor
                        , ctxFlowMap :: FlowMap
                        , ctxRtnTypeTbl :: HashTable UniqueKey (PType, [Formula]) 
                        , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [Formula]) 
-                       , ctxUpdated :: IORef Bool }
+                       , ctxUpdated :: IORef Bool
+                       , ctxSMTCount :: IORef Int }
 type R a = ReaderT Context IO a
 
 calcContextV :: M.Map TId PType -> Value -> PType -> R ()
@@ -284,6 +286,7 @@ saturate typeMap prog = do
                    <*> H.new
                    <*> H.new
                    <*> newIORef False
+                   <*> newIORef 0
     let env0 = ( M.fromList [ (f, pty) | (f, key, _, _) <- functions prog, let Left pty = typeMap M.! key ]
                , M.fromList [ (f, IFun []) | (f, _, _, _) <- functions prog] )
         go :: Env -> R [ITermType]
@@ -314,6 +317,7 @@ saturate typeMap prog = do
         go env0
         
     let !b = IFail `elem` ts
+    readIORef (ctxSMTCount ctx) >>= printf "[Fusion] Number of SMT Call = %d\n"
     return (b, ts)
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
@@ -354,7 +358,7 @@ calcTypeFunDef env@(penv,ienv) fml (ident,xs,e) pty@(PFun _ argTy retTy) = do
             fml' = mkBin SAnd fml cond
             env' = ( foldr (uncurry M.insert) penv (zip xs ty_xs)
                    , foldr (uncurry M.insert) ienv (zip xs thetas))
-        b <- liftIO $ checkSat fml cond
+        b <- checkSat fml cond
         if b 
           then map ((,,) thetas phi) <$> calcTypeTerm env' fml' e retTy'
           else return []
@@ -414,10 +418,10 @@ calcTypeAtom env (Atom l arg _)   = case (l, arg) of
 -- Function: calcCondition fml ps 
 -- assumption: fml is a satisfiable formula
 -- assertion: phi |- fromBFormula ps ret
-calcCondition :: Formula -> [Formula] -> IO BFormula
+calcCondition :: Formula -> [Formula] -> R BFormula
 calcCondition _fml _ps = do
     phi <- go 1 _fml _ps
-    print $ text "calcCondtion" $+$ 
+    liftIO $ print $ text "calcCondtion" $+$ 
             braces (
                 text "assumption:" <+> pPrint _fml $+$
                 text "predicates:" <+> (brackets $ hsep $ punctuate comma (map pPrint _ps)) $+$
@@ -447,8 +451,10 @@ fromBFormula _  (BConst b)   = mkLiteral (CBool b)
 fromBFormula ps (BOr p1 p2)  = mkBin SOr  (fromBFormula ps p1) (fromBFormula ps p2)
 fromBFormula ps (BAnd p1 p2) = mkBin SAnd (fromBFormula ps p1) (fromBFormula ps p2)
 
-checkSat :: Formula -> Formula -> IO Bool
-checkSat p1 p2 = SMT.sat [cast p1, cast p2]
+checkSat :: Formula -> Formula -> R Bool
+checkSat p1 p2 = do
+    ask >>= \ctx -> liftIO $ modifyIORef' (ctxSMTCount ctx) succ 
+    liftIO $ SMT.sat [cast p1, cast p2]
 
 calcTypeTerm :: Env -> Formula -> Exp -> TermType -> R [ITermType]
 calcTypeTerm env fml (Exp l arg sty key) tau = 
@@ -459,7 +465,7 @@ calcTypeTerm env fml (Exp l arg sty key) tau =
                 rty' = substVPType subst rty
                 ps'  = map (substVFormula subst) ps
             theta <- calcTypeValue env fml v rty'
-            phi   <- liftIO $ calcCondition fml ps'
+            phi   <- calcCondition fml ps'
             return [ITerm theta phi]
     in
     case (l, arg) of
@@ -489,7 +495,7 @@ calcTypeTerm env fml (Exp l arg sty key) tau =
                                     fml' = mkBin SAnd fml cond
                                     ty_x = substPType subst ty_y
                                     env' = (M.insert x ty_x (fst env), M.insert x theta (snd env))
-                                b <- liftIO $ checkSat fml cond
+                                b <- checkSat fml cond
                                 if b
                                   then calcTypeTerm env' fml' e2 tau
                                   else return []
@@ -505,7 +511,7 @@ calcTypeTerm env fml (Exp l arg sty key) tau =
                         subst = M.fromList $ zip ys vs
                         ptys' = map (substVPType subst) ptys
                         ps'   = map (substVFormula subst) ps
-                    phi <- liftIO $ calcCondition fml ps'
+                    phi <- calcCondition fml ps'
                     thetas <- zipWithM (calcTypeValue env fml) vs ptys'
                     flowMap <- ctxFlowMap <$> ask
                     forM_ (flowMap M.! f) $ \ident -> addFlow ident (thetas,phi)
@@ -523,7 +529,7 @@ calcTypeTerm env fml (Exp l arg sty key) tau =
                                         rty' = substVPType subst' rty
                                         env' = ( M.insert x rty' (fst env)
                                                , M.insert x rtheta (snd env))
-                                    b <- liftIO $ checkSat fml cond
+                                    b <- checkSat fml cond
                                     if b 
                                       then calcTypeTerm env' fml' e2 tau
                                       else return []
@@ -536,7 +542,7 @@ calcTypeTerm env fml (Exp l arg sty key) tau =
                 (SRand, _)   -> calcTypeTerm ( M.insert x PInt (fst env)
                                              , M.insert x IInt (snd env)) fml e2 tau
         (SAssume, (cond,e)) -> do
-            b <- liftIO $ checkSat fml cond
+            b <- checkSat fml cond
             if b 
               then calcTypeTerm env (mkBin SAnd fml cond) e tau
               else return []

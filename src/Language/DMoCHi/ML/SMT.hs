@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns, GADTs #-}
-module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..)) where
+module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..), getSMTCount, resetSMTCount) where
 
 import Language.DMoCHi.ML.Syntax.PNormal
 import Z3.Monad hiding(mkVar)
@@ -10,8 +10,17 @@ import qualified Data.HashTable.IO as HT
 import Data.Hashable
 import Data.IORef
 import Debug.Trace
+import System.IO.Unsafe
 
+smtCounter :: IORef Int
+smtCounter = unsafePerformIO (newIORef 0)
 data IValue = Func | ASTValue AST | IPair IValue IValue deriving(Show)
+
+getSMTCount :: IO Int
+getSMTCount = readIORef smtCounter
+
+resetSMTCount :: IO ()
+resetSMTCount = writeIORef smtCounter 0
 
 toIValue :: MonadZ3 z3 => Value -> z3 IValue
 toIValue v@(Value l arg _ _) = case atomOfValue v of
@@ -179,7 +188,7 @@ abst constraints predicates = evalZ3 $ do
                     let val = Node i v hi low
                     HT.insert hashTable key val
                     return val
-            
+    let incrCounter = liftIO $ modifyIORef' smtCounter succ
 
     let search :: [(Atom,AST)] -> Int -> Z3 (BDDNode Atom)
         search ((v,z3_v):l) !d = do
@@ -187,6 +196,7 @@ abst constraints predicates = evalZ3 $ do
             push
             solverAssertAndTrack z3_v =<< mkPVar d
             res <- check
+            incrCounter
             case res of
                 Unsat -> do
                     liftIO $ print d
@@ -206,6 +216,7 @@ abst constraints predicates = evalZ3 $ do
                     push
                     mkNot z3_v >>= (\z3_nv -> solverAssertAndTrack z3_nv =<< mkPVar (-d))
                     res_not <- check
+                    incrCounter
                     case res_not of
                         Unsat -> do
                             liftIO $ print d
@@ -219,6 +230,7 @@ abst constraints predicates = evalZ3 $ do
                             liftIO $ bDDNode d v hi low
         search [] _ = liftIO $ bDDConst True
     res <- check
+    incrCounter
     case res of
         Unsat -> liftIO $ bDDConst False
         _ -> search (zip predicates z3_predicates) 0
