@@ -6,14 +6,18 @@ import           Control.Monad.Reader
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
+import           Data.Hashable
 import           Data.IORef
 import           Text.Printf
 import           Text.PrettyPrint.HughesPJClass
+import           Data.Type.Equality
 
 import           Language.DMoCHi.Common.Id
+import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.Syntax.Type
 import           Language.DMoCHi.ML.Syntax.PType hiding(Env)
-import           Language.DMoCHi.ML.Syntax.PNormal
+import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
+import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import           Language.DMoCHi.ML.Flow
 import qualified Language.DMoCHi.ML.SMT as SMT
 
@@ -24,6 +28,136 @@ data ITermType = IFail | ITerm IType BFormula
 
 data BFormula = BAnd BFormula BFormula | BOr BFormula BFormula | BVar Int | BConst Bool
     deriving (Eq,Ord)
+
+data HFormula where
+    HFormula :: (WellFormed l HFormula arg, Supported l (Labels HFormula)) => SLabel l -> arg -> Type -> Int -> HFormula
+
+getIdent :: HFormula -> Int
+getIdent (HFormula _ _ _ key) = key
+
+type instance Ident HFormula  = TId
+type instance Labels HFormula  = '[ 'Literal, 'Var, 'Unary, 'Binary ]
+type instance BinOps HFormula = '[ 'Add, 'Sub, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
+type instance UniOps HFormula = '[ 'Fst, 'Snd, 'Not, 'Neg ]
+
+type HFormulaTbl = HashTable HFormula HFormula
+
+instance Hashable (BinArg HFormula) where
+    hashWithSalt salt (BinArg l v1 v2) = 
+        salt `hashWithSalt` l 
+             `hashWithSalt` getIdent v1 
+             `hashWithSalt` getIdent v2
+
+instance Hashable (UniArg HFormula) where
+    hashWithSalt salt (UniArg l v) = 
+        salt `hashWithSalt` l 
+             `hashWithSalt` getIdent v 
+
+instance Hashable HFormula where
+    hashWithSalt salt (HFormula l arg _ _) =
+        case l of
+            SLiteral -> salt `hashWithSalt` (1 :: Int) `hashWithSalt` arg
+            SVar     -> salt `hashWithSalt` (2 :: Int) `hashWithSalt` arg
+            SBinary  -> salt `hashWithSalt` (3 :: Int) `hashWithSalt` arg
+            SUnary   -> salt `hashWithSalt` (4 :: Int) `hashWithSalt` arg
+
+instance Eq HFormula where
+    (==) (HFormula l1 arg1 _ _) (HFormula l2 arg2 _ _) =
+        case (l1,l2) of
+            (SLiteral, SLiteral) -> arg1 == arg2
+            (SLiteral, _) -> False
+            (SVar, SVar) -> arg1 == arg2
+            (SVar, _) -> False
+            (SBinary, SBinary) -> 
+                case (arg1, arg2) of
+                    (BinArg op1 v1 v2, BinArg op2 v3 v4) -> 
+                        case testEquality op1 op2 of
+                            Just _ -> v1 === v3 && v2 === v4
+                            Nothing -> False
+            (SBinary, _) -> False
+            (SUnary, SUnary) ->
+                case (arg1, arg2) of
+                    (UniArg op1 v1, UniArg op2 v2) ->
+                        case testEquality op1 op2 of
+                            Just _ -> v1 === v2
+                            Nothing -> False
+            (SUnary, _) -> False
+
+infix 4 ===
+
+(===) :: HFormula -> HFormula -> Bool
+(===) = (==) `on` getIdent
+            
+genHFormula :: (Int -> HFormula) -> R HFormula
+genHFormula generator = do
+    (_, v@(HFormula _ _ _ key)) <- mfix $ \ ~(ident,_) ->  do
+        let key = generator ident
+        ctx <- ask
+        let tbl = ctxHFormulaTbl ctx
+        res <- liftIO $ H.lookup tbl key
+        case res of
+            Just v -> return (getIdent v, v)
+            Nothing -> liftIO $ do
+                ident' <- readIORef (ctxHFormulaSize ctx)
+                writeIORef (ctxHFormulaSize ctx) $! (ident'+1)
+                H.insert tbl key key
+                return (ident', key)
+    key `seq` return v
+
+mkBin :: SBinOp op -> HFormula -> HFormula -> R HFormula
+mkBin op v1 v2 = case op of
+    SAdd -> genHFormula $ HFormula SBinary (BinArg SAdd v1 v2) TInt
+    SSub -> genHFormula $ HFormula SBinary (BinArg SSub v1 v2) TInt
+    SEq  -> genHFormula $ HFormula SBinary (BinArg SEq v1 v2) TBool
+    SLt  -> genHFormula $ HFormula SBinary (BinArg SLt v1 v2) TBool
+    SLte -> genHFormula $ HFormula SBinary (BinArg SLte v1 v2) TBool
+    SGt  -> genHFormula $ HFormula SBinary (BinArg SLt v2 v1) TBool
+    SGte -> genHFormula $ HFormula SBinary (BinArg SLte v2 v1) TBool
+    SAnd -> genHFormula $ HFormula SBinary (BinArg SAnd v1 v2) TBool
+    SOr  -> genHFormula $ HFormula SBinary (BinArg SOr  v1 v2) TBool
+
+mkUni :: SUniOp op -> HFormula -> R HFormula
+mkUni op v1@(HFormula _ _ sty _) = case op of
+    SNeg -> genHFormula $ HFormula SUnary (UniArg SNeg v1) TInt
+    SNot -> genHFormula $ HFormula SUnary (UniArg SNot v1) TBool
+    SFst -> case sty of
+        TPair sty1 _ -> genHFormula $ HFormula SUnary (UniArg SFst v1) sty1
+        _ -> error "mkUni: Fst"
+    SSnd -> case sty of
+        TPair _ sty2 -> genHFormula $ HFormula SUnary (UniArg SSnd v1) sty2
+        _ -> error "mkUni: Snd"
+
+mkLiteral :: Lit -> R HFormula
+mkLiteral l@(CInt _) = genHFormula $ HFormula SLiteral l TInt
+mkLiteral l@(CBool _) = genHFormula $ HFormula SLiteral l TInt
+
+mkVar :: TId -> R HFormula
+mkVar x@(TId sty _) = genHFormula $ HFormula SVar x sty
+
+toHFormula :: Formula -> R HFormula
+toHFormula (Atom l arg sty) = 
+    case (l, arg) of
+        (SLiteral, arg) -> genHFormula (\key -> HFormula l arg sty key)
+        (SVar, arg) -> genHFormula (\key -> HFormula l arg sty key)
+        (SBinary, BinArg op v1 v2) -> do
+            f1 <- toHFormula v1
+            f2 <- toHFormula v2
+            genHFormula (\key -> HFormula l (BinArg op f1 f2) sty key)
+        (SUnary, UniArg op v1) -> do
+            f1 <- toHFormula v1
+            genHFormula (\key -> HFormula l (UniArg op f1) sty key)
+fromHFormula :: HFormula -> Formula
+fromHFormula (HFormula l arg sty _) = 
+    case (l, arg) of
+        (SLiteral, arg) -> Atom l arg sty
+        (SVar, arg) -> Atom l arg sty
+        (SBinary, BinArg op v1 v2) -> 
+            Atom l (BinArg op (fromHFormula v1) (fromHFormula v2)) sty
+        (SUnary, UniArg op v1) -> 
+            Atom l (UniArg op (fromHFormula v1)) sty
+
+instance Pretty HFormula where
+    pPrintPrec plevel prec v = pPrintPrec plevel prec (fromHFormula v)
 
 mkBAnd, mkBOr :: BFormula -> BFormula -> BFormula
 mkBAnd (BConst True) b = b
@@ -83,10 +217,14 @@ type HashTable k v = H.BasicHashTable k v
 data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
                        , ctxTypeMap :: TypeMap
                        , ctxFlowMap :: FlowMap
-                       , ctxRtnTypeTbl :: HashTable UniqueKey (PType, [Formula]) 
-                       , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [Formula]) 
+                       , ctxRtnTypeTbl :: HashTable UniqueKey (PType, [HFormula]) 
+                       , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [HFormula]) 
+                       , ctxHFormulaTbl :: HFormulaTbl
+                       , ctxHFormulaSize :: IORef Int
+                       , ctxCheckSatCache :: HashTable (Int, Int) Bool
                        , ctxUpdated :: IORef Bool
-                       , ctxSMTCount :: IORef Int }
+                       , ctxSMTCount :: IORef Int
+                       , ctxSMTCountHit :: IORef Int }
 type R a = ReaderT Context IO a
 
 calcContextV :: M.Map TId PType -> Value -> PType -> R ()
@@ -108,6 +246,7 @@ calcContextV env (Value l arg _ key) pty =
                 tau'   = substTermType subst tau
                 env'   = foldr (uncurry M.insert) env $ zip xs ty_ys'
             ctx <- ask
+            ps' <- mapM toHFormula ps'
             liftIO $ H.insert (ctxArgTypeTbl ctx) key (ty_ys', ps')
             calcContextE env' e tau'
 
@@ -120,6 +259,7 @@ calcContextE env (Exp l arg sty key) tau =
                 rty' = substVPType subst rty
                 ps' = map (substVFormula subst) ps
             tbl <- ctxRtnTypeTbl <$> ask 
+            ps' <- mapM toHFormula ps'
             calcContextV env v rty'
             liftIO (H.insert tbl key (rty', ps'))
     in case (l, arg) of
@@ -142,6 +282,7 @@ calcContextE env (Exp l arg sty key) tau =
                         ps'   = map (substFormula subst) ps
                         ty_x  = substPType subst ty_y
                         env'  = M.insert x ty_x env
+                    ps' <- mapM toHFormula ps'
                     liftIO $ H.insert (ctxRtnTypeTbl ctx) key (ty_x, ps')
                     calcContextE env e1 tau1
                     calcContextE env' e2 tau
@@ -157,11 +298,13 @@ calcContextE env (Exp l arg sty key) tau =
                         ptys' = map (substVPType subst) ptys
                         ps'   = map (substVFormula subst) ps
                         (r, rty, qs) = retTy
-                        subst' = M.insert r (cast (mkVar x)) subst
+                        subst' = M.insert r (cast (PNormal.mkVar x)) subst
                         qs' = map (substVFormula subst') qs
                         rty' = substVPType subst' rty
                         env' = M.insert x rty' env
                     ctx <- ask
+                    ps' <- mapM toHFormula ps'
+                    qs' <- mapM toHFormula qs'
                     liftIO (H.insert (ctxArgTypeTbl ctx) key (ptys', ps'))
                     liftIO (H.insert (ctxRtnTypeTbl ctx) key (rty', qs'))
                     zipWithM_ (\v ty_v -> calcContextV env v ty_v) vs ptys'
@@ -285,21 +428,24 @@ saturate typeMap prog = do
                    <*> flowAnalysis prog
                    <*> H.new
                    <*> H.new
+                   <*> H.new
+                   <*> newIORef 0
+                   <*> H.new
                    <*> newIORef False
+                   <*> newIORef 0
                    <*> newIORef 0
     let env0 = ( M.fromList [ (f, pty) | (f, key, _, _) <- functions prog, let Left pty = typeMap M.! key ]
                , M.fromList [ (f, IFun []) | (f, _, _, _) <- functions prog] )
-        go :: Env -> R [ITermType]
+        go :: IEnv -> R [ITermType]
         go env = do
             resetUpdate
-            ienv' <- fmap M.fromList $ forM (functions prog) $ \(f, key, xs, e) -> do
-                let (pty,IFun as') = (fst env M.! f, snd env M.! f)
-                IFun as <- calcTypeFunDef env (mkLiteral (CBool True)) (key,xs,e) pty
+            env' <- fmap M.fromList $ forM (functions prog) $ \(f, key, xs, e) -> do
+                let IFun as' = env M.! f
+                IFun as <- mkLiteral (CBool True) >>= \b -> calcTypeFunDef env b (key,xs,e)
                 let as'' = merge as as'
                 when (as' /= as'') update
                 return (f, IFun as'')
-            let env' = (fst env, ienv')
-            ts <- calcTypeTerm env' (mkLiteral (CBool True)) (mainTerm prog) (TId TInt (reserved "main"), PInt, [])
+            ts <- mkLiteral (CBool True) >>= \b -> calcTypeTerm env' b (mainTerm prog) 
             b <- ask >>= liftIO . readIORef . ctxUpdated
             if b 
               then go env'
@@ -314,10 +460,11 @@ saturate typeMap prog = do
 
         liftIO $ putStrLn "Abstraction Annotated Program"
         pprintContext prog >>= liftIO . print
-        go env0
+        go (snd env0)
         
     let !b = IFail `elem` ts
     readIORef (ctxSMTCount ctx) >>= printf "[Fusion] Number of SMT Call = %d\n"
+    readIORef (ctxSMTCountHit ctx) >>= printf "[Fusion] Number of SMT Call Hit = %d\n"
     return (b, ts)
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
@@ -345,80 +492,72 @@ addFlow i v = do
                 | otherwise -> liftIO (H.insert tbl i $! (S.insert v vs)) >> update
         Nothing -> liftIO (H.insert tbl i $! (S.singleton v)) >> update
 
-calcTypeFunDef :: Env -> Formula -> (UniqueKey, [TId], Exp) -> PType -> R IType
-calcTypeFunDef env@(penv,ienv) fml (ident,xs,e) pty@(PFun _ argTy retTy) = do
-    let (ys, ty_ys, ps) = argTy
-        subst = M.fromList $ zip ys xs
-        ps' = map (substFormula subst) ps
-        retTy' = substTermType subst retTy
-        ty_xs = map (substPType subst) ty_ys
+calcTypeFunDef :: IEnv -> HFormula -> (UniqueKey, [TId], Exp) -> R IType
+calcTypeFunDef env fml (ident,xs,e) = do
+    Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) ident
     fs <- getFlow ident
     ity <- fmap (IFun . concat) $ forM fs $ \(thetas, phi) -> do
-        let cond = fromBFormula ps' phi
-            fml' = mkBin SAnd fml cond
-            env' = ( foldr (uncurry M.insert) penv (zip xs ty_xs)
-                   , foldr (uncurry M.insert) ienv (zip xs thetas))
+        let env' = foldr (uncurry M.insert) env (zip xs thetas)
+        cond <- fromBFormula ps phi
+        fml' <- mkBin SAnd fml cond
         b <- checkSat fml cond
         if b 
-          then map ((,,) thetas phi) <$> calcTypeTerm env' fml' e retTy'
+          then map ((,,) thetas phi) <$> calcTypeTerm env' fml' e
           else return []
+          {-
     liftIO $ print $ text "calcTypeFunDef" $+$ 
             braces (
-                text "env:" <+> pprintEnv env $+$
+                --text "env:" <+> pprintEnv env $+$
                 text "assumption:" <+> pPrint fml $+$
                 text "ident:" <+> pPrint ident  $+$
                 text "args:" <+> (brackets $ hsep $ punctuate comma (map pPrint xs)) $+$
-                text "ptype:" <+> pPrint pty $+$
                 text "result:" <+> pPrint ity
             )
+            -}
     return ity
-calcTypeFunDef _ _ _ _ = error "calcTypeFunDef: non-function abstraction type is supplied"
 
-calcTypeValue :: Env -> Formula -> Value -> PType -> R IType
-calcTypeValue env fml (Value l arg sty key) ty = 
+calcTypeValue :: IEnv -> HFormula -> Value -> R IType
+calcTypeValue env fml (Value l arg sty key) = 
     let atomCase :: Atom -> R IType
         atomCase v = do
-            let (ty', ity) = calcTypeAtom env v
-            if ty /= ty' then
-                error $ "calcTypeValue: Abstraction type mismatch"
-            else return ity
+            let ity = calcTypeAtom env v
+            return ity
     in case (l,arg) of
         (SLiteral, _) -> atomCase (Atom l arg sty)
         (SVar, _)     -> atomCase (Atom l arg sty)
         (SBinary, _)  -> atomCase (Atom l arg sty)
         (SUnary, _)   -> atomCase (Atom l arg sty)
-        (SLambda, (xs,e)) -> calcTypeFunDef env fml (key,xs, e) ty
+        (SLambda, (xs,e)) -> calcTypeFunDef env fml (key,xs, e)
         (SPair, (v1, v2)) -> do
-            let PPair _ ty1 ty2 = ty
-            i1 <- calcTypeValue env fml v1 ty1
-            i2 <- calcTypeValue env fml v2 ty2
+            i1 <- calcTypeValue env fml v1
+            i2 <- calcTypeValue env fml v2
             return (IPair i1 i2)
 
 
 
-calcTypeAtom :: Env -> Atom -> (PType,IType)
+calcTypeAtom :: IEnv -> Atom -> IType
 calcTypeAtom env (Atom l arg _)   = case (l, arg) of
-    (SLiteral, CInt _)  -> (PInt, IInt)
-    (SLiteral, CBool _) -> (PInt, IInt)
-    (SVar, x) -> ((fst env) M.! x, (snd env) M.! x)
+    (SLiteral, CInt _)  -> IInt
+    (SLiteral, CBool _) -> IInt
+    (SVar, x) -> env M.! x
     (SBinary, BinArg op _ _) -> case op of
-        SAdd -> (PInt, IInt)
-        SSub -> (PInt, IInt)
-        SEq -> (PBool, IBool)
-        SLt -> (PBool, IBool)
-        SLte -> (PBool, IBool)
-        SAnd -> (PBool, IBool)
-        SOr -> (PBool, IBool)
+        SAdd -> IInt
+        SSub -> IInt
+        SEq  -> IBool
+        SLt  -> IBool
+        SLte -> IBool
+        SAnd -> IBool
+        SOr  -> IBool
     (SUnary, UniArg op v) -> case op of
-        SFst -> (\(PPair _ p1 _, IPair i1 _) -> (p1,i1)) $ calcTypeAtom env v
-        SSnd -> (\(PPair _ _ p2, IPair _ i2) -> (p2,i2)) $ calcTypeAtom env v
-        SNeg -> (PInt, IInt)
-        SNot -> (PBool, IBool)
+        SFst -> (\(IPair i1 _) -> i1) $ calcTypeAtom env v
+        SSnd -> (\(IPair _ i2) -> i2) $ calcTypeAtom env v
+        SNeg -> IInt
+        SNot -> IBool
 
 -- Function: calcCondition fml ps 
 -- assumption: fml is a satisfiable formula
 -- assertion: phi |- fromBFormula ps ret
-calcCondition :: Formula -> [Formula] -> R BFormula
+calcCondition :: HFormula -> [HFormula] -> R BFormula
 calcCondition _fml _ps = do
     phi <- go 1 _fml _ps
     liftIO $ print $ text "calcCondtion" $+$ 
@@ -431,44 +570,58 @@ calcCondition _fml _ps = do
     where
     go _ _ [] = return $ BConst True
     go i fml (p:ps) = do
-        let np = mkUni SNot p
+        np <- mkUni SNot p
         b1 <- checkSat fml p
         b2 <- checkSat fml np
-        v1 <- if b1 then go (i + 1) (mkBin SAnd fml  p) ps 
+        v1 <- if b1 then mkBin SAnd fml p >>= \fml' -> go (i + 1) fml' ps 
                     else return $ BConst False
-        v2 <- if b2 then go (i + 1) (mkBin SAnd fml np) ps 
+        v2 <- if b2 then mkBin SAnd fml np >>= \fml' -> go (i + 1) fml' ps 
                     else return $ BConst False
         if v1 == v2 then
             return v1
         else 
             return $ mkBOr (mkBAnd (BVar i) v1) (mkBAnd (BVar (-i)) v2)
 
-fromBFormula :: [Formula] -> BFormula -> Formula
+
+fromBFormula :: [HFormula] -> BFormula -> R HFormula
 fromBFormula ps (BVar i) 
     | i < 0     = mkUni SNot (ps !! ((-i) - 1))
-    | otherwise = ps !! (i - 1)
+    | otherwise = return $ ps !! (i - 1)
 fromBFormula _  (BConst b)   = mkLiteral (CBool b)
-fromBFormula ps (BOr p1 p2)  = mkBin SOr  (fromBFormula ps p1) (fromBFormula ps p2)
-fromBFormula ps (BAnd p1 p2) = mkBin SAnd (fromBFormula ps p1) (fromBFormula ps p2)
+fromBFormula ps (BOr p1 p2)  = do
+    v1 <- fromBFormula ps p1
+    v2 <- fromBFormula ps p2
+    mkBin SOr  v1 v2
+fromBFormula ps (BAnd p1 p2) = do
+    v1 <- fromBFormula ps p1
+    v2 <- fromBFormula ps p2
+    mkBin SAnd v1 v2
 
-checkSat :: Formula -> Formula -> R Bool
+checkSat :: HFormula -> HFormula -> R Bool
 checkSat p1 p2 = do
-    ask >>= \ctx -> liftIO $ modifyIORef' (ctxSMTCount ctx) succ 
-    liftIO $ SMT.sat [cast p1, cast p2]
+    ctx <- ask
+    let key = (getIdent p1, getIdent p2)
+    res <- liftIO $ H.lookup (ctxCheckSatCache ctx) key
+    -- liftIO $ print $ text "checkSat" <+> pPrint key <+> pPrint p1 <+> text "|-" <+> pPrint p2
+    case res of
+        Just v -> do
+            liftIO $ modifyIORef' (ctxSMTCountHit ctx) succ 
+            return v
+        Nothing -> do 
+            liftIO $ modifyIORef' (ctxSMTCount ctx) succ 
+            v <- liftIO $ SMT.sat [cast (fromHFormula p1), cast (fromHFormula p2)]
+            liftIO $ H.insert (ctxCheckSatCache ctx) key v
+            return v
 
-calcTypeTerm :: Env -> Formula -> Exp -> TermType -> R [ITermType]
-calcTypeTerm env fml (Exp l arg sty key) tau = 
+calcTypeTerm :: IEnv -> HFormula -> Exp -> R [ITermType]
+calcTypeTerm env fml (Exp l arg sty key) = 
     let valueCase :: Value -> R [ITermType]
         valueCase v = do
-            let (r, rty, ps) = tau
-            let subst = M.singleton r v
-                rty' = substVPType subst rty
-                ps'  = map (substVFormula subst) ps
-            theta <- calcTypeValue env fml v rty'
-            phi   <- calcCondition fml ps'
+            Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+            theta <- calcTypeValue env fml v
+            phi   <- calcCondition fml ps
             return [ITerm theta phi]
-    in
-    case (l, arg) of
+    in case (l, arg) of
         (SLiteral, _) -> valueCase (Value l arg sty key)
         (SVar, _)     -> valueCase (Value l arg sty key)
         (SUnary, _)   -> valueCase (Value l arg sty key)
@@ -477,27 +630,24 @@ calcTypeTerm env fml (Exp l arg sty key) tau =
         (SLambda, _)  -> valueCase (Value l arg sty key)
         (SLet, (x,LExp l1 arg1 sty1 key1,e2)) ->
             let atomCase av = do
-                    let fml' = mkBin SAnd fml (mkBin SEq (mkVar x) av)
-                        (ty_av, ity_av) = calcTypeAtom env av
-                        env' = (M.insert x ty_av (fst env), M.insert x ity_av (snd env))
-                    calcTypeTerm env' fml' e2 tau
+                    vx <- mkVar x
+                    fml' <- toHFormula av >>= mkBin SEq vx >>= mkBin SAnd fml 
+                    let ity_av = calcTypeAtom env av
+                        env' = M.insert x ity_av env
+                    calcTypeTerm env' fml' e2
                 exprCase e1 = do
-                    tbl <- ctxTypeMap <$> ask
-                    let Right tau1@(y, ty_y, ps) = tbl M.! key1
-                    iotas <- calcTypeTerm env fml e1 tau1
+                    iotas <- calcTypeTerm env fml e1
                     fmap concatMerge $ forM iotas $ \iota_y -> do
                         case iota_y of
                             IFail -> return [IFail]
                             ITerm theta phi -> do
-                                let subst = M.singleton y x
-                                    ps'  = map (substFormula subst) ps
-                                    cond = fromBFormula ps' phi
-                                    fml' = mkBin SAnd fml cond
-                                    ty_x = substPType subst ty_y
-                                    env' = (M.insert x ty_x (fst env), M.insert x theta (snd env))
+                                Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+                                let env' = M.insert x theta env
+                                cond <- fromBFormula ps phi
+                                fml' <- mkBin SAnd fml cond
                                 b <- checkSat fml cond
                                 if b
-                                  then calcTypeTerm env' fml' e2 tau
+                                  then calcTypeTerm env' fml' e2
                                   else return []
             in case (l1, arg1) of
                 (SLiteral, _) -> atomCase (Atom l1 arg1 sty1)
@@ -505,14 +655,10 @@ calcTypeTerm env fml (Exp l arg sty key) tau =
                 (SBinary, _)  -> atomCase (Atom l1 arg1 sty1)
                 (SUnary, _)   -> atomCase (Atom l1 arg1 sty1)
                 (SApp, (f,vs)) -> do
-                    let PFun _ argTy retTy = fst env M.! f
-                        IFun assoc = snd env M.! f
-                    let (ys, ptys, ps) = argTy
-                        subst = M.fromList $ zip ys vs
-                        ptys' = map (substVPType subst) ptys
-                        ps'   = map (substVFormula subst) ps
-                    phi <- calcCondition fml ps'
-                    thetas <- zipWithM (calcTypeValue env fml) vs ptys'
+                    let IFun assoc = env M.! f
+                    Just (_, ps) <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key)
+                    phi <- calcCondition fml ps
+                    thetas <- mapM (calcTypeValue env fml) vs 
                     flowMap <- ctxFlowMap <$> ask
                     forM_ (flowMap M.! f) $ \ident -> addFlow ident (thetas,phi)
 
@@ -521,17 +667,13 @@ calcTypeTerm env fml (Exp l arg sty key) tau =
                           then case iota of
                                 IFail -> return [IFail]
                                 ITerm rtheta rphi -> do
-                                    let (r, rty, qs) = retTy
-                                        subst' = M.insert r (cast (mkVar x)) subst
-                                        qs' = map (substVFormula subst') qs
-                                        cond = fromBFormula qs' rphi
-                                        fml' = mkBin SAnd fml cond
-                                        rty' = substVPType subst' rty
-                                        env' = ( M.insert x rty' (fst env)
-                                               , M.insert x rtheta (snd env))
+                                    Just (_, qs) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+                                    let env' = M.insert x rtheta env
+                                    cond <- fromBFormula qs rphi
+                                    fml' <- mkBin SAnd fml cond
                                     b <- checkSat fml cond
                                     if b 
-                                      then calcTypeTerm env' fml' e2 tau
+                                      then calcTypeTerm env' fml' e2
                                       else return []
                           else return []
                 (SPair, _)   -> exprCase (Exp l1 arg1 sty1 key1)
@@ -539,18 +681,18 @@ calcTypeTerm env fml (Exp l arg sty key) tau =
                 (SBranch, _) -> exprCase (Exp l1 arg1 sty1 key1)
                 (SFail, _)   -> exprCase (Exp l1 arg1 sty1 key1)
                 (SOmega, _)  -> exprCase (Exp l1 arg1 sty1 key1)
-                (SRand, _)   -> calcTypeTerm ( M.insert x PInt (fst env)
-                                             , M.insert x IInt (snd env)) fml e2 tau
+                (SRand, _)   -> calcTypeTerm (M.insert x IInt env) fml e2
         (SAssume, (cond,e)) -> do
-            b <- checkSat fml cond
+            hcond <- toHFormula cond
+            b <- checkSat fml hcond
             if b 
-              then calcTypeTerm env (mkBin SAnd fml cond) e tau
+              then mkBin SAnd fml hcond >>= \fml' -> calcTypeTerm env fml' e
               else return []
         (SFail,_ ) -> return [IFail]
         (SOmega,_ ) -> return []
         (SBranch, (e1,e2)) -> do
-            ts1 <- calcTypeTerm env fml e1 tau
-            ts2 <- calcTypeTerm env fml e2 tau
+            ts1 <- calcTypeTerm env fml e1
+            ts2 <- calcTypeTerm env fml e2
             return $ merge ts1 ts2
 
 merge :: Ord a => [a] -> [a] -> [a]

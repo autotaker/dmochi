@@ -220,7 +220,7 @@ evalRTypeA env = go  where
             let (rty1, sv1) = go v1 in
             case op of
                 ML.SNot -> (RBool, Not sv1)
-                ML.SNeg -> (RBool, Neg sv1)
+                ML.SNeg -> (RInt, Neg sv1)
                 ML.SFst -> let (RPair a _, P sv _) = (rty1, sv1) in (a,sv)
                 ML.SSnd -> let (RPair _ b, P _ sv) = (rty1, sv1) in (b,sv)
 
@@ -495,6 +495,7 @@ termOfValue = \case
     Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
     Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
     Not v -> Horn.Not (termOfValue v)
+    Neg v -> Horn.Sub (Horn.Int 0) (termOfValue v)
     And v1 v2 -> Horn.And (termOfValue v1) (termOfValue v2)
     Or  v1 v2 -> Horn.Or  (termOfValue v1) (termOfValue v2)
     v -> error $ "termOfValue: unexpected value: " ++ show v

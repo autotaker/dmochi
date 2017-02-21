@@ -18,7 +18,7 @@ TOHORS=tohors
 HORSAT=../../horsat-1.01/horsat
 HORSAT2=../../horsat2-0.92/horsat2
 
-TIMEOUT=200
+TIMEOUT=100
 TIMEOUT_CMD=timeout
 
 

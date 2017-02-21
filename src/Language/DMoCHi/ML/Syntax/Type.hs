@@ -2,6 +2,7 @@ module Language.DMoCHi.ML.Syntax.Type where
 -- import Language.DMoCHi.Common.Util
 import qualified Language.DMoCHi.Common.Id as Id
 import Text.PrettyPrint.HughesPJClass 
+import Data.Hashable
 import Language.DMoCHi.Common.Util
 import Language.DMoCHi.ML.Syntax.Base(prettyBind)
 
@@ -12,6 +13,9 @@ instance Eq TId where
 
 instance Ord TId where
     compare = compare `on` name
+
+instance Hashable TId where
+    hashWithSalt salt t = hashWithSalt salt (name t)
 
 data Type = TInt | TBool | TPair Type Type | TFun [Type] Type deriving(Eq)
 

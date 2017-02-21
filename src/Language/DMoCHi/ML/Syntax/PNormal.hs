@@ -57,7 +57,6 @@ instance Eq Atom where
             (SUnary, SUnary) -> arg1 == arg2
             (SUnary, _) -> False
 
-
 type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Literal e arg = arg ~ Lit
     Normalized 'Var     e arg = arg ~ Ident e

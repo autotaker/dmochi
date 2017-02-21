@@ -14,6 +14,7 @@ import qualified Language.DMoCHi.ML.Syntax.UnTyped as U(SynName, SynonymDef(..),
 import qualified Language.DMoCHi.Common.Id as Id
 import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey, FreshIO)
 import Language.DMoCHi.ML.DesugarSynonym
+--import Debug.Trace
 
 instance Show TypeError where
     show (UndefinedVariable s)      = "UndefinedVariables: "++ s
@@ -86,7 +87,7 @@ unify (U.TSyn ts name) ty = do
         n = length $ U.typVars synDef
         m = length ts
     when (n /= m) $ throwError (SynError $ ArgLengthDiffer n m)
-    ty' <- case runExcept (substType (M.fromList $ zip (U.typVars synDef) ts) ty) of
+    ty' <- case runExcept (substType (M.fromList $ zip (U.typVars synDef) ts) (U.synDef synDef)) of
         Left err -> throwError $ SynError err
         Right ty' -> return ty'
     unify ty' ty
@@ -222,7 +223,7 @@ convertType synEnv ty = do
                 stys <- mapM go tys
                 go ty >>=  \sty -> return (TFun stys sty)
             U.TSyn _ _ -> error "convertType: undesugared synonym"
-            U.TVar _ -> return TInt
+            U.TVar _x -> return TInt
 
 convertE :: Annot -> Env -> U.Exp -> ExceptT TypeError FreshIO Exp
 convertE annot env (U.Exp l arg key) = 

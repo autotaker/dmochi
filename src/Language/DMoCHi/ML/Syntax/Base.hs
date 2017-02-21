@@ -19,11 +19,14 @@ module Language.DMoCHi.ML.Syntax.Base(Label(..),
                                       WellFormedPrinter(..),
                                       prettyBind,
                                       comment,
-                                      Impossible(..))
+                                      reflectLabel,
+                                      reflectBinOp,
+                                      reflectUniOp)
                                        where
 import GHC.Exts(Constraint)
 import Text.Parsec.Expr(Assoc(..))
 import Data.Type.Bool
+import Data.Hashable
 import Data.Type.Equality
 import Text.PrettyPrint.HughesPJClass
 
@@ -31,9 +34,12 @@ data Label = Literal | Var | Binary | Unary | Pair
            | Lambda | App | Let 
            | Assume | If | Branch 
            | Fail | Omega | Rand
-
+           deriving(Eq,Ord)
+           
 data BinOp = Add | Sub | Eq | Lt | Gt | Lte | Gte | And | Or 
+    deriving (Eq,Ord)
 data UniOp = Fst | Snd | Not | Neg
+    deriving (Eq,Ord)
 
 data Lit = CInt Integer | CBool Bool
     deriving(Eq,Ord)
@@ -66,18 +72,92 @@ data BinArg e where
 data UniArg e where
     UniArg :: Elem op (UniOps e) ~ 'True => SUniOp op -> e -> UniArg e
 
+reflectLabel :: SLabel l -> Label
+reflectLabel l = case l of
+    SLiteral -> Literal
+    SVar -> Var 
+    SBinary -> Binary 
+    SUnary -> Unary 
+    SPair -> Pair 
+    SLambda -> Lambda 
+    SApp -> App 
+    SLet -> Let 
+    SAssume -> Assume 
+    SIf -> If 
+    SBranch -> Branch 
+    SFail -> Fail 
+    SOmega -> Omega 
+    SRand-> Rand
+
+reflectBinOp :: SBinOp op -> BinOp
+reflectBinOp l = case l of
+    SAdd -> Add 
+    SSub -> Sub
+    SEq -> Eq
+    SLt -> Lt
+    SLte -> Lte
+    SGt -> Gt
+    SGte -> Gte
+    SAnd -> And
+    SOr -> Or
+
+reflectUniOp :: SUniOp op -> UniOp
+reflectUniOp l = case l of
+    SFst -> Fst
+    SSnd -> Snd
+    SNot -> Not
+    SNeg -> Neg
 
 instance Eq e => Eq (BinArg e) where
     (==) (BinArg op1 e1 e2) (BinArg op2 e3 e4) = 
-        case testEquality op1 op2 of
-            Just Refl -> e1 == e3 && e2 == e4
-            Nothing -> False
+        reflectBinOp op1 == reflectBinOp op2 &&
+        e1 == e3 && e2 == e4
 
 instance Eq e => Eq (UniArg e) where
     (==) (UniArg op1 e1) (UniArg op2 e2) = 
-        case testEquality op1 op2 of
-            Just Refl -> e1 == e2 
-            Nothing -> False
+        reflectUniOp op1 == reflectUniOp op2 &&
+        e1 == e2
+
+instance Ord e => Ord (BinArg e) where
+    compare (BinArg op1 e1 e2) (BinArg op2 e3 e4) =
+        compare (reflectBinOp op1) (reflectBinOp op2)
+        `mappend` compare e1 e3 
+        `mappend` compare e2 e4
+
+instance Ord e => Ord (UniArg e) where
+    compare (UniArg op1 e1) (UniArg op2 e2) =
+        compare (reflectUniOp op1) (reflectUniOp op2)
+        `mappend` compare e1 e2
+
+instance Hashable Lit where
+    hashWithSalt salt (CInt i) = salt `hashWithSalt` (1 :: Int) `hashWithSalt` i
+    hashWithSalt salt (CBool b) = salt `hashWithSalt` (1 :: Int) `hashWithSalt` b
+
+
+instance Hashable (SBinOp op) where
+    hashWithSalt salt op = salt `hashWithSalt` v
+        where 
+        v :: Int
+        v = case op of
+            SAdd -> 1
+            SSub -> 2
+            SEq  -> 3
+            SLt  -> 4
+            SGt  -> 5
+            SLte -> 6 
+            SGte -> 7 
+            SAnd -> 8
+            SOr  -> 9
+
+instance Hashable (SUniOp op) where
+    hashWithSalt salt op = salt `hashWithSalt` v
+        where 
+        v :: Int
+        v = case op of
+            SFst -> 1
+            SSnd -> 2
+            SNot -> 3
+            SNeg -> 4
 
 type family WellFormed (l :: Label)  (e :: *)  (arg :: *) :: Constraint where
     WellFormed 'Literal e arg = arg ~ Lit
@@ -188,8 +268,6 @@ type instance (==) a b = EqUniOp a b
 type instance (==) a b = EqBinOp a b
 type instance (==) a b = EqLabel a b
 
-class Impossible d  where
-    impossible :: d -> b
 
 instance Show (SBinOp op) where
     show SAdd = "SAdd"
