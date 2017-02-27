@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns, GADTs #-}
-module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..), getSMTCount, resetSMTCount) where
+module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..), getSMTCount, resetSMTCount,IValue(..), toIValueId, mkEqIValue) where
 
 import Language.DMoCHi.ML.Syntax.PNormal
 import Z3.Monad hiding(mkVar)
@@ -102,13 +102,15 @@ sat vs = evalZ3 $ do
         astToString v >>= liftIO . putStrLn
     -}
     assert =<< mkAnd' [ v | ASTValue v <- ivs]
-    (res, model) <- getModel
-    liftIO $ print res
+    (res, _model) <- getModel
+    -- liftIO $ print res
     case res of
         Sat -> do 
+            {-
             case model of 
                 Just m -> showModel m >>= liftIO . putStrLn
                 Nothing -> return ()
+            -}
             return True
         Unsat -> return False
         Undef -> return True

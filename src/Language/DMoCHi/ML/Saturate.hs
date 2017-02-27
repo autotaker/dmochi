@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase, BangPatterns #-}
+{-# LANGUAGE LambdaCase, BangPatterns, DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
 module Language.DMoCHi.ML.Saturate where
 
 import           Control.Monad
@@ -11,6 +11,10 @@ import           Data.IORef
 import           Text.Printf
 import           Text.PrettyPrint.HughesPJClass
 import           Data.Type.Equality
+import           Data.Time
+import           GHC.Generics (Generic)
+import qualified Z3.Monad as Z3
+import qualified Z3.Base as Z3Base
 
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
@@ -30,10 +34,14 @@ data BFormula = BAnd BFormula BFormula | BOr BFormula BFormula | BVar Int | BCon
     deriving (Eq,Ord)
 
 data HFormula where
-    HFormula :: (WellFormed l HFormula arg, Supported l (Labels HFormula)) => SLabel l -> arg -> Type -> Int -> HFormula
+    HFormula :: (WellFormed l HFormula arg, Supported l (Labels HFormula)) => 
+                SLabel l -> arg -> Type -> SMT.IValue -> Int -> HFormula
 
 getIdent :: HFormula -> Int
-getIdent (HFormula _ _ _ key) = key
+getIdent (HFormula _ _ _ _ key) = key
+
+getIValue :: HFormula -> SMT.IValue
+getIValue (HFormula _ _ _ iv _) = iv
 
 type instance Ident HFormula  = TId
 type instance Labels HFormula  = '[ 'Literal, 'Var, 'Unary, 'Binary ]
@@ -54,7 +62,7 @@ instance Hashable (UniArg HFormula) where
              `hashWithSalt` getIdent v 
 
 instance Hashable HFormula where
-    hashWithSalt salt (HFormula l arg _ _) =
+    hashWithSalt salt (HFormula l arg _ _ _) =
         case l of
             SLiteral -> salt `hashWithSalt` (1 :: Int) `hashWithSalt` arg
             SVar     -> salt `hashWithSalt` (2 :: Int) `hashWithSalt` arg
@@ -62,7 +70,7 @@ instance Hashable HFormula where
             SUnary   -> salt `hashWithSalt` (4 :: Int) `hashWithSalt` arg
 
 instance Eq HFormula where
-    (==) (HFormula l1 arg1 _ _) (HFormula l2 arg2 _ _) =
+    (==) (HFormula l1 arg1 _ _ _) (HFormula l2 arg2 _ _ _) =
         case (l1,l2) of
             (SLiteral, SLiteral) -> arg1 == arg2
             (SLiteral, _) -> False
@@ -88,66 +96,81 @@ infix 4 ===
 (===) :: HFormula -> HFormula -> Bool
 (===) = (==) `on` getIdent
             
-genHFormula :: (Int -> HFormula) -> R HFormula
-genHFormula generator = do
-    (_, v@(HFormula _ _ _ key)) <- mfix $ \ ~(ident,_) ->  do
-        let key = generator ident
+genHFormula :: (SMT.IValue -> Int -> HFormula) -> R SMT.IValue -> R HFormula
+genHFormula generator m_iv = do
+    (_, _, v@(HFormula _ _ _ iv key)) <- mfix $ \ ~(ident, iv,_) ->  do
+        let key = generator iv ident
         ctx <- ask
         let tbl = ctxHFormulaTbl ctx
         res <- liftIO $ H.lookup tbl key
         case res of
-            Just v -> return (getIdent v, v)
-            Nothing -> liftIO $ do
-                ident' <- readIORef (ctxHFormulaSize ctx)
-                writeIORef (ctxHFormulaSize ctx) $! (ident'+1)
-                H.insert tbl key key
-                return (ident', key)
-    key `seq` return v
+            Just v -> return (getIdent v, getIValue v, v)
+            Nothing -> do
+                ident' <- liftIO $ readIORef (ctxHFormulaSize ctx)
+                liftIO $ writeIORef (ctxHFormulaSize ctx) $! (ident'+1)
+                liftIO $ H.insert tbl key key
+                iv' <- m_iv
+                return (ident', iv',key)
+    key `seq` iv `seq` return v
 
 mkBin :: SBinOp op -> HFormula -> HFormula -> R HFormula
-mkBin op v1 v2 = case op of
-    SAdd -> genHFormula $ HFormula SBinary (BinArg SAdd v1 v2) TInt
-    SSub -> genHFormula $ HFormula SBinary (BinArg SSub v1 v2) TInt
-    SEq  -> genHFormula $ HFormula SBinary (BinArg SEq v1 v2) TBool
-    SLt  -> genHFormula $ HFormula SBinary (BinArg SLt v1 v2) TBool
-    SLte -> genHFormula $ HFormula SBinary (BinArg SLte v1 v2) TBool
-    SGt  -> genHFormula $ HFormula SBinary (BinArg SLt v2 v1) TBool
-    SGte -> genHFormula $ HFormula SBinary (BinArg SLte v2 v1) TBool
-    SAnd -> genHFormula $ HFormula SBinary (BinArg SAnd v1 v2) TBool
-    SOr  -> genHFormula $ HFormula SBinary (BinArg SOr  v1 v2) TBool
+mkBin op v1 v2 = 
+    let iv1 = getIValue v1
+        iv2 = getIValue v2
+        SMT.ASTValue v1' = iv1
+        SMT.ASTValue v2' = iv2
+    in case op of
+        SAdd -> genHFormula ( HFormula SBinary (BinArg SAdd v1 v2) TInt) (SMT.ASTValue <$> Z3.mkAdd [v1', v2']) 
+        SSub -> genHFormula ( HFormula SBinary (BinArg SSub v1 v2) TInt) (SMT.ASTValue <$> Z3.mkSub [v1', v2'])
+        SEq  -> genHFormula ( HFormula SBinary (BinArg SEq v1 v2) TBool) (SMT.mkEqIValue iv1 iv2)
+        SLt  -> genHFormula ( HFormula SBinary (BinArg SLt v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLt v1' v2')
+        SLte -> genHFormula ( HFormula SBinary (BinArg SLte v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLe v1' v2')
+        SGt  -> genHFormula ( HFormula SBinary (BinArg SLt v2 v1) TBool)  (SMT.ASTValue <$> Z3.mkGt v1' v2')
+        SGte -> genHFormula ( HFormula SBinary (BinArg SLte v2 v1) TBool) (SMT.ASTValue <$> Z3.mkGe v1' v2')
+        SAnd -> genHFormula ( HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkAnd [v1', v2'])
+        SOr  -> genHFormula ( HFormula SBinary (BinArg SOr  v1 v2) TBool) (SMT.ASTValue <$> Z3.mkOr [v1', v2'])
 
 mkUni :: SUniOp op -> HFormula -> R HFormula
-mkUni op v1@(HFormula _ _ sty _) = case op of
-    SNeg -> genHFormula $ HFormula SUnary (UniArg SNeg v1) TInt
-    SNot -> genHFormula $ HFormula SUnary (UniArg SNot v1) TBool
-    SFst -> case sty of
-        TPair sty1 _ -> genHFormula $ HFormula SUnary (UniArg SFst v1) sty1
-        _ -> error "mkUni: Fst"
-    SSnd -> case sty of
-        TPair _ sty2 -> genHFormula $ HFormula SUnary (UniArg SSnd v1) sty2
-        _ -> error "mkUni: Snd"
+mkUni op v1@(HFormula _ _ sty _ _) = 
+    case op of
+        SNeg -> 
+            let SMT.ASTValue v1' = getIValue v1 in
+            genHFormula (HFormula SUnary (UniArg SNeg v1) TInt) (SMT.ASTValue <$> Z3.mkUnaryMinus v1')
+        SNot -> 
+            let SMT.ASTValue v1' = getIValue v1 in
+            genHFormula (HFormula SUnary (UniArg SNot v1) TBool) (SMT.ASTValue <$> Z3.mkNot v1')
+        SFst -> case sty of
+            TPair sty1 _ -> 
+                let SMT.IPair iv_fst _ = getIValue v1 in
+                genHFormula (HFormula SUnary (UniArg SFst v1) sty1) (pure iv_fst)
+            _ -> error "mkUni: Fst"
+        SSnd -> case sty of
+            TPair _ sty2 -> 
+                let SMT.IPair _ iv_snd = getIValue v1 in
+                genHFormula (HFormula SUnary (UniArg SSnd v1) sty2) (pure iv_snd)
+            _ -> error "mkUni: Snd"
 
 mkLiteral :: Lit -> R HFormula
-mkLiteral l@(CInt _) = genHFormula $ HFormula SLiteral l TInt
-mkLiteral l@(CBool _) = genHFormula $ HFormula SLiteral l TInt
+mkLiteral l@(CInt i)  = genHFormula (HFormula SLiteral l TInt) (SMT.ASTValue <$> Z3.mkInteger i)
+mkLiteral l@(CBool b) = genHFormula (HFormula SLiteral l TInt) (SMT.ASTValue <$> Z3.mkBool b)
 
 mkVar :: TId -> R HFormula
-mkVar x@(TId sty _) = genHFormula $ HFormula SVar x sty
+mkVar x@(TId sty name_x) = genHFormula (HFormula SVar x sty) (SMT.toIValueId sty (show name_x))
 
 toHFormula :: Formula -> R HFormula
-toHFormula (Atom l arg sty) = 
+toHFormula (Atom l arg _) = 
     case (l, arg) of
-        (SLiteral, arg) -> genHFormula (\key -> HFormula l arg sty key)
-        (SVar, arg) -> genHFormula (\key -> HFormula l arg sty key)
+        (SLiteral, arg) -> mkLiteral arg
+        (SVar, arg) -> mkVar arg
         (SBinary, BinArg op v1 v2) -> do
             f1 <- toHFormula v1
             f2 <- toHFormula v2
-            genHFormula (\key -> HFormula l (BinArg op f1 f2) sty key)
+            mkBin op f1 f2
         (SUnary, UniArg op v1) -> do
             f1 <- toHFormula v1
-            genHFormula (\key -> HFormula l (UniArg op f1) sty key)
+            mkUni op f1
 fromHFormula :: HFormula -> Formula
-fromHFormula (HFormula l arg sty _) = 
+fromHFormula (HFormula l arg sty _ _) = 
     case (l, arg) of
         (SLiteral, arg) -> Atom l arg sty
         (SVar, arg) -> Atom l arg sty
@@ -214,6 +237,11 @@ type IEnv = M.Map TId IType
 
 type HashTable k v = H.BasicHashTable k v
 
+data MeasureKey = CheckSat | CalcCondition | Total
+    deriving (Eq, Ord, Show, Generic)
+
+instance Hashable MeasureKey 
+
 data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
                        , ctxTypeMap :: TypeMap
                        , ctxFlowMap :: FlowMap
@@ -224,8 +252,35 @@ data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFor
                        , ctxCheckSatCache :: HashTable (Int, Int) Bool
                        , ctxUpdated :: IORef Bool
                        , ctxSMTCount :: IORef Int
-                       , ctxSMTCountHit :: IORef Int }
-type R a = ReaderT Context IO a
+                       , ctxSMTCountHit :: IORef Int
+                       , ctxTimer :: HashTable MeasureKey NominalDiffTime
+                       , ctxSMTSolver :: Z3.Solver
+                       , ctxSMTContext :: Z3.Context }
+newtype R a = R { unR :: ReaderT Context IO a }
+    deriving (Monad, Applicative, Functor, MonadFix, MonadIO)
+
+
+instance MonadReader Context R where
+    ask = R ask
+    local f a = R (local f $ unR a)
+
+instance Z3.MonadZ3 R where
+    getSolver = ctxSMTSolver <$> ask
+    getContext = ctxSMTContext <$> ask
+    
+
+measureTime :: MeasureKey -> R a -> R a
+measureTime key action = do
+    t_start <- liftIO getCurrentTime
+    res <- action
+    t_end <- liftIO getCurrentTime
+    let dt = diffUTCTime t_end t_start
+    ask >>= \ctx -> liftIO $ do
+        r <- H.lookup (ctxTimer ctx) key
+        case r of
+            Nothing -> H.insert (ctxTimer ctx) key $! dt
+            Just t  -> H.insert (ctxTimer ctx) key $! dt + t
+    return res
 
 calcContextV :: M.Map TId PType -> Value -> PType -> R ()
 calcContextV env (Value l arg _ key) pty = 
@@ -423,6 +478,11 @@ pprintContext prog = do
 
 saturate :: TypeMap -> Program -> IO (Bool,[ITermType])
 saturate typeMap prog = do
+    (smtSolver, smtContext) <- Z3Base.withConfig $ \cfg -> do
+        Z3.setOpts cfg Z3.stdOpts
+        ctx <- Z3Base.mkContext cfg
+        solver <- Z3Base.mkSolver ctx
+        return (solver, ctx)
     ctx <- Context <$> H.new
                    <*> pure typeMap
                    <*> flowAnalysis prog
@@ -434,6 +494,9 @@ saturate typeMap prog = do
                    <*> newIORef False
                    <*> newIORef 0
                    <*> newIORef 0
+                   <*> H.new
+                   <*> return smtSolver
+                   <*> return smtContext
     let env0 = ( M.fromList [ (f, pty) | (f, key, _, _) <- functions prog, let Left pty = typeMap M.! key ]
                , M.fromList [ (f, IFun []) | (f, _, _, _) <- functions prog] )
         go :: IEnv -> R [ITermType]
@@ -451,7 +514,8 @@ saturate typeMap prog = do
               then go env'
               else return ts
 
-    ts <- flip runReaderT ctx $ do
+
+    ts <- flip runReaderT ctx $ unR $ measureTime Total $ do
         -- initialize context
         forM_ (functions prog) $ \(f, key, xs, e) -> 
             let pty = fst env0 M.! f in
@@ -465,6 +529,8 @@ saturate typeMap prog = do
     let !b = IFail `elem` ts
     readIORef (ctxSMTCount ctx) >>= printf "[Fusion] Number of SMT Call = %d\n"
     readIORef (ctxSMTCountHit ctx) >>= printf "[Fusion] Number of SMT Call Hit = %d\n"
+    H.mapM_ (\(k,duration) -> do
+        printf "[Fusion] Timer %s: %s\n" (show k) (show duration)) (ctxTimer ctx)
     return (b, ts)
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
@@ -533,8 +599,6 @@ calcTypeValue env fml (Value l arg sty key) =
             i2 <- calcTypeValue env fml v2
             return (IPair i1 i2)
 
-
-
 calcTypeAtom :: IEnv -> Atom -> IType
 calcTypeAtom env (Atom l arg _)   = case (l, arg) of
     (SLiteral, CInt _)  -> IInt
@@ -558,14 +622,16 @@ calcTypeAtom env (Atom l arg _)   = case (l, arg) of
 -- assumption: fml is a satisfiable formula
 -- assertion: phi |- fromBFormula ps ret
 calcCondition :: HFormula -> [HFormula] -> R BFormula
-calcCondition _fml _ps = do
+calcCondition _fml _ps = measureTime CalcCondition $ do
     phi <- go 1 _fml _ps
+    {-
     liftIO $ print $ text "calcCondtion" $+$ 
             braces (
                 text "assumption:" <+> pPrint _fml $+$
                 text "predicates:" <+> (brackets $ hsep $ punctuate comma (map pPrint _ps)) $+$
                 text "result:"     <+> text (show phi)
             )
+            -}
     return phi
     where
     go _ _ [] = return $ BConst True
@@ -598,7 +664,7 @@ fromBFormula ps (BAnd p1 p2) = do
     mkBin SAnd v1 v2
 
 checkSat :: HFormula -> HFormula -> R Bool
-checkSat p1 p2 = do
+checkSat p1 p2 = measureTime CheckSat $ do
     ctx <- ask
     let key = (getIdent p1, getIdent p2)
     res <- liftIO $ H.lookup (ctxCheckSatCache ctx) key
@@ -609,7 +675,15 @@ checkSat p1 p2 = do
             return v
         Nothing -> do 
             liftIO $ modifyIORef' (ctxSMTCount ctx) succ 
-            v <- liftIO $ SMT.sat [cast (fromHFormula p1), cast (fromHFormula p2)]
+
+            v <- (Z3.local :: R Bool -> R Bool) $ do
+                SMT.ASTValue cond <- getIValue <$> mkBin SAnd p1 p2  
+                Z3.assert cond
+                res <- Z3.check
+                case res of
+                    Z3.Sat -> return True
+                    Z3.Unsat -> return False
+                    Z3.Undef -> liftIO $ putStrLn "Undef" >> return True
             liftIO $ H.insert (ctxCheckSatCache ctx) key v
             return v
 
