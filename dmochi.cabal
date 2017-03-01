@@ -52,6 +52,7 @@ library
                        Language.DMoCHi.ML.Syntax.Typed,
                        Language.DMoCHi.ML.Syntax.PNormal,
                        Language.DMoCHi.ML.Syntax.PType,
+                       Language.DMoCHi.ML.Syntax.HFormula,
                        Language.DMoCHi.ML.SMT,
                        Language.DMoCHi.ML.DesugarSynonym,
                        Language.DMoCHi.ML.Alpha,

@@ -3,197 +3,27 @@ module Language.DMoCHi.ML.Saturate where
 
 import           Control.Monad
 import           Control.Monad.Reader
-import qualified Data.Map as M
+import           Control.Monad.Writer hiding((<>))
+import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
-import           Data.Hashable
 import           Data.IORef
 import           Text.Printf
 import           Text.PrettyPrint.HughesPJClass
-import           Data.Type.Equality
 import           Data.Time
-import           GHC.Generics (Generic)
 import qualified Z3.Monad as Z3
 import qualified Z3.Base as Z3Base
 
 import           Language.DMoCHi.Common.Id
-import           Language.DMoCHi.Common.Util
+--import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.Syntax.Type
 import           Language.DMoCHi.ML.Syntax.PType hiding(Env)
 import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
+import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Flow
 import qualified Language.DMoCHi.ML.SMT as SMT
 
-data IType = IInt | IBool | IPair IType IType | IFun [([IType], BFormula, ITermType)]
-    deriving (Eq,Ord,Show)
-data ITermType = IFail | ITerm IType BFormula
-    deriving (Eq,Ord,Show)
-
-data BFormula = BAnd BFormula BFormula | BOr BFormula BFormula | BVar Int | BConst Bool
-    deriving (Eq,Ord)
-
-data HFormula where
-    HFormula :: (WellFormed l HFormula arg, Supported l (Labels HFormula)) => 
-                SLabel l -> arg -> Type -> SMT.IValue -> Int -> HFormula
-
-getIdent :: HFormula -> Int
-getIdent (HFormula _ _ _ _ key) = key
-
-getIValue :: HFormula -> SMT.IValue
-getIValue (HFormula _ _ _ iv _) = iv
-
-type instance Ident HFormula  = TId
-type instance Labels HFormula  = '[ 'Literal, 'Var, 'Unary, 'Binary ]
-type instance BinOps HFormula = '[ 'Add, 'Sub, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
-type instance UniOps HFormula = '[ 'Fst, 'Snd, 'Not, 'Neg ]
-
-type HFormulaTbl = HashTable HFormula HFormula
-
-instance Hashable (BinArg HFormula) where
-    hashWithSalt salt (BinArg l v1 v2) = 
-        salt `hashWithSalt` l 
-             `hashWithSalt` getIdent v1 
-             `hashWithSalt` getIdent v2
-
-instance Hashable (UniArg HFormula) where
-    hashWithSalt salt (UniArg l v) = 
-        salt `hashWithSalt` l 
-             `hashWithSalt` getIdent v 
-
-instance Hashable HFormula where
-    hashWithSalt salt (HFormula l arg _ _ _) =
-        case l of
-            SLiteral -> salt `hashWithSalt` (1 :: Int) `hashWithSalt` arg
-            SVar     -> salt `hashWithSalt` (2 :: Int) `hashWithSalt` arg
-            SBinary  -> salt `hashWithSalt` (3 :: Int) `hashWithSalt` arg
-            SUnary   -> salt `hashWithSalt` (4 :: Int) `hashWithSalt` arg
-
-instance Eq HFormula where
-    (==) (HFormula l1 arg1 _ _ _) (HFormula l2 arg2 _ _ _) =
-        case (l1,l2) of
-            (SLiteral, SLiteral) -> arg1 == arg2
-            (SLiteral, _) -> False
-            (SVar, SVar) -> arg1 == arg2
-            (SVar, _) -> False
-            (SBinary, SBinary) -> 
-                case (arg1, arg2) of
-                    (BinArg op1 v1 v2, BinArg op2 v3 v4) -> 
-                        case testEquality op1 op2 of
-                            Just _ -> v1 === v3 && v2 === v4
-                            Nothing -> False
-            (SBinary, _) -> False
-            (SUnary, SUnary) ->
-                case (arg1, arg2) of
-                    (UniArg op1 v1, UniArg op2 v2) ->
-                        case testEquality op1 op2 of
-                            Just _ -> v1 === v2
-                            Nothing -> False
-            (SUnary, _) -> False
-
-infix 4 ===
-
-(===) :: HFormula -> HFormula -> Bool
-(===) = (==) `on` getIdent
-            
-genHFormula :: (SMT.IValue -> Int -> HFormula) -> R SMT.IValue -> R HFormula
-genHFormula generator m_iv = do
-    (_, _, v@(HFormula _ _ _ iv key)) <- mfix $ \ ~(ident, iv,_) ->  do
-        let key = generator iv ident
-        ctx <- ask
-        let tbl = ctxHFormulaTbl ctx
-        res <- liftIO $ H.lookup tbl key
-        case res of
-            Just v -> return (getIdent v, getIValue v, v)
-            Nothing -> do
-                ident' <- liftIO $ readIORef (ctxHFormulaSize ctx)
-                liftIO $ writeIORef (ctxHFormulaSize ctx) $! (ident'+1)
-                liftIO $ H.insert tbl key key
-                iv' <- m_iv
-                return (ident', iv',key)
-    key `seq` iv `seq` return v
-
-mkBin :: SBinOp op -> HFormula -> HFormula -> R HFormula
-mkBin op v1 v2 = 
-    let iv1 = getIValue v1
-        iv2 = getIValue v2
-        SMT.ASTValue v1' = iv1
-        SMT.ASTValue v2' = iv2
-    in case op of
-        SAdd -> genHFormula ( HFormula SBinary (BinArg SAdd v1 v2) TInt) (SMT.ASTValue <$> Z3.mkAdd [v1', v2']) 
-        SSub -> genHFormula ( HFormula SBinary (BinArg SSub v1 v2) TInt) (SMT.ASTValue <$> Z3.mkSub [v1', v2'])
-        SEq  -> genHFormula ( HFormula SBinary (BinArg SEq v1 v2) TBool) (SMT.mkEqIValue iv1 iv2)
-        SLt  -> genHFormula ( HFormula SBinary (BinArg SLt v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLt v1' v2')
-        SLte -> genHFormula ( HFormula SBinary (BinArg SLte v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLe v1' v2')
-        SGt  -> genHFormula ( HFormula SBinary (BinArg SLt v2 v1) TBool)  (SMT.ASTValue <$> Z3.mkGt v1' v2')
-        SGte -> genHFormula ( HFormula SBinary (BinArg SLte v2 v1) TBool) (SMT.ASTValue <$> Z3.mkGe v1' v2')
-        SAnd -> genHFormula ( HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkAnd [v1', v2'])
-        SOr  -> genHFormula ( HFormula SBinary (BinArg SOr  v1 v2) TBool) (SMT.ASTValue <$> Z3.mkOr [v1', v2'])
-
-mkUni :: SUniOp op -> HFormula -> R HFormula
-mkUni op v1@(HFormula _ _ sty _ _) = 
-    case op of
-        SNeg -> 
-            let SMT.ASTValue v1' = getIValue v1 in
-            genHFormula (HFormula SUnary (UniArg SNeg v1) TInt) (SMT.ASTValue <$> Z3.mkUnaryMinus v1')
-        SNot -> 
-            let SMT.ASTValue v1' = getIValue v1 in
-            genHFormula (HFormula SUnary (UniArg SNot v1) TBool) (SMT.ASTValue <$> Z3.mkNot v1')
-        SFst -> case sty of
-            TPair sty1 _ -> 
-                let SMT.IPair iv_fst _ = getIValue v1 in
-                genHFormula (HFormula SUnary (UniArg SFst v1) sty1) (pure iv_fst)
-            _ -> error "mkUni: Fst"
-        SSnd -> case sty of
-            TPair _ sty2 -> 
-                let SMT.IPair _ iv_snd = getIValue v1 in
-                genHFormula (HFormula SUnary (UniArg SSnd v1) sty2) (pure iv_snd)
-            _ -> error "mkUni: Snd"
-
-mkLiteral :: Lit -> R HFormula
-mkLiteral l@(CInt i)  = genHFormula (HFormula SLiteral l TInt) (SMT.ASTValue <$> Z3.mkInteger i)
-mkLiteral l@(CBool b) = genHFormula (HFormula SLiteral l TInt) (SMT.ASTValue <$> Z3.mkBool b)
-
-mkVar :: TId -> R HFormula
-mkVar x@(TId sty name_x) = genHFormula (HFormula SVar x sty) (SMT.toIValueId sty (show name_x))
-
-toHFormula :: Formula -> R HFormula
-toHFormula (Atom l arg _) = 
-    case (l, arg) of
-        (SLiteral, arg) -> mkLiteral arg
-        (SVar, arg) -> mkVar arg
-        (SBinary, BinArg op v1 v2) -> do
-            f1 <- toHFormula v1
-            f2 <- toHFormula v2
-            mkBin op f1 f2
-        (SUnary, UniArg op v1) -> do
-            f1 <- toHFormula v1
-            mkUni op f1
-fromHFormula :: HFormula -> Formula
-fromHFormula (HFormula l arg sty _ _) = 
-    case (l, arg) of
-        (SLiteral, arg) -> Atom l arg sty
-        (SVar, arg) -> Atom l arg sty
-        (SBinary, BinArg op v1 v2) -> 
-            Atom l (BinArg op (fromHFormula v1) (fromHFormula v2)) sty
-        (SUnary, UniArg op v1) -> 
-            Atom l (UniArg op (fromHFormula v1)) sty
-
-instance Pretty HFormula where
-    pPrintPrec plevel prec v = pPrintPrec plevel prec (fromHFormula v)
-
-mkBAnd, mkBOr :: BFormula -> BFormula -> BFormula
-mkBAnd (BConst True) b = b
-mkBAnd (BConst False) _ = BConst False
-mkBAnd b (BConst True) = b
-mkBAnd _ (BConst False) = BConst False
-mkBAnd b1 b2 = BAnd b1 b2
-
-mkBOr (BConst False) b = b
-mkBOr (BConst True) _ = BConst True
-mkBOr b (BConst False) = b
-mkBOr _ (BConst True) = BConst True
-mkBOr b1 b2 = BOr b1 b2
 
 pprintEnv :: Env -> Doc
 pprintEnv (penv, ienv) = brackets $ vcat $ punctuate comma (map pprintAssoc (M.keys penv)) 
@@ -224,50 +54,10 @@ instance Pretty ITermType where
     pPrintPrec _ _ IFail = text "fail"
     pPrintPrec plevel _ (ITerm ty fml) = braces $ pPrintPrec plevel 0 ty <+> text "|" <+> text (show fml)
 
-instance Show BFormula where
-    showsPrec p (BVar i) = showsPrec p i
-    showsPrec _ (BConst True) = showString "true"
-    showsPrec _ (BConst False) = showString "false"
-    showsPrec p (BAnd b1 b2) = showParen (p > 2) $ showsPrec 2 b1 . showString " && " . showsPrec 2 b2
-    showsPrec p (BOr b1 b2)  = showParen (p > 1) $ showsPrec 1 b1 . showString " || " . showsPrec 1 b2
 
 type Env = (PEnv, IEnv)
 type PEnv = M.Map TId PType
 type IEnv = M.Map TId IType
-
-type HashTable k v = H.BasicHashTable k v
-
-data MeasureKey = CheckSat | CalcCondition | Total
-    deriving (Eq, Ord, Show, Generic)
-
-instance Hashable MeasureKey 
-
-data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
-                       , ctxTypeMap :: TypeMap
-                       , ctxFlowMap :: FlowMap
-                       , ctxRtnTypeTbl :: HashTable UniqueKey (PType, [HFormula]) 
-                       , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [HFormula]) 
-                       , ctxHFormulaTbl :: HFormulaTbl
-                       , ctxHFormulaSize :: IORef Int
-                       , ctxCheckSatCache :: HashTable (Int, Int) Bool
-                       , ctxUpdated :: IORef Bool
-                       , ctxSMTCount :: IORef Int
-                       , ctxSMTCountHit :: IORef Int
-                       , ctxTimer :: HashTable MeasureKey NominalDiffTime
-                       , ctxSMTSolver :: Z3.Solver
-                       , ctxSMTContext :: Z3.Context }
-newtype R a = R { unR :: ReaderT Context IO a }
-    deriving (Monad, Applicative, Functor, MonadFix, MonadIO)
-
-
-instance MonadReader Context R where
-    ask = R ask
-    local f a = R (local f $ unR a)
-
-instance Z3.MonadZ3 R where
-    getSolver = ctxSMTSolver <$> ask
-    getContext = ctxSMTContext <$> ask
-    
 
 measureTime :: MeasureKey -> R a -> R a
 measureTime key action = do
@@ -476,46 +266,50 @@ pprintContext prog = do
                                         _  -> d_args $+$ text "|" <+> d_ps <+> text "->") $+$
                         nest 4 d_e
 
-saturate :: TypeMap -> Program -> IO (Bool,[ITermType])
+saturate :: TypeMap -> Program -> IO (Bool,([ITermType], Maybe [Bool]))
 saturate typeMap prog = do
     (smtSolver, smtContext) <- Z3Base.withConfig $ \cfg -> do
         Z3.setOpts cfg Z3.stdOpts
         ctx <- Z3Base.mkContext cfg
         solver <- Z3Base.mkSolver ctx
         return (solver, ctx)
-    ctx <- Context <$> H.new
-                   <*> pure typeMap
-                   <*> flowAnalysis prog
-                   <*> H.new
-                   <*> H.new
-                   <*> H.new
-                   <*> newIORef 0
-                   <*> H.new
-                   <*> newIORef False
-                   <*> newIORef 0
-                   <*> newIORef 0
-                   <*> H.new
-                   <*> return smtSolver
-                   <*> return smtContext
+    ctx <- Context <$> H.new               -- ctxFlowTbl
+                   <*> pure typeMap        -- ctxTypeMap
+                   <*> flowAnalysis prog   -- ctxFlowMap
+                   <*> H.new               -- ctxRtnTypeTbl
+                   <*> H.new               -- ctxArgTypeTbl
+                   <*> H.new               -- ctxHFormulaTbl
+                   <*> newIORef 0          -- ctxHFormulaSize
+                   <*> H.new               -- ctxCheckSatCache
+                   <*> newIORef False      -- ctxUpdated
+                   <*> newIORef 0          -- ctxSMTCount
+                   <*> newIORef 0          -- ctxSMTCountHit
+                   <*> newIORef Saturation -- ctxMode
+                   <*> H.new               -- ctxTimer
+                   <*> return smtSolver    -- ctxSMTSolver
+                   <*> return smtContext   -- ctxSMTContext
     let env0 = ( M.fromList [ (f, pty) | (f, key, _, _) <- functions prog, let Left pty = typeMap M.! key ]
                , M.fromList [ (f, IFun []) | (f, _, _, _) <- functions prog] )
-        go :: IEnv -> R [ITermType]
-        go env = do
+        go :: IEnv -> History -> R ([ITermType], IEnv, History)
+        go env leastMap = do
             resetUpdate
+            rLeastMap <- liftIO $ newIORef leastMap
             env' <- fmap M.fromList $ forM (functions prog) $ \(f, key, xs, e) -> do
                 let IFun as' = env M.! f
                 IFun as <- mkLiteral (CBool True) >>= \b -> calcTypeFunDef env b (key,xs,e)
                 let as'' = merge as as'
+                liftIO $ forM_ as $ \fassoc -> do
+                    modifyIORef' rLeastMap (\m -> M.insertWith const (key, fassoc) env m) 
                 when (as' /= as'') update
                 return (f, IFun as'')
             ts <- mkLiteral (CBool True) >>= \b -> calcTypeTerm env' b (mainTerm prog) 
+            leastMap' <- liftIO $ readIORef rLeastMap
             b <- ask >>= liftIO . readIORef . ctxUpdated
             if b 
-              then go env'
-              else return ts
+              then go env' leastMap'
+              else return (ts, env', leastMap')
 
-
-    ts <- flip runReaderT ctx $ unR $ measureTime Total $ do
+    (ts, mtrace) <- flip runReaderT ctx $ unR $ measureTime Total $ do
         -- initialize context
         forM_ (functions prog) $ \(f, key, xs, e) -> 
             let pty = fst env0 M.! f in
@@ -524,14 +318,25 @@ saturate typeMap prog = do
 
         liftIO $ putStrLn "Abstraction Annotated Program"
         pprintContext prog >>= liftIO . print
-        go (snd env0)
-        
+        (ts,saturatedEnv, hist) <- go (snd env0) M.empty
+        -- changes to extraction mode
+        ask >>= liftIO . flip writeIORef Extraction . ctxMode
+        condTrue <- mkLiteral (CBool True)
+        if IFail `elem` ts
+            then do
+                 let fdef = [ (key, (f, xs, e)) | (f,key,xs,e) <- functions prog ]
+                     cenv = M.fromList [ (f, CRec M.empty M.empty condTrue hist key fdef) | (f, key, _, _) <- functions prog ]
+                     ienv = saturatedEnv
+                 trace <- execWriterT $ extractCETerm cenv ienv condTrue (mainTerm prog) IFail
+                 return (ts, Just trace)
+            else return (ts, Nothing)
+    
     let !b = IFail `elem` ts
     readIORef (ctxSMTCount ctx) >>= printf "[Fusion] Number of SMT Call = %d\n"
     readIORef (ctxSMTCountHit ctx) >>= printf "[Fusion] Number of SMT Call Hit = %d\n"
     H.mapM_ (\(k,duration) -> do
         printf "[Fusion] Timer %s: %s\n" (show k) (show duration)) (ctxTimer ctx)
-    return (b, ts)
+    return (b, (ts, mtrace))
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
 getFlow i = do
@@ -734,10 +539,15 @@ calcTypeTerm env fml (Exp l arg sty key) =
                     phi <- calcCondition fml ps
                     thetas <- mapM (calcTypeValue env fml) vs 
                     flowMap <- ctxFlowMap <$> ask
-                    forM_ (flowMap M.! f) $ \ident -> addFlow ident (thetas,phi)
-
+                    mode <- ask >>= liftIO . readIORef . ctxMode
+                    when (mode == Saturation) $ 
+                        forM_ (flowMap M.! f) $ \ident -> addFlow ident (thetas,phi)
                     fmap concatMerge $ forM assoc $ \(thetas', phi', iota) ->
-                        if thetas' == thetas && phi' == phi 
+                        let match = case mode of
+                                Saturation -> thetas' == thetas && phi' == phi 
+                                Extraction -> and (zipWith subTypeOf thetas thetas') && phi' == phi
+                        in
+                        if match
                           then case iota of
                                 IFail -> return [IFail]
                                 ITerm rtheta rphi -> do
@@ -781,4 +591,177 @@ concatMerge :: Ord a => [[a]] -> [a]
 concatMerge [] = []
 concatMerge [x] = x
 concatMerge (x:y:xs) = concatMerge (merge x y:xs)
+
+data CValue = CBase | CPair CValue CValue 
+            | CRec CEnv IEnv HFormula History UniqueKey [(UniqueKey, (TId, [TId], Exp))]
+            | CCls CEnv IEnv HFormula (UniqueKey, [TId], Exp)
+type CEnv = M.Map TId CValue
+type History = M.Map (UniqueKey, ([IType], BFormula, ITermType)) IEnv
+
+type W = WriterT [Bool] R
+
+evalCAtom :: CEnv -> Atom -> CValue
+evalCAtom cenv (Atom l arg _) =
+    case (l, arg) of
+        (SLiteral, CInt _) -> CBase
+        (SLiteral, CBool _) -> CBase
+        (SVar, x) -> cenv M.! x
+        (SBinary, BinArg _ _ _) -> CBase
+        (SUnary, UniArg op v) ->
+            case op of
+                SFst -> case evalCAtom cenv v of
+                    CPair v1 _ -> v1
+                    _ -> error "evalAtom: SFst: unexpected pattern"
+                SSnd -> case evalCAtom cenv v of
+                    CPair _ v2 -> v2
+                    _ -> error "evalAtom: SFst: unexpected pattern"
+                SNeg -> CBase
+                SNot -> CBase
+
+evalCValue :: CEnv -> IEnv -> HFormula -> Value -> CValue
+evalCValue cenv ienv phi (Value l arg sty key) =
+    case (l, arg) of
+        (SLiteral, _) -> evalCAtom cenv (Atom l arg sty)
+        (SVar, _)     -> evalCAtom cenv (Atom l arg sty)
+        (SBinary, _)  -> evalCAtom cenv (Atom l arg sty)
+        (SUnary, _)   -> evalCAtom cenv (Atom l arg sty)
+        (SPair, (v1, v2)) -> 
+            CPair (evalCValue cenv ienv phi v1)
+                  (evalCValue cenv ienv phi v2)
+        (SLambda, (xs, e)) -> CCls cenv ienv phi (key, xs, e)
+        
+extractCETerm :: CEnv -> IEnv -> HFormula -> Exp -> ITermType -> W (Maybe CValue)
+extractCETerm cenv ienv phi (Exp l arg sty key) tau =
+    let valueCase :: Value -> W (Maybe CValue)
+        valueCase v = pure $ Just $ evalCValue cenv ienv phi v
+    in case (l, arg) of
+        (SLiteral, _) -> valueCase (Value l arg sty key)
+        (SVar, _)     -> valueCase (Value l arg sty key)
+        (SBinary, _)  -> valueCase (Value l arg sty key)
+        (SUnary,  _)  -> valueCase (Value l arg sty key)
+        (SPair, _)    -> valueCase (Value l arg sty key)
+        (SLambda, _)  -> valueCase (Value l arg sty key)
+        (SBranch, (e1, e2)) -> do
+            ts1 <- lift $ calcTypeTerm ienv phi e1
+            if any (flip subTermTypeOf tau) ts1
+                then tell [True] >> extractCETerm cenv ienv phi e1 tau
+                else tell [False] >> extractCETerm cenv ienv phi e2 tau
+        (SAssume, (cond,e)) -> do
+            phi' <- lift $ toHFormula cond >>= mkBin SAnd phi
+            extractCETerm cenv ienv phi' e tau
+        (SFail, _) -> return Nothing
+        (SOmega, _) -> error "extractCETerm: unexpected pattern"
+        (SLet, (x,LExp l1 arg1 sty1 key1,e2)) -> 
+            let cont cv ity cond = do
+                    let cenv' = M.insert x cv cenv
+                        ienv' = M.insert x ity ienv
+                    phi' <- lift $ mkBin SAnd phi cond
+                    extractCETerm cenv' ienv' phi' e2 tau
+                atomCase :: Atom -> W (Maybe CValue)
+                atomCase av = do
+                    let cv = evalCAtom cenv av
+                        ity = calcTypeAtom ienv av
+                    vx <- lift $ mkVar x
+                    cond <- lift $ toHFormula av >>= mkBin SEq vx 
+                    cont cv ity cond
+                searchTerm _ IFail = return (tau == IFail)
+                searchTerm ps (ITerm ity fml) = do
+                    cond <- lift $ fromBFormula ps fml 
+                    phi' <- lift $ mkBin SAnd phi cond
+                    ts <- lift $ calcTypeTerm (M.insert x ity ienv) phi' e2
+                    return $ any (flip subTermTypeOf tau) ts
+                exprCase e1 = do
+                    Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+                    let go (tau_i:ts) = do
+                            b <- searchTerm ps tau_i
+                            if b
+                                then do
+                                    mcv_r <- extractCETerm cenv ienv phi e1 tau_i
+                                    case (mcv_r, tau_i) of
+                                        (Just cv_r, ITerm ity fml) -> do
+                                            cond <- lift $ fromBFormula ps fml
+                                            cont cv_r ity cond
+                                        (Nothing, IFail) -> return Nothing
+                                        _ -> error "extractCETerm: exprCase: go: unexpected pattern"
+                                else go ts
+                        go [] = error "extractCETerm: exprCase: go: unexpected pattern"
+                    ts <- lift $ calcTypeTerm ienv phi e1
+                    go ts
+            in case (l1, arg1) of
+                (SLiteral, _) -> atomCase (Atom l1 arg1 sty1)
+                (SVar, _)     -> atomCase (Atom l1 arg1 sty1)
+                (SBinary, _)  -> atomCase (Atom l1 arg1 sty1)
+                (SUnary, _)   -> atomCase (Atom l1 arg1 sty1)
+                (SRand, _)    -> extractCETerm (M.insert x CBase cenv) (M.insert x IInt ienv) phi e2 tau
+                (SPair, _)    -> exprCase (Exp l1 arg1 sty1 key1)
+                (SLambda, _)  -> exprCase (Exp l1 arg1 sty1 key1)
+                (SBranch, _)  -> exprCase (Exp l1 arg1 sty1 key1)
+                (SFail, _)    -> exprCase (Exp l1 arg1 sty1 key1)
+                (SOmega, _)   -> exprCase (Exp l1 arg1 sty1 key1)
+                (SApp, (f, vs)) -> do
+                    Just (_, ps) <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key)
+                    cond <- lift $ calcCondition phi ps
+                    thetas <- lift $ mapM (calcTypeValue ienv phi) vs
+                    let cvs = map (evalCValue cenv ienv phi) vs
+                    let call (thetas_i, bfml_i, tau_i) =
+                            case cenv M.! f of
+                                CCls cenv' ienv' phi' (key_f, ys, e0) -> do
+                                    let cenv'' = foldr (uncurry M.insert) cenv' $ zip ys cvs
+                                        ienv'' = foldr (uncurry M.insert) ienv' $ zip ys thetas_i
+                                    Just (_, ps') <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key_f)
+                                    fml <- lift $ fromBFormula ps' bfml_i
+                                    phi'' <- lift $ mkBin SAnd phi' fml
+                                    extractCETerm cenv'' ienv'' phi'' e0 tau
+                                CRec cenv0' ienv0' phi' hist key_f fdefs -> do
+                                    let ienv' = M.union ienv0' (hist M.! (key_f, (thetas_i, bfml_i, tau_i)))
+                                        ienv'' = foldr (uncurry M.insert) ienv' $ zip ys thetas_i
+                                        cenv'  = foldr (uncurry M.insert) cenv0'  $ (map (\(key_g, (g,_,_)) -> 
+                                                    (g, CRec cenv0' ienv0' phi' hist key_g fdefs)) fdefs)
+                                        cenv'' = foldr (uncurry M.insert) cenv' $ zip ys cvs
+                                        Just (_, ys, e0) = lookup key_f fdefs
+                                    Just (_, ps') <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key_f)
+                                    fml <- lift $ fromBFormula ps' bfml_i
+                                    phi'' <- lift $ mkBin SAnd phi' fml
+                                    extractCETerm cenv'' ienv'' phi'' e0 tau
+                                _ -> error "extractCETerm: SApp: call: unexpected pattern"
+                    Just (_,qs) <- ask >>= \ctx -> liftIO (H.lookup (ctxRtnTypeTbl ctx) key)
+                    let searchAssoc (thetas_i, bfml_i, _) 
+                            | not (bfml_i == cond && and (zipWith subTypeOf thetas thetas_i)) = return False
+                        searchAssoc (_, _, tau_i) = searchTerm qs tau_i
+                    let go ((thetas_i, bfml_i, tau_i): assocs) = do
+                            b <- searchAssoc (thetas_i, bfml_i, tau_i) 
+                            if b
+                                then do
+                                    mcv_r <- call (thetas_i, bfml_i, tau_i)
+                                    case (mcv_r, tau_i) of
+                                        (Just cv_r, ITerm theta_r bfml_r) -> do
+                                            fml <- lift $ fromBFormula qs bfml_r
+                                            cont cv_r theta_r fml
+                                        (Nothing, IFail) -> return Nothing
+                                        _ -> error "extractCETerm: SApp: go: unexpected pattern"
+                                else go assocs
+                        go [] = error "extractCETerm: SApp: go: unexpected pattern"
+                    let IFun assoc = ienv M.! f
+                    go assoc
+                    
+
+
+{-
+extractCE :: Program -> IEnv -> M.Map (UniqueKey, IType) IEnv -> R [Bool]
+extractCE prog env lenv = do
+    let fs   = [ (key, (xs, e)) | (_, key, xs, e) <- functions prog ]
+        cenv = M.fromList [ (f, CRec key fs) | (f, key, xs, e) <- functions prog ]
+        evalAtom env 
+        extractTerm env phi (Exp l arg sty key) tau = 
+            
+            case (l, arg) of
+                (SLiteral, _) -> return (Just CBase)
+                (SVar, x)     -> return (Just (env M.! x))
+                (SBinary, _)  -> return (Just CBase)
+                (SUnary, _)   -> return (
+                
+
+-}
+
+
 
