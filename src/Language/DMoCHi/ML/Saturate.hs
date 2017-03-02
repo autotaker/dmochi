@@ -13,6 +13,7 @@ import           Text.PrettyPrint.HughesPJClass
 import           Data.Time
 import qualified Z3.Monad as Z3
 import qualified Z3.Base as Z3Base
+-- import           Debug.Trace
 
 import           Language.DMoCHi.Common.Id
 --import           Language.DMoCHi.Common.Util
@@ -318,7 +319,7 @@ saturate typeMap prog = do
 
         liftIO $ putStrLn "Abstraction Annotated Program"
         pprintContext prog >>= liftIO . print
-        (ts,saturatedEnv, hist) <- go (snd env0) M.empty
+        (ts,saturatedEnv, hist) <- measureTime MSaturation $ go (snd env0) M.empty
         -- changes to extraction mode
         ask >>= liftIO . flip writeIORef Extraction . ctxMode
         condTrue <- mkLiteral (CBool True)
@@ -327,7 +328,7 @@ saturate typeMap prog = do
                  let fdef = [ (key, (f, xs, e)) | (f,key,xs,e) <- functions prog ]
                      cenv = M.fromList [ (f, CRec M.empty M.empty condTrue hist key fdef) | (f, key, _, _) <- functions prog ]
                      ienv = saturatedEnv
-                 trace <- execWriterT $ extractCETerm cenv ienv condTrue (mainTerm prog) IFail
+                 trace <- measureTime MExtraction $ execWriterT $ extractCETerm cenv ienv condTrue (mainTerm prog) IFail
                  return (ts, Just trace)
             else return (ts, Nothing)
     
@@ -643,6 +644,13 @@ extractCETerm cenv ienv phi (Exp l arg sty key) tau =
         (SLambda, _)  -> valueCase (Value l arg sty key)
         (SBranch, (e1, e2)) -> do
             ts1 <- lift $ calcTypeTerm ienv phi e1
+            {-
+            liftIO $ do
+                print $ text "branch" $+$ (nest 4 $ 
+                        text "e1" <+> pPrint e1 $+$
+                        text "ts1" <+> brackets (vcat [ pPrint ty | ty <- ts1 ]) $+$
+                        text "tau" <+> pPrint tau)
+                -}
             if any (flip subTermTypeOf tau) ts1
                 then tell [True] >> extractCETerm cenv ienv phi e1 tau
                 else tell [False] >> extractCETerm cenv ienv phi e2 tau
@@ -669,6 +677,12 @@ extractCETerm cenv ienv phi (Exp l arg sty key) tau =
                     cond <- lift $ fromBFormula ps fml 
                     phi' <- lift $ mkBin SAnd phi cond
                     ts <- lift $ calcTypeTerm (M.insert x ity ienv) phi' e2
+                    {-
+                    liftIO $ do
+                        print $ text "term:" <+> pPrint e2
+                        print $ text "cond:" <+> pPrint cond
+                        print $ text "types:" <+> vcat [ pPrint ty | ty <- ts ] 
+                        -}
                     return $ any (flip subTermTypeOf tau) ts
                 exprCase e1 = do
                     Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
@@ -711,7 +725,7 @@ extractCETerm cenv ienv phi (Exp l arg sty key) tau =
                                     Just (_, ps') <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key_f)
                                     fml <- lift $ fromBFormula ps' bfml_i
                                     phi'' <- lift $ mkBin SAnd phi' fml
-                                    extractCETerm cenv'' ienv'' phi'' e0 tau
+                                    extractCETerm cenv'' ienv'' phi'' e0 tau_i
                                 CRec cenv0' ienv0' phi' hist key_f fdefs -> do
                                     let ienv' = M.union ienv0' (hist M.! (key_f, (thetas_i, bfml_i, tau_i)))
                                         ienv'' = foldr (uncurry M.insert) ienv' $ zip ys thetas_i
@@ -722,13 +736,13 @@ extractCETerm cenv ienv phi (Exp l arg sty key) tau =
                                     Just (_, ps') <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key_f)
                                     fml <- lift $ fromBFormula ps' bfml_i
                                     phi'' <- lift $ mkBin SAnd phi' fml
-                                    extractCETerm cenv'' ienv'' phi'' e0 tau
+                                    extractCETerm cenv'' ienv'' phi'' e0 tau_i
                                 _ -> error "extractCETerm: SApp: call: unexpected pattern"
                     Just (_,qs) <- ask >>= \ctx -> liftIO (H.lookup (ctxRtnTypeTbl ctx) key)
                     let searchAssoc (thetas_i, bfml_i, _) 
                             | not (bfml_i == cond && and (zipWith subTypeOf thetas thetas_i)) = return False
                         searchAssoc (_, _, tau_i) = searchTerm qs tau_i
-                    let go ((thetas_i, bfml_i, tau_i): assocs) = do
+                    let go ((thetas_i, bfml_i, tau_i) : assocs) = do
                             b <- searchAssoc (thetas_i, bfml_i, tau_i) 
                             if b
                                 then do
@@ -742,26 +756,17 @@ extractCETerm cenv ienv phi (Exp l arg sty key) tau =
                                 else go assocs
                         go [] = error "extractCETerm: SApp: go: unexpected pattern"
                     let IFun assoc = ienv M.! f
+                    {-
+                    liftIO $ do
+                        print $ text "term:" <+> pPrint (LExp l1 arg1 sty1 key1)
+                        print $ text "tenv:" <+> (nest 4 $
+                            brackets $ vcat $ [ pPrint (name f) <+> text ":" <+> pPrint ity | (f,ity) <- M.assocs ienv ])
+                        print $ text "thetas:" <+> (hsep [ pPrint v <+> text ":" <+> pPrint ity <> comma | (v,ity) <- zip vs thetas ])
+                        print $ text "cond:" <+> text (show cond)
+                        print $ text "tau:" <+> pPrint tau 
+                        -}
                     go assoc
                     
-
-
-{-
-extractCE :: Program -> IEnv -> M.Map (UniqueKey, IType) IEnv -> R [Bool]
-extractCE prog env lenv = do
-    let fs   = [ (key, (xs, e)) | (_, key, xs, e) <- functions prog ]
-        cenv = M.fromList [ (f, CRec key fs) | (f, key, xs, e) <- functions prog ]
-        evalAtom env 
-        extractTerm env phi (Exp l arg sty key) tau = 
-            
-            case (l, arg) of
-                (SLiteral, _) -> return (Just CBase)
-                (SVar, x)     -> return (Just (env M.! x))
-                (SBinary, _)  -> return (Just CBase)
-                (SUnary, _)   -> return (
-                
-
--}
 
 
 

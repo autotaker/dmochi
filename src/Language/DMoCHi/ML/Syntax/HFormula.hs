@@ -242,7 +242,7 @@ data TypingMode = Saturation
                 | Extraction
           deriving(Show,Ord,Eq)
 
-data MeasureKey = CheckSat | CalcCondition | Total
+data MeasureKey = CheckSat | CalcCondition | Total | MSaturation | MExtraction
     deriving (Eq, Ord, Show, Generic)
 
 instance Hashable MeasureKey 
