@@ -300,7 +300,7 @@ saturate typeMap prog = do
                 IFun as <- mkLiteral (CBool True) >>= \b -> calcTypeFunDef env b (key,xs,e)
                 let as'' = merge as as'
                 liftIO $ forM_ as $ \fassoc -> do
-                    modifyIORef' rLeastMap (\m -> M.insertWith const (key, fassoc) env m) 
+                    modifyIORef' rLeastMap (\m -> M.insertWith (const id) (key, fassoc) env m) 
                 when (as' /= as'') update
                 return (f, IFun as'')
             ts <- mkLiteral (CBool True) >>= \b -> calcTypeTerm env' b (mainTerm prog) 
@@ -325,6 +325,7 @@ saturate typeMap prog = do
         condTrue <- mkLiteral (CBool True)
         if IFail `elem` ts
             then do
+                 liftIO $ putStrLn "extracting a counterexample..."
                  let fdef = [ (key, (f, xs, e)) | (f,key,xs,e) <- functions prog ]
                      cenv = M.fromList [ (f, CRec M.empty M.empty condTrue hist key fdef) | (f, key, _, _) <- functions prog ]
                      ienv = saturatedEnv
@@ -756,7 +757,6 @@ extractCETerm cenv ienv phi (Exp l arg sty key) tau =
                                 else go assocs
                         go [] = error "extractCETerm: SApp: go: unexpected pattern"
                     let IFun assoc = ienv M.! f
-                    {-
                     liftIO $ do
                         print $ text "term:" <+> pPrint (LExp l1 arg1 sty1 key1)
                         print $ text "tenv:" <+> (nest 4 $
@@ -764,7 +764,6 @@ extractCETerm cenv ienv phi (Exp l arg sty key) tau =
                         print $ text "thetas:" <+> (hsep [ pPrint v <+> text ":" <+> pPrint ity <> comma | (v,ity) <- zip vs thetas ])
                         print $ text "cond:" <+> text (show cond)
                         print $ text "tau:" <+> pPrint tau 
-                        -}
                     go assoc
                     
 
