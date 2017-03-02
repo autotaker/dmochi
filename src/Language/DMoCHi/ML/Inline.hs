@@ -247,9 +247,9 @@ inline _limit prog = doit
     go ((f,key,xs,e):fs) !inlineEnv = do
         e' <- inlineE inlineEnv e
         inlineEnv1 <- 
-            if not (recursive f) && small e then do
+            if not (recursive f) && small e' then do
                 liftIO $ printf "Select %s as an inline function...\n" (show (name f))
-                return $ M.insert f (mkLambda xs e key) inlineEnv
+                return $ M.insert f (mkLambda xs e' key) inlineEnv
             else return $ inlineEnv
         (fs',inlineEnv') <- go fs inlineEnv1
         return ((f,key,xs,e') : fs', inlineEnv')
