@@ -2,7 +2,8 @@
 module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , Exp(..), Value(..), Atom(..), LExp(..), Normalized
                                         , mkBin, mkUni, mkLiteral, mkVar, mkPair
-                                        , mkLambda, mkApp, mkLet, mkAssume, mkBranch, mkBranchL
+                                        , mkLambda, mkApp, mkLet, mkLetRec
+                                        , mkAssume, mkBranch, mkBranchL
                                         , mkFail, mkOmega, mkRand
                                         , mkFailL, mkOmegaL
                                         , Castable(..)
@@ -66,6 +67,7 @@ type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Lambda  e arg = arg ~ ([Ident e], Exp)
     Normalized 'App     e arg = arg ~ (Ident e, [Value])
     Normalized 'Let     e arg = arg ~ (Ident e, LExp, Exp)
+    Normalized 'LetRec  e arg = arg ~ ([(Ident e, Value)], Exp)
     Normalized 'Assume  e arg = arg ~ (Atom, Exp)
     Normalized 'Branch  e arg = arg ~ (Exp, Exp)
     Normalized 'Fail    e arg = arg ~ ()
@@ -74,7 +76,7 @@ type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized l        e arg = 'True ~ 'False
 
 type instance Labels Exp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
-                            , 'Let, 'Assume, 'Branch, 'Fail, 'Omega ]
+                            , 'Let, 'LetRec, 'Assume, 'Branch, 'Fail, 'Omega ]
 type instance Labels LExp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
                              , 'App, 'Branch, 'Rand, 'Fail, 'Omega ]
 type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda ]
@@ -130,6 +132,10 @@ mkApp _ _ _ = error "mkApp"
 
 mkLet :: TId -> LExp -> Exp -> UniqueKey -> Exp
 mkLet f e1 e2@(Exp _ _ sty _) key = Exp SLet (f, e1, e2) sty key
+
+mkLetRec :: [(TId, Value)] -> Exp -> UniqueKey -> Exp
+mkLetRec fs e2@(Exp _ _ sty _) key = Exp SLetRec (fs, e2) sty key
+
 
 mkAssume :: Atom -> Exp -> UniqueKey -> Exp
 mkAssume v e@(Exp _ _ sty _) key = Exp SAssume (v, e) sty key
@@ -279,6 +285,7 @@ instance Castable Exp Typed.Exp where
         (SPair, (e1, e2)) -> Typed.Exp l (cast e1, cast e2) sty key
         (SLambda, (xs, e)) -> Typed.Exp l (xs, cast e) sty key
         (SLet, (x, e1, e2)) -> Typed.Exp l (x, cast e1, cast e2) sty key
+        (SLetRec, (fs, e2)) -> Typed.Exp l (map (\(f,e1) -> (f, cast e1)) fs, cast e2) sty key
         (SAssume, (cond, e)) -> Typed.Exp l (cast cond, cast e) sty key
         (SBranch, (e1, e2)) -> Typed.Exp l (cast e1, cast e2) sty key
         (SFail, ()) -> Typed.Exp l arg sty key
@@ -331,6 +338,13 @@ convertL e@(Typed.Exp l arg sty key) =
             ContT $ \cont -> do
                 e2' <- runContT (convertL e2) cont
                 return $ mkLet x e1' e2' key
+        (SLetRec, (fs, e2)) -> do
+            fs' <- forM fs $ \(f,e1) -> do
+                e1' <- convertV e1
+                return (f, e1')
+            ContT $ \cont -> do
+                e2' <- runContT (convertL e2) cont
+                return $ mkLetRec fs' e2' key
         (SAssume, (cond, e1)) -> do
             cond' <- convertA cond
             e1' <- convertL e1
@@ -371,6 +385,12 @@ convertE e@(Typed.Exp l arg sty key) =
             e1' <- convertL e1
             e2' <- resetT $ convertE e2
             return $ mkLet x e1' e2' key
+        (SLetRec, (fs, e2)) -> do
+            fs' <- forM fs $ \(f,e1) -> do
+                e1' <- convertV e1
+                return (f, e1')
+            e2' <- resetT $ convertE e2
+            return $ mkLetRec fs' e2' key
         (SAssume, (e1,e2)) -> do
             e1' <- convertA e1
             e2' <- resetT $ convertE e2
@@ -458,6 +478,7 @@ valueOfExp (Exp l arg sty key) = case l of
     SPair    -> Just $ Value l arg sty key
     SLambda  -> Just $ Value l arg sty key
     SLet     -> Nothing
+    SLetRec  -> Nothing
     SAssume  -> Nothing
     SBranch  -> Nothing
     SFail    -> Nothing
@@ -502,6 +523,9 @@ freeVariables _scope _e = subE _scope _e S.empty
     sub _ scope SPair    (v1, v2) acc = subV scope v1 (subV scope v2 acc)
     sub _ scope SAssume  (cond, e) acc = subE scope e (subA scope cond acc)
     sub _ scope SLet     (x, e1, e2) acc = subE (S.insert x scope) e2 (subL scope e1 acc)
+    sub _ scope SLetRec  (fs, e2) acc = 
+        let scope' = foldr S.insert scope (map fst fs) in
+        subE scope' e2 $ foldl (\acc e1 -> subV scope' e1 acc) acc (map snd fs)
     sub _ scope SBranch  (e1, e2) acc = subE scope e1 (subE scope e2 acc)
     sub _ _     SFail    _ acc = acc
     sub _ _     SOmega   _ acc = acc
@@ -509,5 +533,3 @@ freeVariables _scope _e = subE _scope _e S.empty
     sub _ scope SLambda  (xs, e) acc = subE (foldr S.insert scope xs) e acc
     sub p scope SApp     (f, vs) acc = foldr (subV scope) (sub p scope SVar f acc) vs
 
-
-    

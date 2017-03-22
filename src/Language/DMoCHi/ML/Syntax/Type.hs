@@ -6,7 +6,7 @@ import Data.Hashable
 import Language.DMoCHi.Common.Util
 import Language.DMoCHi.ML.Syntax.Base(prettyBind)
 
-data TId = TId { _type :: Type, name :: Id.Id String }
+data TId = TId { _type :: !Type, name :: !(Id.Id String) }
 
 instance Eq TId where
     (==) = (==) `on` name

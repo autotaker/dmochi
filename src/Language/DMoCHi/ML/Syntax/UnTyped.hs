@@ -5,7 +5,8 @@ module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id
                                         , getKey
                                         , mkLiteral, mkVar, mkUnary, mkBinary
                                         , mkUnary', mkBinary'
-                                        , mkPair, mkLambda, mkApp, mkLet, mkAssume, mkIf
+                                        , mkPair, mkLambda, mkApp, mkLet, mkLetRec
+                                        , mkAssume, mkIf
                                         , mkBranch, mkBranch', mkFail, mkOmega, mkRand
                                         , module Language.DMoCHi.ML.Syntax.Base ) where
 import Language.DMoCHi.ML.Syntax.Base
@@ -19,7 +20,6 @@ type instance Ident Exp = String
 type instance Labels Exp = AllLabels
 type instance BinOps Exp = AllBinOps
 type instance UniOps Exp = AllUniOps
-
 
 type SynName = String
 
@@ -82,6 +82,10 @@ mkApp f es = Exp SApp (f, es) <$> freshKey
 {-# INLINE mkLet #-}
 mkLet :: MonadId m => String -> Exp -> Exp -> m Exp
 mkLet x e1 e2 = Exp SLet (x, e1, e2) <$> freshKey
+
+{-# INLINE mkLetRec #-}
+mkLetRec :: MonadId m => [(String, Exp)] -> Exp -> m Exp
+mkLetRec xs e = Exp SLetRec (xs, e) <$> freshKey
 
 {-# INLINE mkAssume #-}
 mkAssume :: MonadId m => Exp -> Exp -> m Exp
@@ -162,43 +166,3 @@ instance Pretty Program where
               vcat (map (\(key, ty) -> pPrint key <+> colon <+> pPrintPrec plevel 0 ty) annot)) $+$
         text "(*main*)" $+$
         pPrintPrec plevel 0 t
-        
-
-
-{-
-data Exp = Value Value 
-         | Let Id LetValue Exp 
-         | Assume Value Exp
-         | Lambda [Id] Exp
-         | Fail
-         | Branch Exp Exp deriving(Show)
-
-data Value = Var Id
-           | CInt Integer
-           | CBool Bool
-           | Pair Value Value
-           | App Id [Value]
-           | Op Op deriving(Show)
-
-data Op = OpAdd Value Value
-        | OpSub Value Value
-        | OpNeg Value
-        | OpEq  Value Value
-        | OpLt  Value Value
-        | OpGt  Value Value
-        | OpLte Value Value
-        | OpGte Value Value
-        | OpAnd Value Value
-        | OpOr  Value Value
-        | OpFst Value
-        | OpSnd Value
-        | OpNot Value deriving(Show)
-
-data LetValue = LValue Value
-              | LApp Id [Value]
-              | LExp Type Exp
-              | LRand
-              deriving(Show)
--}
-
-

@@ -186,6 +186,17 @@ inferE env (U.Exp l arg key) = do
             ty_x <- inferE env e1
             let env' = M.insert x ty_x env
             inferE env' e2
+        (SLetRec, (fs, e)) -> do
+            as <- forM fs $ \(f, U.Exp _ _ key_f) -> do
+                tvar_f <- U.TVar <$> Id.freshId "ty"
+                tell (DL.singleton (key_f, tvar_f))
+                return (f, tvar_f)
+            let env' = foldr (uncurry M.insert) env as
+            forM_ fs $ \(f, e1) -> do
+                let ty_f = env' M.! f
+                ty_f' <- inferE env' e1
+                unify ty_f ty_f'
+            inferE env' e
         (SAssume, (cond, e)) -> do
             ty <- inferE env cond
             unify ty U.TBool
@@ -288,6 +299,15 @@ convertE annot env (U.Exp l arg key) =
             e2'@(Exp _ _ sty2 _) <- convertE annot env' e2
             shouldBe (key,env) sty sty2
             return $ Exp l (TId sty1 x, e1', e2') sty key
+        (SLetRec, (fs, e)) -> do
+            let as = [ (f, annot M.! key) | (f, U.Exp _ _ key) <- fs ]
+                env' = foldr (uncurry M.insert) env as
+            fs' <- forM fs $ \(f, e1) -> do
+                e1' <- convertE annot env' e1
+                return (TId (getType e1') f, e1')
+            e'@(Exp _ _ sty' _) <- convertE annot env' e
+            shouldBe (key, env) sty sty'
+            return $ Exp l (fs', e') sty key
         (SAssume, (e1, e2)) -> do
             e1'@(Exp _ _ sty1 key1) <- convertE annot env e1
             shouldBe (key1,env) sty1 TBool

@@ -31,7 +31,7 @@ import Data.Type.Equality
 import Text.PrettyPrint.HughesPJClass
 
 data Label = Literal | Var | Binary | Unary | Pair 
-           | Lambda | App | Let 
+           | Lambda | App | Let | LetRec
            | Assume | If | Branch 
            | Fail | Omega | Rand
            deriving(Eq,Ord)
@@ -57,7 +57,7 @@ type family AllUniOps where
 
 type family AllLabels where
     AllLabels = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair,
-                   'Lambda, 'App, 'Let, 
+                   'Lambda, 'App, 'Let, 'LetRec, 
                    'Assume, 'If, 'Branch, 'Fail, 'Omega, 'Rand ]
 
 type family Elem (x :: k) (xs :: [k]) where
@@ -82,6 +82,7 @@ reflectLabel l = case l of
     SLambda -> Lambda 
     SApp -> App 
     SLet -> Let 
+    SLetRec -> LetRec
     SAssume -> Assume 
     SIf -> If 
     SBranch -> Branch 
@@ -168,6 +169,7 @@ type family WellFormed (l :: Label)  (e :: *)  (arg :: *) :: Constraint where
     WellFormed 'Lambda  e arg = arg ~ ([Ident e], e)
     WellFormed 'App     e arg = arg ~ (Ident e, [e])
     WellFormed 'Let     e arg = arg ~ (Ident e, e, e)
+    WellFormed 'LetRec  e arg = arg ~ ([(Ident e, e)], e)
     WellFormed 'Assume  e arg = arg ~ (e, e)
     WellFormed 'If      e arg = arg ~ (e, e, e)
     WellFormed 'Branch  e arg = arg ~ (e, e)
@@ -184,6 +186,7 @@ data SLabel (l :: Label) where
     SLambda  :: SLabel 'Lambda
     SApp     :: SLabel 'App
     SLet     :: SLabel 'Let
+    SLetRec  :: SLabel 'LetRec
     SAssume  :: SLabel 'Assume
     SIf      :: SLabel 'If
     SBranch  :: SLabel 'Branch
@@ -200,6 +203,7 @@ type family EqLabel a b where
     EqLabel 'Lambda 'Lambda = 'True
     EqLabel 'App 'App = 'True
     EqLabel 'Let 'Let = 'True
+    EqLabel 'LetRec 'LetRec = True
     EqLabel 'Assume 'Assume = 'True
     EqLabel 'If 'If = 'True
     EqLabel 'Branch 'Branch = 'True
@@ -349,6 +353,13 @@ genericPPrint pp pLevel prec op arg =
             text "let" <+> pPrintIdent pp prettyBind 0 x <+> text "=" 
                        <+> pPrintExp pp pLevel 0 e1 <+> text "in" $+$
             pPrintExp pp pLevel 0 e2
+        (SLetRec, (fs,e)) -> maybeParens (prec > 0) $
+            text "let rec" <+> 
+                vcat (punctuate (text "and") 
+                        [ pPrintIdent pp prettyBind 0 x <+> text "=" 
+                          <+> pPrintExp pp pLevel 0 e1 | (x,e1) <- fs ])
+                <+> text "in" $+$
+            pPrintExp pp pLevel 0 e
         (SAssume, (cond, e)) -> maybeParens (prec > 0) $
             text "assume" <+> pPrintExp pp pLevel 9 cond <> semi $+$
             pPrintExp pp pLevel 0 e
