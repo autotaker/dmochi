@@ -14,19 +14,23 @@ module Language.DMoCHi.Boolean.Syntax.Typed ( Symbol(..)
                             , f_branch
                             , f_branch_label
                             , f_let
+                            , f_letrec
                             , f_app
                             , f_proj
                             , f_not
                             , f_and
                             , f_or
                             , size
+                            , freeVariables
                             ) where
+
 
 import qualified Language.DMoCHi.Boolean.Syntax as B
 import Control.Monad
 import Control.Monad.Except
 import Language.DMoCHi.Common.Id
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Control.Monad.Identity
 data Symbol = Symbol { _sort :: Sort, name :: String } deriving(Show)
 
@@ -53,6 +57,7 @@ data Term = C Bool
           | T [Term]
           | Lam Symbol Term
           | Let Sort Symbol Term Term
+          | LetRec Sort [(Symbol, Term)] Term
           | App Sort Term Term
           | Proj Sort Index Size  Term
           | Assume Sort Term Term
@@ -76,6 +81,8 @@ f_branch_label :: Term -> Term -> Term
 f_branch_label e1 e2 = Branch (getSort e1) True e1 e2
 f_let :: Symbol -> Term -> Term -> Term
 f_let x ex e = Let (getSort e) x ex e
+f_letrec :: [(Symbol, Term)] -> Term -> Term
+f_letrec fs e = LetRec (getSort e) fs e
 f_app :: Term -> Term -> Term
 f_app e1 e2 = 
     let _ :-> s2 = getSort e1 in 
@@ -109,6 +116,7 @@ instance HasSort Term where
     getSort (T ts) = Tuple $ map getSort ts
     getSort (Lam x t) = getSort x :-> getSort t
     getSort (Let s _ _ _) = s
+    getSort (LetRec s _ _) = s
     getSort (App s _ _)   = s
     getSort (Proj s _ _ _) = s
     getSort (Assume s _ _) = s
@@ -134,6 +142,7 @@ toUnTyped (Program ds t0) = runIdentity doit where
         ds' <- mapM (\(x,t) -> (,) (name x) <$> convert t) ds 
         t0' <- convert t0
         return $ B.Program ds' t0'
+    convert :: Term -> Identity (B.Term ())
     convert (C b) = return $ B.C () b
     convert (V x) = return $ B.V () (name x)
     convert (T ts) = B.T () <$> mapM convert ts
@@ -148,6 +157,7 @@ toUnTyped (Program ds t0) = runIdentity doit where
     convert (Not t) = B.If () False <$> (convert t) <*> pure (B.C () False) <*> pure (B.C () True)
     convert (Fail x) = return $ B.Fail () (name x)
     convert (Omega x) = return $ B.Omega () (name x)
+    convert (LetRec _ _ _) = error "local recursion is unsupported"
     omega = do
         -- x <- freshId "Omega"
         return $ B.Omega () ""
@@ -173,6 +183,14 @@ tCheck (Program ds t0) = doit where
             check (getSort x) (getSort tx) "let var" ctx'
             go (M.insert x (getSort x) env) ctx' t
             check s (getSort t) "let body" ctx'
+        LetRec s fs t -> do
+            let as = map (\(f,_) -> (f,getSort f)) fs
+                env' = foldr (uncurry M.insert) env as
+            forM_ fs $ \(f, tf) -> do
+                go env' ctx' tf
+                check (getSort f) (getSort tf) "let rec var" ctx'
+            go env' ctx' t
+            check s (getSort t) "let rec body" ctx'
         App s t1 t2 -> do
             go env ctx' t1
             go env ctx' t2
@@ -220,6 +238,7 @@ sizeT (V _) = 1
 sizeT (T ts) = 1 + sum (map sizeT ts)
 sizeT (Lam _ t) = 1 + sizeT t
 sizeT (Let _ _ t1 t2) = 1 + sizeT t1 + sizeT t2
+sizeT (LetRec _ fs t2) = 1 + sum (map (sizeT. snd) fs) + sizeT t2
 sizeT (App _ t1 t2) = 1 + sizeT t1 + sizeT t2
 sizeT (Proj _ _ _ t) = 1 + sizeT t
 sizeT (Assume _ t1 t2) = 1 + sizeT t1 + sizeT t2
@@ -230,5 +249,23 @@ sizeT (Not t) = 1 + sizeT t
 sizeT (Fail _) = 1
 sizeT (Omega _) = 1
 
-
-
+freeVariables :: Term -> S.Set Symbol
+freeVariables t = case t of
+    C _ -> S.empty
+    V f -> S.singleton f
+    T ts -> S.unions (map freeVariables ts)
+    Lam x t -> S.delete x (freeVariables t)
+    Let _ x t1 t2 -> freeVariables t1 `S.union` (S.delete x (freeVariables t2))
+    LetRec _ fs t2 -> S.unions (map freeVariables (t2:values)) `S.difference` (S.fromList names)
+        where
+        (names,values) = unzip fs
+    App _ t1 t2 -> freeVariables t1 `S.union` freeVariables t2
+    Proj _ _ _ t -> freeVariables t
+    Assume _ t1 t2 -> freeVariables t1 `S.union` freeVariables t2
+    Branch _ _ t1 t2 -> freeVariables t1 `S.union` freeVariables t2
+    And t1 t2 -> freeVariables t1 `S.union` freeVariables t2
+    Or  t1 t2 -> freeVariables t1 `S.union` freeVariables t2
+    Not t     -> freeVariables t
+    Fail _    -> S.empty
+    Omega _   -> S.empty
+    

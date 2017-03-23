@@ -2,7 +2,6 @@
 module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id
                                         , Type(..), SynName 
                                         , SynonymDef(..), Program(..)
-                                        , getKey
                                         , mkLiteral, mkVar, mkUnary, mkBinary
                                         , mkUnary', mkBinary'
                                         , mkPair, mkLambda, mkApp, mkLet, mkLetRec
@@ -37,8 +36,8 @@ data Type = TInt | TBool | TPair Type Type
           | TVar String
           deriving(Eq,Show)
 
-getKey :: Exp -> UniqueKey
-getKey (Exp _ _ key) = key
+instance HasUniqueKey Exp where
+    getUniqueKey (Exp _ _ key) = key
 
 {-# INLINE mkLiteral #-}
 mkLiteral :: MonadId m => Lit -> m Exp

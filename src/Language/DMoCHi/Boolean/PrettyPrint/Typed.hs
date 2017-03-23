@@ -54,6 +54,7 @@ prec (And _ _)      = 3
 prec (Or  _ _)      = 2
 prec (Branch _ _ _ _) = 1
 prec (Let _ _ _ _)  = 0
+prec (LetRec _ _ _)  = 0
 prec (Lam _ _)      = 0
 prec (Assume _ _ _) = 0
 
@@ -80,6 +81,12 @@ pprintTerm p _t = parenPrec (prec _t) p $ case _t of
     Let _ x tx t ->
         text "let" <+> pprintSym x <+> text "=" $+$
             indent (pprintTerm 0 tx <+> text "in") $+$ 
+        pprintTerm 0 t
+    LetRec _ fs t ->
+        text "let rec" <+> 
+            vcat (punctuate (text "and") 
+                    [ pprintSym x <+> text "=" <+> pprintTerm 0 e1 | (x,e1) <- fs ])
+            <+> text "in" $+$
         pprintTerm 0 t
     Assume _ b t -> 
         text "assume" <+> pprintTerm 0 b <> semi $+$ 

@@ -188,13 +188,6 @@ abstValue tbl env cs pv v@(ML.Value l arg _ key) ty = case (l,arg) of
         Just av -> abstAValue env cs pv av ty
         Nothing -> error "abstValue"
 
-{-
-abstValue _ env cs pv (ML.Atomic av) ty = abstAValue env cs pv av ty
-abstValue tbl env cs pv (ML.Fun fdef) ty = fst <$> abstFunDef tbl env cs pv fdef (Just ty)
-abstValue tbl env cs pv (ML.Pair v1 v2) ty = 
-    let PPair _ ty1 ty2 = ty in
-    (\x y -> B.T [x,y]) <$> abstValue tbl env cs pv v1 ty1 <*> abstValue tbl env cs pv v2 ty2
--}
 abstTerm :: forall m. (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
 abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) = 
     let valueCase :: ML.Value -> m B.Term
@@ -211,6 +204,14 @@ abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) =
         (ML.SUnary, _) -> valueCase (ML.Value l arg sty key)
         (ML.SPair, _) -> valueCase (ML.Value l arg sty key)
         (ML.SLambda, _) -> valueCase (ML.Value l arg sty key)
+        (ML.SLetRec, (fs, e2)) -> do
+            let as = [ (f, ty_f) | (f,v_f) <- fs, let Left ty_f = tbl M.! (getUniqueKey v_f) ]
+                env' = foldr (uncurry M.insert) env as
+            fs' <- forM fs $ \(f, v_f) -> do
+                let Left ty_f = tbl M.! (getUniqueKey v_f)
+                t_f <- abstValue tbl env' cs pv v_f ty_f
+                return (toSymbol f ty_f, t_f)
+            B.f_letrec fs' <$> abstTerm tbl env' cs pv e2 (r,ty,qs)
         (ML.SLet, (x,(ML.LExp l1 arg1 sty1 key1),e2)) -> 
             let atomCase :: ML.Atom -> m B.Term
                 atomCase av = do
@@ -278,21 +279,6 @@ abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) =
         (ML.SBranch, (t1,t2)) -> do
             B.f_branch_label <$> abstTerm tbl env cs pv t1 (r,ty,qs)
                              <*> abstTerm tbl env cs pv t2 (r,ty,qs)
-                             {-
-        _ -> case ML.valueOfLExp e of 
-            Just v -> do
-                let subst = M.singleton r v
-                let ty' = substVPType subst ty
-                e1 <- abstValue tbl env cs pv v ty'
-                e2 <- abstFormulae cs pv (map (substVFormula subst) qs)
-                return $ B.T [e1,e2]
-            Nothing -> error "abstTerm: impossible"
-            -}
-
-{-
-        (ML.Value v -> do
-
--}
 
 addEq :: ML.TId -> ML.Atom -> Constraints -> Constraints
 addEq y v cs = (ML.mkBin ML.SEq (ML.mkVar y) v) :cs

@@ -46,6 +46,12 @@ data LExp where
     LExp :: (Normalized l LExp arg, Supported l (Labels LExp)) => 
                 SLabel l -> arg -> Type -> UniqueKey -> LExp
 
+instance HasUniqueKey Exp where
+    getUniqueKey (Exp _ _ _ key) = key
+instance HasUniqueKey Value where
+    getUniqueKey (Value _ _ _ key) = key
+
+
 instance Eq Atom where
     (==) (Atom l1 arg1 _) (Atom l2 arg2 _) =
         case (l1,l2) of

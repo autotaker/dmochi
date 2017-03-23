@@ -75,6 +75,7 @@ library
                        Language.DMoCHi.Boolean.Flow2,
                        Language.DMoCHi.Boolean.CPS,
                        Language.DMoCHi.Boolean.IType,
+                       Language.DMoCHi.Boolean.LiftRec,
                        Language.DMoCHi.Boolean.SelectiveCPS,
                        Language.DMoCHi.Boolean.Sort,
                        Language.DMoCHi.Boolean.SortCheck,

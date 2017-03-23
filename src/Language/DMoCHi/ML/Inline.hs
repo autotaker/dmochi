@@ -57,6 +57,14 @@ alphaE renv (Exp l arg sty key) =
             let renv' = M.insert x x' renv
             e2' <- alphaE renv' e2
             mkLet x' e1' e2' <$> freshKey
+        (SLetRec, (fs, e2)) -> do
+            names <- mapM (alphaTId . fst) fs
+            let renv' = foldr (uncurry M.insert) renv (zip (map fst fs) names)
+            fs' <- forM fs $ \(f,v_f) -> do
+                v_f' <- alphaV renv' v_f
+                return (renv' M.! f, v_f')
+            e2' <- alphaE renv' e2
+            mkLetRec fs' e2' <$> freshKey
         (SAssume, (cond,e)) -> do
             mkAssume (alphaA renv cond) <$> alphaE renv e <*> freshKey
         (SBranch, (e1,e2)) -> mkBranch <$> alphaE renv e1 
@@ -166,6 +174,12 @@ inlineE env (Exp l arg sty key) =
                 (SFail, _) -> pure $ mkFail sty key
                 (SOmega, _) -> pure $ mkOmega sty key
                 (SRand, _) -> defaultCase e1
+        (SLetRec, (fs, e2)) -> do
+            fs' <- forM fs $ \(f,v_f) -> do
+                v_f' <- inlineV env v_f 
+                return (f, v_f')
+            e2' <- inlineE env e2
+            pure $ mkLetRec fs' e2' key
         (SAssume, (cond,e)) -> do
             Just av <- atomOfValue <$> inlineA env cond 
             mkAssume av <$> inlineE env e <*> pure key
@@ -184,6 +198,7 @@ straightE (Exp l arg sty key) ty_cont cont =  -- ty_cont is the type of answer e
         (SLambda, _)  -> cont (LExp l arg sty key)
         (SPair, _)    -> cont (LExp l arg sty key)
         (SLet, (x, e1, e2)) -> mkLet x e1 <$> straightE e2 ty_cont cont <*> pure key
+        (SLetRec, (fs, e2)) -> mkLetRec fs <$> straightE e2 ty_cont cont <*> pure key
         (SAssume, (cond,e)) -> mkAssume cond <$> straightE e ty_cont cont <*> pure key
         (SBranch, (e1, e2)) -> cont (mkBranchL e1 e2 key)
         (SFail, _) -> pure $ mkFail ty_cont key
@@ -255,105 +270,3 @@ inline _limit prog = doit
         return ((f,key,xs,e') : fs', inlineEnv')
     go [] inlineEnv = return ([], inlineEnv)
 
-    
-    {-
--- Let ty x (LExp l e0) でe0がstraight-line programの時にletのネストを潰す。
-simplify :: Exp -> Exp
-simplify (Value v) = Value v
-simplify (Let ty x (LExp l e0) e) = 
-    let e0' = simplify e0
-        e'  = simplify e
-    in case straight e0' ty (\lv -> Let ty x lv e') of
-        Just e'' -> e''
-        Nothing  -> Let ty x (LExp l e0') e'
-simplify (Let ty x (LFun fdef) e) =
-    let fdef' = FunDef (ident fdef) (args fdef) (simplify $ body fdef) in
-    Let ty x (LFun fdef') (simplify e)
-simplify (Let ty x lv e) = Let ty x lv (simplify e)
-simplify (Assume ty v e) = Assume ty v (simplify e)
-simplify (Fail ty) = Fail ty
-simplify (Fun fdef) = Fun fdef{ body = simplify $ body fdef }
-simplify (Branch ty l e1 e2) = Branch ty l (simplify e1) (simplify e2)
-
-straight :: Exp -> Type -> (LetValue -> Exp) -> Maybe Exp
-straight (Value v) _ cont = Just (cont (LValue v))
-straight (Let _ x lv e) ty cont = Let ty x lv <$> straight e ty cont
-straight (Assume _ v e) ty cont = Assume ty v <$> straight e ty cont
-straight (Fail _) _ _ = Nothing
-straight (Fun fdef) _ cont = Just (cont (LFun fdef))
-straight (Branch _ l e1 e2) ty cont = 
-    Branch ty l <$> straightFail e1 ty <*> straight e2 ty cont <|>
-    Branch ty l <$> straight e1 ty cont <*> straightFail e2 ty
-
-straightFail :: Exp -> Type -> Maybe Exp
-straightFail (Fail _) ty = Just (Fail ty)
-straightFail (Let _ l lv e) ty = Let ty l lv <$> straightFail e ty
-straightFail (Assume _ lv e) ty = Assume ty lv <$> straightFail e ty
-straightFail _ _ = Nothing
-
--- redundant let-expression elimination
-elimRedundantF :: FunDef -> FunDef
-elimRedundantF (FunDef l x e) = FunDef l x (elimRedundantE e)
-
-elimRedundantE (Value v) = Value v
-elimRedundantE (Fun fdef) = Fun (elimRedundantF fdef)
-elimRedundantE (Let ty x lv e) | redundant = e'
-                               | otherwise = Let ty x lv' e'
-    where
-    e' = elimRedundantE e
-    fv = freeVariables S.empty e'
-    redundant = atomic && S.notMember x fv
-    (lv', atomic) = case lv of
-        LValue v -> (LValue v, True)
-        LFun fdef -> (LFun (elimRedundantF fdef), True)
-        LExp l e1 -> (LExp l (elimRedundantE e1), False)
-        LApp _ _ _ _ -> (lv, False)
-        LRand -> (lv, False)
-elimRedundantE (Assume ty v e) = Assume ty v (elimRedundantE e)
-elimRedundantE (Fail ty) = Fail ty
-elimRedundantE (Branch ty l e1 e2) = Branch ty l (elimRedundantE e1) (elimRedundantE e2)
-
-elimIndirectionF :: M.Map Id Id -> FunDef -> FunDef
-elimIndirectionF env (FunDef l x e) = FunDef l x (elimIndirection env e)
-elimIndirection :: M.Map Id Id -> Exp -> Exp
-elimIndirection env (Value v) = Value $ renameV env v
-elimIndirection env (Fun fdef) = Fun (elimIndirectionF env fdef)
-elimIndirection env (Let _ x (LValue (Var y)) e) = elimIndirection (M.insert x (rename env y) env) e
-elimIndirection env (Let ty x lv e) = Let ty x lv' e' where
-    lv' = case lv of
-        LValue v -> LValue (renameV env v)
-        LApp ty l f vs -> LApp ty l (rename env f) (map (renameV env) vs)
-        LFun fdef -> LFun (elimIndirectionF env fdef)
-        LExp l e -> LExp l (elimIndirection env e)
-        LRand -> LRand
-    e' = elimIndirection env e
-elimIndirection env (Assume ty v e) = Assume ty (renameV env v) (elimIndirection env e)
-elimIndirection _ (Fail ty) = Fail ty
-elimIndirection env (Branch ty l e1 e2) = 
-    Branch ty l (elimIndirection env e1) (elimIndirection env e2)
-
-rename :: M.Map Id Id -> Id -> Id
-rename env f = 
-    case M.lookup f env of 
-        Just g -> g 
-        Nothing -> f
-
-renameV :: M.Map Id Id -> Value -> Value
-renameV env = go
-    where 
-    go (Var x) = Var (rename env x)
-    go (CInt i) = CInt i
-    go (CBool b) = CBool b
-    go (Pair v1 v2) = Pair (go v1) (go v2)
-    go (Op op) = Op $ goOp op
-    goOp (OpAdd v1 v2) = OpAdd (go v1) (go v2)
-    goOp (OpSub v1 v2) = OpSub (go v1) (go v2)
-    goOp (OpEq v1 v2) = OpEq (go v1) (go v2)
-    goOp (OpLt v1 v2) = OpLt (go v1) (go v2)
-    goOp (OpLte v1 v2) = OpLte (go v1) (go v2)
-    goOp (OpAnd v1 v2) = OpAnd (go v1) (go v2)
-    goOp (OpOr v1 v2) = OpOr (go v1) (go v2)
-    goOp (OpFst ty v) = OpFst ty (go v)
-    goOp (OpSnd ty v) = OpSnd ty (go v)
-    goOp (OpNot v) = OpNot (go v)
-    -}

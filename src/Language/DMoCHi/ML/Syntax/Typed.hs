@@ -35,6 +35,8 @@ type instance Ident Exp = TId
 
 instance HasType Exp where
     getType (Exp _ _ sty _) = sty
+instance HasUniqueKey Exp where
+    getUniqueKey (Exp _ _ _ key) = key
 
 instance Pretty Exp where
     pPrintPrec plevel prec (Exp op arg sty key) =

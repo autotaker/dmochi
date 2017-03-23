@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Language.DMoCHi.Boolean.HORS where
-import Language.DMoCHi.Boolean.Syntax.Typed 
+import Language.DMoCHi.Boolean.Syntax.Typed hiding(freeVariables)
 import Language.DMoCHi.Boolean.CPS(cps,elimTupleP,STerm(..),Simple(..))
 import Control.Monad.State
 import Control.Arrow

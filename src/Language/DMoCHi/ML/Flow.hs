@@ -98,11 +98,19 @@ genCTerm env l (Exp tag arg sty key) =
                 (SRand, _) -> do
                     let env' = M.insert x LBase env
                     genCTerm env' l e2
+        (SLetRec, (fs,e2)) -> do
+            let as = [ (f, LKey $ KFun (getUniqueKey v_f)) | (f,v_f) <- fs ]
+            let env' = foldr (uncurry M.insert) env as
+            forM_ fs $ \(_,v_f) -> do
+                let (key_f,xs,e_f) = case v_f of
+                        Value SLambda (xs,e_f) _ key_f -> (key_f, xs, e_f)
+                        _ -> error "unexpected"
+                genCFunDef env' (key_f,xs,e_f)
+            genCTerm env' l e2
         (SAssume, (_,e)) -> genCTerm env l e 
         (SFail, _) -> return ()
         (SOmega, _) -> return ()
         (SBranch, (e1, e2)) -> genCTerm env l e1 >> genCTerm env l e2
-
 
 genCValue :: Env -> Value -> W Label
 genCValue env (Value tag arg sty key) =

@@ -175,7 +175,8 @@ initTypeMap (Program fs t0) = do
             gatherE fv (Exp l arg _ _) = gather (Proxy :: Proxy Exp) fv l arg
             gatherV :: [TId] -> Value -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
             gatherV fv (Value l arg _ _) = gather (Proxy :: Proxy Value) fv l arg
-            gather :: (Ident e ~ TId, Normalized l e arg)  => Proxy e -> [TId] -> SLabel l -> arg -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
+            gather :: (Ident e ~ TId, Normalized l e arg)  => 
+                      Proxy e -> [TId] -> SLabel l -> arg -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
             gather _ fv l arg = case (l,arg) of
                 (SLiteral, _) -> return ()
                 (SVar, _)     -> return ()
@@ -200,6 +201,13 @@ initTypeMap (Program fs t0) = do
                         SOmega   -> genType 
                         SFail    -> genType) :: WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
                     gatherE (x : fv) e2
+                (SLetRec, (fs, e2)) -> do
+                    let fv' = map fst fs ++ fv
+                    forM_ fs $ \(_, v) -> do
+                        ty <- genPType (getType v) 
+                        tell (DL.singleton (getUniqueKey v, Left ty, fv'))
+                        gatherV fv' v
+                    gatherE fv' e2
                 (SApp, (_, vs)) -> mapM_ (gatherV fv) vs
                 (SAssume, (_,e)) -> gatherE fv e
                 (SBranch, (e1, e2)) -> gatherE fv e1 >> gatherE fv e2

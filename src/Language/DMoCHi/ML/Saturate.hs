@@ -163,6 +163,13 @@ calcContextE env (Exp l arg sty key) tau =
                     ask >>= \ctx -> liftIO (H.insert (ctxRtnTypeTbl ctx) key (PInt, []))
                     calcContextE (M.insert x PInt env) e2 tau
                 (SBranch, _) -> exprCase (Exp l1 arg1 sty1 key1)
+        (SLetRec, (fs, e2)) -> do
+            tbl <- ctxTypeMap <$> ask
+            let as = [ (f, ty_f) | (f,v_f) <- fs, 
+                                   let Left ty_f = tbl M.! getUniqueKey v_f ]
+                env' = foldr (uncurry M.insert) env as
+            forM_ fs $ \(f,v_f) -> calcContextV env' v_f (env' M.! f)
+            calcContextE env' e2 tau
         (SAssume, (_, e)) -> calcContextE env e tau
         (SBranch, (e1, e2)) -> calcContextE env e1 tau >> calcContextE env e2 tau
         (SFail, _) -> return ()
@@ -231,6 +238,16 @@ pprintContext prog = do
                             d_ps = hsep $ punctuate comma $ map pPrint ps
                         exprCase d_e1 
                     SRand    -> exprCase (pPrint e1)
+            (SLetRec, (fs, e2)) -> do
+                d_fs <- forM fs $ \(f,v_f) -> do
+                    d_f <- pprintV 0 v_f
+                    return $ pPrint (name f) <+> text "=" <+> d_f
+                d_e2 <- pprintE e2
+                return $
+                    text "let rec" <+> 
+                        vcat (punctuate (text "and") d_fs)
+                        <+> text "in" $+$
+                    d_e2
             (SAssume, (cond, e)) -> do
                 d_e <- pprintE e
                 return $ text "assume" <+> pPrintPrec prettyNormal 9 cond <> text ";" $+$ d_e

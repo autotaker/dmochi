@@ -26,6 +26,9 @@ type instance Labels Exp = AllLabels
 type instance BinOps Exp = AllBinOps
 type instance UniOps Exp = AllUniOps
 
+instance HasUniqueKey Exp where
+    getUniqueKey (Exp _ _ key) = key
+
 instance Show AlphaError where
     show (UndefinedVariable s) = "UndefinedVariable: "++s
     show (MultipleDefinition fs) = "MultipleDefinition: "++show fs

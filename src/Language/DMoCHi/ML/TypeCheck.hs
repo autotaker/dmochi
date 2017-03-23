@@ -12,7 +12,7 @@ import Language.DMoCHi.ML.Syntax.Type
 import qualified Language.DMoCHi.ML.Alpha as U
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U(SynName, SynonymDef(..), Type(..), Lit(..))
 import qualified Language.DMoCHi.Common.Id as Id
-import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey, FreshIO)
+import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey, FreshIO, getUniqueKey)
 import Language.DMoCHi.ML.DesugarSynonym
 --import Debug.Trace
 
@@ -251,20 +251,23 @@ convertE annot env (U.Exp l arg key) =
             shouldBe (key,env) sty sty'
             return $ Exp l (TId sty' x) sty key
         (SBinary, BinArg op e1 e2) ->  do
-            e1'@(Exp _ _ sty1 key1) <- convertE annot env e1
-            e2'@(Exp _ _ sty2 key2) <- convertE annot env e2
-            typeOfBinOp env op sty1 key1 sty2 key2 (\sty' -> do
+            e1' <- convertE annot env e1
+            e2' <- convertE annot env e2
+            typeOfBinOp env op 
+                        (getType e1') (getUniqueKey e1') 
+                        (getType e2') (getUniqueKey e2') $ \sty' -> do
                 shouldBe (key,env) sty sty'
-                return $ Exp l (BinArg op e1' e2') sty key)
+                return $ Exp l (BinArg op e1' e2') sty key
         (SUnary, UniArg op e1) ->  do
-            e1'@(Exp _ _ sty1 key1) <- convertE annot env e1
-            typeOfUniOp env op sty1 key1 (\sty' -> do
+            e1' <- convertE annot env e1
+            typeOfUniOp env op 
+                        (getType e1') (getUniqueKey e1') $ \sty' -> do
                 shouldBe (key,env) sty sty'
-                return $ Exp l (UniArg op e1') sty key)
+                return $ Exp l (UniArg op e1') sty key
         (SPair, (e1, e2)) -> do
-            e1'@(Exp _ _ sty1 _) <- convertE annot env e1
-            e2'@(Exp _ _ sty2 _) <- convertE annot env e2
-            shouldBe (key,env) sty (TPair sty1 sty2)
+            e1' <- convertE annot env e1
+            e2' <- convertE annot env e2
+            shouldBe (key,env) sty (TPair (getType e1') (getType e2'))
             return $ Exp l (e1', e2') sty key
         (SLambda, (xs, e1)) -> do
             case sty of
@@ -275,8 +278,8 @@ convertE annot env (U.Exp l arg key) =
                         throwError $ ArityMisMatch (key,env) n m
                     let env' = foldr (uncurry M.insert) env $ zip xs ty_args
                         ys = zipWith (\x ty -> TId ty x) xs ty_args
-                    e1'@(Exp _ _ sty1 key1) <- convertE annot env' e1
-                    shouldBe (key1,env) sty1 sty1'
+                    e1' <- convertE annot env' e1
+                    shouldBe (getUniqueKey e1',env) (getType e1') sty1'
                     return $ Exp l (ys, e1') sty key
                 _ -> throwError $ OtherError $ "This function expected to have type " ++ show sty
         (SApp, (f, es)) -> do
@@ -284,8 +287,8 @@ convertE annot env (U.Exp l arg key) =
                 sty_f@(TFun tys sty') -> do
                     es' <- mapM (convertE annot env) es
                     let g :: Exp -> Type -> ExceptT TypeError FreshIO ()
-                        g (Exp _ _ sty_i key_i) sty_i' = 
-                            void $ shouldBe (key_i,env) sty_i sty_i'
+                        g e_i sty_i' = 
+                            void $ shouldBe (getUniqueKey e_i,env) (getType e_i) sty_i'
                     zipWithM_ g es' tys
                     let n = length es
                         m = length tys
@@ -294,39 +297,39 @@ convertE annot env (U.Exp l arg key) =
                     return $ Exp l (TId sty_f f, es') sty key
                 sty_f -> throwError $ OtherError $ "App" ++ show sty_f
         (SLet, (x, e1, e2)) -> do
-            e1'@(Exp _ _ sty1 _) <- convertE annot env e1
-            let env' = M.insert x sty1 env
-            e2'@(Exp _ _ sty2 _) <- convertE annot env' e2
-            shouldBe (key,env) sty sty2
-            return $ Exp l (TId sty1 x, e1', e2') sty key
+            e1' <- convertE annot env e1
+            let env' = M.insert x (getType e1') env
+            e2' <- convertE annot env' e2
+            shouldBe (key,env) sty (getType e2')
+            return $ Exp l (TId (getType e1') x, e1', e2') sty key
         (SLetRec, (fs, e)) -> do
-            let as = [ (f, annot M.! key) | (f, U.Exp _ _ key) <- fs ]
+            let as = [ (f, annot M.! (getUniqueKey f_e)) | (f, f_e) <- fs ]
                 env' = foldr (uncurry M.insert) env as
             fs' <- forM fs $ \(f, e1) -> do
                 e1' <- convertE annot env' e1
                 return (TId (getType e1') f, e1')
-            e'@(Exp _ _ sty' _) <- convertE annot env' e
-            shouldBe (key, env) sty sty'
+            e' <- convertE annot env' e
+            shouldBe (key, env) sty (getType e')
             return $ Exp l (fs', e') sty key
         (SAssume, (e1, e2)) -> do
-            e1'@(Exp _ _ sty1 key1) <- convertE annot env e1
-            shouldBe (key1,env) sty1 TBool
-            e2'@(Exp _ _ sty2 _) <- convertE annot env e2
-            shouldBe (key,env) sty sty2
+            e1' <- convertE annot env e1
+            shouldBe (getUniqueKey e1',env) (getType e1') TBool
+            e2' <- convertE annot env e2
+            shouldBe (key,env) sty (getType e2')
             return $ Exp l (e1', e2') sty key
         (SIf, (e1, e2, e3)) -> do
-            e1'@(Exp _ _ sty1 key1) <- convertE annot env e1
-            shouldBe (key1,env) sty1 TBool
-            e2'@(Exp _ _ sty2 _) <- convertE annot env e2
-            shouldBe (key,env) sty sty2
-            e3'@(Exp _ _ sty3 _) <- convertE annot env e3
-            shouldBe (key,env) sty sty3
+            e1' <- convertE annot env e1
+            shouldBe (getUniqueKey e1',env) (getType e1') TBool
+            e2' <- convertE annot env e2
+            shouldBe (key,env) sty (getType e2')
+            e3' <- convertE annot env e3
+            shouldBe (key,env) sty (getType e3')
             return $ Exp l (e1', e2', e3') sty key
         (SBranch, (e2, e3)) -> do
-            e2'@(Exp _ _ sty2 _) <- convertE annot env e2
-            shouldBe (key,env) sty sty2
-            e3'@(Exp _ _ sty3 _) <- convertE annot env e3
-            shouldBe (key,env) sty sty3
+            e2' <- convertE annot env e2
+            shouldBe (key,env) sty (getType e2')
+            e3' <- convertE annot env e3
+            shouldBe (key,env) sty (getType e3')
             return $ Exp l (e2', e3') sty key
         (SFail, ()) -> return $ Exp l () sty key
         (SOmega, ()) -> return $ Exp l () sty key

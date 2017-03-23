@@ -133,6 +133,17 @@ elimCastTerm tbl env (Exp l arg sty key) tau =
     (SPair, _)    -> valueCase (Value l arg sty key)
     (SLambda, _)  -> valueCase (Value l arg sty key)
     (SLet, (x, e1, e2)) -> elimCastLet tbl env x e1 e2 key tau
+    (SLetRec, (fs, e2)) -> do
+        let as = map (\(f,v_f) -> 
+                    let Left ty_f = tbl M.! (getUniqueKey v_f) in 
+                    (f, ty_f)) fs
+        let env' = foldr (uncurry M.insert) env as 
+        fs' <- forM fs $ \(f, v_f) -> do
+            let key_f = getUniqueKey v_f
+                Left ty_f = tbl M.! key_f
+            v_f' <- elimCastValue tbl env' v_f ty_f
+            return (f, v_f')
+        mkLetRec fs' <$> elimCastTerm tbl env' e2 tau <*> pure key
     (SAssume, (p, e1)) -> do
         e1' <- elimCastTerm tbl env e1 tau
         return $ mkAssume p e1' key

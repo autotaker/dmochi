@@ -49,7 +49,7 @@ data ReturnInfo = ReturnInfo { rcallId :: CallId -- 関数呼び出しの識別�
 data LetExpInfo = LetExpInfo { lCallId :: CallId -- 評価時の親関数呼び出し識別子
                              , lLabel :: UniqueKey -- 呼び出されたlet式のラベル
                              , evalValue :: Maybe SValue -- 評価結果(ないときはfailを表す)
-                             , lContext :: CompTreePath
+                             , lContext :: CompTreePath  -- let式の計算木での位置
                              } deriving Show
 
 -- 分岐情報
@@ -100,8 +100,6 @@ instance ML.HasType Accessor where
     getType (ASnd v) = 
         let ML.TPair _ b = ML.getType v in b
 
-
-
 instance ML.HasType SValue where
     getType (SVar x)  = ML.getType x
     getType (Int _)   = ML.TInt
@@ -117,7 +115,6 @@ instance ML.HasType SValue where
     getType (Not _) = ML.TBool
     getType (Neg _) = ML.TInt
     getType (C cls)   = ML.getType cls
-
 
 instance Show SValue where
     showsPrec d (SVar x) | d >= 3 = showString (show $ ML.name x)
@@ -168,7 +165,6 @@ type Env = M.Map Id SValue
 type Id = ML.TId
 
 -- type Log = ([Constraint],[CallInfo],[ClosureInfo],[ReturnInfo],([BranchInfo],[LetExpInfo]))
-
 data Log = Log { logCnstr :: [Constraint]
                , logCall :: [CallInfo]
                , logClosure :: [ClosureInfo]
@@ -271,6 +267,18 @@ symbolicExec prog trace = do
                     Nothing -> do
                         let t = CompTree _e [(1,info,t1)]
                         return (t, Nothing)
+            (ML.SLetRec, (fs,e)) -> do
+                env' <- mfix $ \genv -> do
+                    es <- forM fs $ \(f,v) -> do
+                        let (key,xs,e) = case v of
+                                ML.Value ML.SLambda (xs,e) _ key -> (key,xs,e)
+                                _ -> error "unexpected"
+                        c <- genClosure callSite (key,xs,e) genv
+                        return (f, bindCls callSite f (C c))
+                    return $ foldr (uncurry M.insert) env es
+                (t2,r) <- eval callSite env' (1:path) e
+                let binds = [(f, env' M.! f) | (f,_) <- fs ]
+                return (CompTree _e [(1,InfoBind binds, t2)], r)
             (ML.SAssume, (v, e)) -> do
                 let phi = evalA env v
                 constrain phi

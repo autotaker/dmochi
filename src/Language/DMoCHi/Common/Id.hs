@@ -1,5 +1,5 @@
 {-# Language FlexibleContexts, FlexibleInstances, UndecidableInstances #-}
-module Language.DMoCHi.Common.Id(UniqueKey, FreshT, runFreshT, Fresh, FreshIO, runFresh, Id
+module Language.DMoCHi.Common.Id(UniqueKey, FreshT, runFreshT, Fresh, FreshIO, runFresh, Id, HasUniqueKey(..)
                                 , MonadId(..), freshId, reserved, reservedKey, maybeReserved, fromReserved
                                 , getName
                                 , refresh, identify) where
@@ -63,6 +63,11 @@ instance (Hashable a) => Hashable (Id a) where
     hashWithSalt salt (Id key _) =
         salt `hashWithSalt` key
          
+class HasUniqueKey a where
+    getUniqueKey :: a -> UniqueKey
+
+instance HasUniqueKey (Id a) where
+    getUniqueKey (Id i _) = i
 
 freshId :: MonadId m => String -> m String
 freshId s = do

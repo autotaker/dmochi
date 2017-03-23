@@ -4,7 +4,7 @@ import Text.Parsec
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Expr
 import Language.DMoCHi.ML.Syntax.UnTyped 
-import Language.DMoCHi.Common.Id(UniqueKey, FreshIO)
+import Language.DMoCHi.Common.Id(UniqueKey, FreshIO, getUniqueKey)
 import Data.Either
 import Control.Monad.IO.Class
 
@@ -143,7 +143,7 @@ letP = (do x <- reserved "let" *> identifier
            mkLet x e1 e2) <?> "let"
     where sub = (do ty <- reservedOp ":" *> typeP 
                     e1 <- reservedOp "=" *> exprP
-                    let !key = getKey e1
+                    let !key = getUniqueKey e1
                     modifyState ((key, ty):)
                     return e1) <|> 
                 (reservedOp "=" *> (valueP <|> (reservedOp "*" >> mkRand)))

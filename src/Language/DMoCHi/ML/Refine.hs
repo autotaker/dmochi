@@ -65,18 +65,10 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
     clsTbl = IM.fromList [ (unClosureId (clsId (closure i)), i) | i <- closures ]
     rtnTbl :: IM.IntMap ReturnInfo
     rtnTbl = IM.fromList [ (unCallId (rcallId i), i) | i <- returns ]
-    {-
-    callTbl :: IM.IntMap CallInfo
-    callTbl = IM.fromList [ (unCallId (callId i), i) | i <- calls ]
-    -}
     clsLookup :: ClosureId -> ClosureInfo
     clsLookup j = clsTbl IM.! unClosureId j
     rtnLookup :: CallId -> ReturnInfo
     rtnLookup j = rtnTbl IM.! unCallId j
-    {-
-    callLookup :: CallId -> CallInfo
-    callLookup j = callTbl IM.! unCallId j
-    -}
     isBase x = case ML.getType x of 
         (ML.TFun _ _) -> False
         _ -> True
@@ -90,6 +82,10 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
     genRType label env = gen (Meta label []) (foldr push [] env)
     genRPostType label path = genPost (Meta label []) path . foldr push []
 
+    -- gen meta env acsr
+    --  meta :: 述語の名前につけるメタ情報
+    --  env  :: 変数スコープ
+    --  acsr :: この関数がどのような値として呼ばれているかを表す識別子
     gen meta env acsr =
         case ML.getType acsr of
             ML.TBool -> return RBool
@@ -109,7 +105,7 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
                         -- 変数スコープの例
                         -- fの中でxが参照できたり、sの第一要素の中でsの第二要素が参照できることに注意
                         -- { x : int, f : { y : int | P(y,x) } -> { r : int | Q(r,y,x) } | U(x) } -> 
-                        --      { s : ({ z : int | R(z,s,x) } -> { t : int | S(t,z,s,z) }) * int | T(x,s) }
+                        --      { s : ({ z : int | R(z,s.snd,x) } -> { t : int | S(t,z,s.snd,x) }) * int | T(x,s.snd) }
                         arg_tys <- forM (zip [(0::Int)..] xs) $ \(i,xi) ->
                             gen (meta_add meta ("pre_" ++ show i)) env' (AVar j xi)
                         p1 <- freshInt
@@ -124,81 +120,6 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
         p0 <- freshInt
         return $ RPostType rj pty (Formula meta p0 path env')
                                                            
-
-{-
-genRTypeFactory :: MonadId m => [CallInfo] -> [ClosureInfo] -> [ReturnInfo] -> RTypeGen m
-genRTypeFactory calls closures returns = (genRType, genRPostType)
-    where
-    genRType :: MonadId m => String -> [Id] -> SValue -> m RType
-    genRType label = gen 0 (Meta label []) . foldr push []
-    genRPostType :: MonadId m => String -> CompTreePath -> [Id] -> Maybe SValue -> m RPostType
-    genRPostType label path = genPost 0 (Meta label []) path . foldr push []
-    rtnTbl = IM.fromList [ (unCallId (rcallId info),info) | info <- returns ]
-    meta_add (Meta i l) s = Meta i (s:l)
-    gen _ _ _ (SVar x) = case ML.getType x of
-        ML.TInt -> pure RInt
-        ML.TBool -> pure RBool
-        ty -> error $ "gen: unexpected type: " ++ show ty
-    gen _ _ _ (Int _) = pure RInt
-    gen _ _ _ (Bool _) = pure RBool
-    gen lim meta env (P v1 v2) = RPair <$> gen lim (meta_add meta "fst") env v1 
-                                       <*> gen lim (meta_add meta "snd") env v2
-    gen _ _ _ (Add _ _) = pure RInt
-    gen _ _ _ (Sub _ _) = pure RInt
-    gen _ _ _ (Eq _ _) = pure RBool
-    gen _ _ _ (Lt _ _) = pure RBool
-    gen _ _ _ (Lte _ _) = pure RBool
-    gen _ _ _ (And _ _) = pure RBool
-    gen _ _ _ (Or _ _) = pure RBool
-    gen _ _ _ (Not _) = pure RBool
-    gen lim meta env (C (Cls fdef i _ acsrs)) = do  
-        let cs = [ (callId info, callContext info)
-                               | info <- calls, 
-                                 calleeId info == i,
-                                 unCallId (callId info) > lim
-                                 ] -- TODO Improve Impl
-            xs  = ML.args fdef
-            ML.TFun ty_args ty_ret = ML.getType fdef
-        as <- forM cs $ \(j,path) -> do
-            let ReturnInfo _ arg_vs mv = rtnTbl IM.! (unCallId j)
-            let xsj = xs -- [ ML.Id ty_arg (ML.name x) | (x,ty_arg) <- zip xs ty_args ]
-            let lim' = unCallId j
-            let env' = (foldl' (flip push) env xsj)
-            arg_tys <- forM (zip [(0::Int)..] arg_vs) $ \(i,arg_v) -> 
-                            gen lim' (meta_add meta ("pre_"++show i)) env' arg_v
-            posTy <- genPost lim' (meta_add meta "post") path env' mv
-            p1 <- freshInt
-            return (unCallId j,RFunAssoc xsj arg_tys (Formula (meta_add meta "pre") p1 path env') posTy)
-        return $ RFun $ IM.fromList as
-    genPost lim meta path env mv = case mv of
-        Just v -> do
-            rj <- ML.Id (ML.getType v) <$> freshId "r"
-            let env' = push rj env
-            pty <- gen lim meta env' v
-            p0 <- freshInt
-            return $ RPostType rj pty (Formula meta p0 path env')
-        Nothing -> return RPostTypeFailure
-
-    isBase x = case ML.getType x of 
-        (ML.TFun _ _) -> False
-        _ -> True
-    flatten (SVar x) env | isBase x  = (SVar x) : env
-                         | otherwise = env
-    flatten (P v1 v2) env = flatten v1 (flatten v2 env)
-    push = flatten . decompose
-    -}
-
-{-
-evalRType :: M.Map Id (RType,SValue) -> ML.Value -> (RType,SValue)
-evalRType env = go where
-    go (ML.Atomic v) = evalRTypeA env v
-    go (ML.Pair v1 v2) = 
-        let (r1,sv1) = go v1 
-            (r2,sv2) = go v2 in
-        (RPair r1 r2, P sv1 sv2)
-    go (ML.Fun fdef) = 
-    -}
-        
 evalRTypeA :: M.Map Id (RType,SValue) -> ML.Atom -> (RType,SValue)
 evalRTypeA env = go  where
     go (ML.Atom l arg _) = case (l, arg) of
@@ -282,18 +203,10 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
 
         let callTbl :: M.Map (CallId,UniqueKey) CallId
             callTbl = M.fromList [ ((pcallId info,callLabel info),callId info)| info <- calls ]
-            {-
-            closureMap :: M.Map (CallId,Int) ClosureId
-            closureMap = M.fromList [ ((cCallId info,label info),clsId $ closure info)| info <- closures ]
-            -}
             branchMap :: M.Map (CallId,UniqueKey) Bool
             branchMap = M.fromList [ ((bCallId info,branchId info),direction info) | info <- branches ]
             letMap :: M.Map (CallId, UniqueKey) (CompTreePath, Maybe SValue)
             letMap = M.fromList [ ((lCallId info,lLabel info),(lContext info,evalValue info)) | info <- letexps ]
-        genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,_) -> do
-            ty <- gen (show $ ML.name f) [] (AVar (CallId 0) f)
-            return (f,(ty,decompose f))
-        dump "RefineEnv" (M.assocs genv')
 
         let showC :: Either SValue LFormula -> String
             showC (Left sv) = show sv
@@ -387,6 +300,18 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                                 let x' = decompose x 
                                     env' = M.insert x (RInt,x') env
                                 check env' cs callSite e tau
+                    (ML.SLetRec, (fs, e)) -> do
+                        as <- forM fs $ \(f,_) -> do
+                            ty <- gen (show $ ML.name f)  (M.keys env) (AVar callSite f)
+                            return (f, (ty, decompose f))
+                        let env' = foldr (uncurry M.insert) env as
+                        forM_ fs $ \(f, v) -> do
+                            let (key_f,xs,e_f) = case v of
+                                    ML.Value ML.SLambda (xs,e_f) _ key_f -> (key_f,xs,e_f)
+                                    _ -> error "unexpected"
+                            theta <- checkFunDef env' cs callSite (key_f,xs,e_f) (fst $ env' M.! f)
+                            addFuncBinding key_f theta
+                        check env' cs callSite e tau
                     (ML.SAssume, (v,e)) -> do
                         let (_,sv) = evalRTypeA env v
                         let cs' = Left sv : cs
@@ -462,6 +387,11 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
             failClause cs = do
                 liftIO $ printf "Clause: %s ==> _|_\n" (showCs cs) 
                 addClause ([10],genClause Nothing cs)
+        
+        genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,_) -> do
+            ty <- gen (show $ ML.name f) [] (AVar (CallId 0) f)
+            return (f,(ty,decompose f))
+        dump "RefineEnv" (M.assocs genv')
         forM_ (ML.functions prog) $ \(f,key,xs,e) -> do
             theta <- checkFunDef genv' [] (CallId 0) (key,xs,e) (fst $ genv' M.! f)
             addFuncBinding key theta
