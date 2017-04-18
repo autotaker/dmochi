@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts, BangPatterns, TypeFamilies, DataKinds, KindSignatures, GADTs, MultiParamTypeClasses #-}
 module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , Exp(..), Value(..), Atom(..), LExp(..), Normalized
+                                        , DExp
                                         , mkBin, mkUni, mkLiteral, mkVar, mkPair
                                         , mkLambda, mkApp, mkLet, mkLetRec
                                         , mkAssume, mkBranch, mkBranchL
@@ -33,6 +34,8 @@ data Program = Program { functions :: [(TId, UniqueKey, [TId], Exp)]
 data Exp where
     Exp :: (Normalized l Exp arg, Supported l (Labels Exp)) => 
             SLabel l -> arg -> Type -> UniqueKey -> Exp
+
+type DExp l = forall arg. Normalized l Exp arg => (SLabel l, arg, Type, UniqueKey)
 
 data Value where
     Value :: (Normalized l Value arg, Supported l (Labels Value)) => 
