@@ -172,9 +172,12 @@ instance Pretty HFormula where
     pPrintPrec plevel prec v = pPrintPrec plevel prec (fromHFormula v)
 
 data IType = IInt | IBool | IPair IType IType | IFun [([IType], BFormula, ITermType)]
-    deriving (Eq,Ord,Show)
+    deriving (Eq,Ord,Show, Generic)
 data ITermType = IFail | ITerm IType BFormula
-    deriving (Eq,Ord,Show)
+    deriving (Eq,Ord,Show, Generic)
+
+instance Hashable IType
+instance Hashable ITermType
 
 subTypeOf :: IType -> IType -> Bool
 subTypeOf IInt IInt = True
@@ -201,13 +204,15 @@ subTermTypeOf (ITerm theta1 fml1) (ITerm theta2 fml2) =
 subTermTypeOf (ITerm _ _) _ = False
 
 data BFormula = BAnd BFormula BFormula | BOr BFormula BFormula | BVar Int | BConst Bool
-    deriving (Eq,Ord)
+    deriving (Eq,Ord,Generic)
 instance Show BFormula where
     showsPrec p (BVar i) = showsPrec p i
     showsPrec _ (BConst True) = showString "true"
     showsPrec _ (BConst False) = showString "false"
     showsPrec p (BAnd b1 b2) = showParen (p > 2) $ showsPrec 2 b1 . showString " && " . showsPrec 2 b2
     showsPrec p (BOr b1 b2)  = showParen (p > 1) $ showsPrec 1 b1 . showString " || " . showsPrec 1 b2
+
+instance Hashable BFormula
 
 mkBAnd, mkBOr :: BFormula -> BFormula -> BFormula
 mkBAnd (BConst True) b = b

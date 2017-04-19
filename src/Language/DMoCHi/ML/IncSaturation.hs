@@ -7,15 +7,27 @@ import Control.Arrow ((***))
 import Control.Monad.Reader
 import Data.IORef
 import qualified Z3.Monad as Z3
+import Data.List
 --import qualified Z3.Base as Z3Base
 import Language.DMoCHi.Common.Id
 import           Data.Time
 import qualified Data.Map.Strict as M
 import qualified Data.HashTable.IO as H
 import qualified Language.DMoCHi.ML.SMT as SMT
+import qualified Data.Sequence as Q
+
 type IEnv = M.Map TId IType
 type CEnv = ()
 type ArgType = ([IType],BFormula)
+
+type Queue a = Q.Seq a
+popQueue :: Queue a -> Maybe (a, Queue a)
+popQueue queue = case Q.viewl queue of
+    Q.EmptyL -> Nothing
+    a Q.:< queue' -> Just (a, queue')
+
+pushQueue :: a -> Queue a -> Queue a
+pushQueue a queue = queue Q.|> a
 
 data Node e where
     Node :: (Normalized l e arg, Supported l (Labels e)) => 
@@ -49,7 +61,6 @@ data EdgeLabel = ELambda ArgType
                | EApp Int
                | ELetC (IType, BFormula)
                | ELetRecD TId
-               | ELetRecC TId
                | EBranch Bool
                | EPair Bool
                | ENone
@@ -73,25 +84,32 @@ type family Meta (l :: Label) where
 
 data MetaLet = 
     MetaLet { letChild :: Edge ExpNode LExpNode
-            , letCont  :: IORef [Edge ExpNode ExpNode] }
+            , letCont  :: IORef [Edge ExpNode ExpNode]
+            , letTypeSet :: IORef (M.Map ITermType [Maybe (IType,BFormula)]) }
 
 data MetaLetR = 
     MetaLetR { letRChildren :: IORef [Edge ExpNode ValueNode]
-             , letRHistory :: HashTable (TId, ArgType, ITermType) ExpNode 
+             , letRHistory :: HashTable (TId, ArgType, ITermType) ValueNode 
              , letREnv  :: IORef IEnv
              , letRCont :: IORef (Edge ExpNode ExpNode) }
 
 data MetaLambda where
     MetaLambda :: { lamChildren :: IORef [Edge e ExpNode] } -> MetaLambda
 
-newtype MetaApp = MetaApp { appArg :: [Edge LExpNode ValueNode] }
+data MetaApp = MetaApp { appArg :: [Edge LExpNode ValueNode], appCond :: BFormula }
 newtype MetaAssume = MetaAssume { assumeCont :: Maybe (Edge ExpNode ExpNode) }
 data MetaPair where
     MetaPair :: { pairFst :: Edge e ValueNode 
                 , pairSnd :: Edge e ValueNode} -> MetaPair
 data MetaBranch where
     MetaBranch :: { branchFst :: Edge e ExpNode 
-                  , branchSnd :: Edge e ExpNode} -> MetaBranch
+                  , branchSnd :: Edge e ExpNode 
+                  , branchTypeSet :: IORef (M.Map ITermType Int) } -> MetaBranch
+
+data UpdateQuery where
+    QValue :: Edge (Node e) ValueNode -> IType -> UpdateQuery
+    QExp   :: Edge (Node e) ExpNode   -> [ITermType] -> [ITermType] -> UpdateQuery
+    QLExp  :: Edge (Node e) LExpNode   -> [ITermType] -> [ITermType] -> UpdateQuery
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
 getFlow = undefined
@@ -153,6 +171,14 @@ concatMerge [] = []
 concatMerge [x] = x
 concatMerge (x:y:xs) = concatMerge (merge x y:xs)
 
+diffTypes :: [ITermType] -> [ITermType] -> ([ITermType], [ITermType])
+diffTypes new [] = (new, [])
+diffTypes [] old = ([], old)
+diffTypes (x:new) (y:old) = case compare x y of
+    EQ -> diffTypes new old
+    LT -> let (add,sub) = diffTypes new (y:old) in (x:add, sub)
+    GT -> let (add,sub) = diffTypes (x:new) old in (add, y:sub)
+
 measureTime :: MeasureKey -> R a -> R a
 measureTime key action = do
     t_start <- liftIO getCurrentTime
@@ -189,6 +215,7 @@ checkSat p1 p2 = measureTime CheckSat $ do
                     Z3.Undef -> liftIO $ putStrLn "Undef" >> return True
             liftIO $ H.insert (ctxCheckSatCache ctx) key v
             return v
+
 calcAtom :: IEnv -> Atom -> IType
 calcAtom env (Atom l arg _) = case (l, arg) of
     (SLiteral, CInt _)  -> IInt
@@ -262,6 +289,192 @@ calcValue env fml pEdge (Value l arg sty key) =
                         , edges = meta }
         return (node, ity)
 
+popQuery :: R (Maybe UpdateQuery)
+popQuery = undefined
+
+pushQuery :: UpdateQuery -> R ()
+pushQuery = undefined
+
+updateQValue :: (Edge (Node e) ValueNode) -> IType -> R ()
+updateQValue edge _ = case from edge of
+    Node _ _ _ (SLiteral, _, _, _) _ _ _ -> error "impossible"
+    Node _ _ _ (SVar, _, _, _) _ _ _     -> error "impossible"
+    Node _ _ _ (SBinary, _, _, _) _ _ _  -> error "impossible"
+    Node _ _ _ (SUnary, _, _, _) _ _ _   -> error "impossible"
+    Node _ _ _ (SLambda, _, _, _) _ _ _  -> error "impossible"
+    Node _ _ _ (SLet, _, _, _) _ _ _     -> error "impossible"
+    Node _ _ _ (SAssume, _, _, _) _ _ _  -> error "impossible"
+    Node _ _ _ (SBranch, _, _, _) _ _ _  -> error "impossible"
+    Node _ _ _ (SFail, _, _, _) _ _ _    -> error "impossible"
+    Node _ _ _ (SOmega, _, _, _) _ _ _   -> error "impossible"
+    Node _ _ _ (SRand, _, _, _) _ _ _    -> error "impossible"
+    Node _ _ proxy (SPair, _, _, _) tys_ref pEdge (MetaPair e_fst e_snd) ->  do
+        ity1 <- liftIO $ readIORef (types (to e_fst))
+        ity2 <- liftIO $ readIORef (types (to e_snd))
+        let new_ity = IPair ity1 ity2
+        case proxy of
+            NodeValue -> do
+                ity0 <- liftIO $ readIORef tys_ref
+                when (ity0 /= new_ity) $ do
+                    liftIO $ writeIORef tys_ref new_ity
+                    pushQuery (QValue pEdge new_ity)
+            NodeExp -> do
+                old_tys@[ITerm ity0 phi] <- liftIO $ readIORef tys_ref
+                when (ity0 /= new_ity) $ do
+                    let new_tys = [ITerm new_ity phi]
+                    liftIO $ writeIORef tys_ref new_tys
+                    pushQuery (QExp pEdge new_tys old_tys)
+            NodeLExp -> do
+                old_tys@[ITerm ity0 phi] <- liftIO $ readIORef tys_ref
+                when (ity0 /= new_ity) $ do
+                    let new_tys = [ITerm new_ity phi]
+                    liftIO $ writeIORef tys_ref new_tys
+                    pushQuery (QLExp pEdge new_tys old_tys)
+    Node env _ NodeLExp (SApp, (f,_), _, _) tys_ref pEdge (MetaApp edges_vs phi) -> do
+        let IFun assoc = env M.! f
+        thetas <- forM edges_vs $ \edge -> liftIO $ readIORef (types (to edge))
+        let new_tys = [ iota | (thetas', phi', iota) <- assoc,
+                               thetas == thetas' && phi == phi' ]
+        old_tys <- liftIO $ readIORef tys_ref
+        let (add,sub) = diffTypes old_tys new_tys
+        -- TODO update flow
+        unless (null add && null sub) $ do
+            liftIO $ writeIORef tys_ref new_tys
+            pushQuery (QLExp pEdge add sub)
+    node@(Node env fml NodeExp (SLetRec, (fs,e), _, _) tys_ref pEdge meta) -> do
+        edges  <- liftIO $ readIORef (letRChildren meta)
+        updated <- liftIO $ newIORef False
+        thetas <- forM edges $ \edge -> do
+            IFun assoc <- liftIO $ readIORef (types (to edge))
+            let ELetRecD f = label edge
+                IFun old_assoc = typeEnv (to edge) M.! f
+            forM_ assoc $ \(ty_args, phi, iota) -> do
+                let hist_key = (f, (ty_args, phi), iota) 
+                    hist_val = to edge
+                v <- liftIO $ H.lookup (letRHistory meta) hist_key
+                case v of
+                    Just _ -> return ()
+                    Nothing -> liftIO $ do
+                        H.insert (letRHistory meta) hist_key hist_val
+                        writeIORef updated True
+            return $ IFun (merge assoc old_assoc)
+        updated <- liftIO $ readIORef updated
+        when updated $ do
+            let new_env = M.fromList $ zip (map fst fs) thetas
+                env' = M.union env new_env
+            edges_fs <- forM fs $ \(f, v_f) -> do
+                (ty_f, edge_f) <- mfix $ \(_, _edge) -> do
+                    (n_f, ty_f) <- calcValue env' fml _edge v_f
+                    edge_f <- newEdge node n_f (ELetRecD f)
+                    return (ty_f, edge_f)
+                pushQuery (QValue edge_f ty_f)
+                return edge_f
+            (new_tys, edge_e) <- mfix $ \(_, _edge) -> do
+                (n_e, tys_e) <- calcExp env' fml _edge e
+                edge_e <- newEdge node n_e ENone
+                return (tys_e, edge_e)
+            -- TODO: destruct old edges
+            liftIO $ do
+                writeIORef (letRChildren meta) edges_fs
+                writeIORef (letRCont meta) edge_e
+                writeIORef (letREnv meta) new_env
+            old_tys <- liftIO $ readIORef tys_ref
+            let (add,sub) = diffTypes old_tys new_tys
+            unless (null add && null sub) $ do
+                liftIO $ writeIORef tys_ref new_tys
+                pushQuery (QExp pEdge add sub)
+
+updateQExp :: Edge (Node e) ExpNode -> [ITermType] -> [ITermType] -> R ()
+updateQExp edge add_types sub_types = case from edge of
+    Node _ _ _ (SLiteral, _, _, _) _ _ _ -> error "impossible"
+    Node _ _ _ (SVar, _, _, _) _ _ _     -> error "impossible"
+    Node _ _ _ (SBinary, _, _, _) _ _ _  -> error "impossible"
+    Node _ _ _ (SUnary, _, _, _) _ _ _   -> error "impossible"
+    Node _ _ _ (SFail, _, _, _) _ _ _    -> error "impossible"
+    Node _ _ _ (SOmega, _, _, _) _ _ _   -> error "impossible"
+    Node _ _ _ (SRand, _, _, _) _ _ _    -> error "impossible"
+    Node _ _ _ (SPair, _, _, _) _ _ _    -> error "impossible"
+    Node _ _ _ (SApp, _, _, _) _ _ _    -> error "impossible"
+    Node _ _ proxy (SLambda, _, _, _) tys_ref pEdge _ -> do
+        let ELambda (thetas,phi) = label edge
+        let modify_assoc assoc = 
+                merge [ (thetas, phi, iota) | iota <- add_types ] $
+                filter (\(thetas', phi', iota') -> 
+                    thetas' /= thetas || phi' /= phi || 
+                    not (elem iota' sub_types)) assoc
+        case proxy of
+            NodeValue -> do
+                IFun assoc <- liftIO $ readIORef tys_ref
+                let new_ity = IFun (modify_assoc assoc)
+                liftIO $ writeIORef tys_ref new_ity
+                pushQuery (QValue pEdge new_ity)
+            NodeExp -> do
+                old_tys@[ITerm (IFun assoc) phi'] <- liftIO $ readIORef tys_ref
+                let new_tys = [ITerm (IFun (modify_assoc assoc)) phi']
+                liftIO $ writeIORef tys_ref new_tys
+                pushQuery (QExp pEdge new_tys old_tys)
+            NodeLExp -> do
+                old_tys@[ITerm (IFun assoc) phi'] <- liftIO $ readIORef tys_ref
+                let new_tys = [ITerm (IFun (modify_assoc assoc)) phi']
+                liftIO $ writeIORef tys_ref new_tys
+                pushQuery (QLExp pEdge new_tys old_tys)
+    Node _ _ proxy (SBranch, _, _, _) tys_ref pEdge meta  ->
+        let doit :: IORef [ITermType] -> MetaBranch -> R ([ITermType], [ITermType])
+            doit tys_ref meta = do
+                tys <- liftIO $ readIORef tys_ref
+                tySet0 <- liftIO $ readIORef (branchTypeSet meta)
+                let (tySet1, add_tys') = foldl' (\(tySet, tys) ty -> 
+                        if M.member ty tySet
+                        then (M.insertWith (+) ty 1 tySet, tys)
+                        else (M.insertWith (+) ty 1 tySet, ty:tys)) (tySet0, []) add_types
+                    (tySet2, sub_tys') = foldl' (\(tySet, tys) ty ->
+                        case M.lookup ty tySet of
+                            Just 1 -> (M.delete ty tySet, ty:tys)
+                            Just c -> (M.insert ty (c-1) tySet, tys)
+                            Nothing -> (tySet, tys)) (tySet1, []) sub_types
+                let tys' = merge (tys \\ sub_tys') (reverse add_tys')
+                liftIO $ writeIORef (branchTypeSet meta) tySet2
+                liftIO $ writeIORef tys_ref tys'
+                return (add_tys', sub_tys')
+        in case proxy of
+            NodeExp -> do
+                (add_tys', sub_tys') <- doit tys_ref meta
+                pushQuery (QExp pEdge add_tys' sub_tys')
+            NodeLExp -> do
+                (add_tys', sub_tys') <- doit tys_ref meta
+                pushQuery (QLExp pEdge add_tys' sub_tys')
+    Node _ _ _ (SLet, _, _, _) _ _ _     -> error "TODO"
+    Node _ _ _ (SAssume, _, _, _) _ _ _  -> error "TODO"
+    Node _ _ _ (SLetRec, _, _, _) _ _ _  -> error "TODO"
+    
+
+updateQLExp :: Edge (Node e) LExpNode -> [ITermType] -> [ITermType] -> R ()
+updateQLExp = undefined
+    
+
+updateLoop :: R ()
+updateLoop = popQuery >>= \case
+    Nothing -> return ()
+    Just query -> do
+        case query of
+            QValue edge ity -> do
+                b <- liftIO $ readIORef (alive edge)
+                when b $ do
+                    updateQValue edge ity
+                    updateLoop
+            QExp edge add sub -> do
+                b <- liftIO $ readIORef (alive edge)
+                when b $ do
+                    updateQExp edge add sub
+                    updateLoop
+            QLExp edge add sub -> do
+                b <- liftIO $ readIORef (alive edge)
+                when b $ do
+                    updateQLExp edge add sub
+                    updateLoop
+                
+    
+
 calcExp :: IEnv -> HFormula -> Edge (Node e) ExpNode -> Exp -> R (ExpNode, [ITermType])
 calcExp env fml pEdge (Exp l arg sty key) = 
     mfix $ \(_node, _tys) -> do
@@ -283,8 +496,10 @@ calcExp env fml pEdge (Exp l arg sty key) =
                     edge1 <- newEdge _node n1 ENone
                     return (tys1,edge1) 
                 Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
-                (tys, edges) <- fmap ((concatMerge *** concat).unzip) $ forM tys1 $ \case
-                    IFail -> return ([IFail], [])
+                let f tys = ( concatMerge (map fst tys)
+                            , M.fromListWith (++) [ (iota, [x]) | (tys, x) <- tys, iota <- tys])
+                ((tys, tySet), edges) <- fmap ((f *** concat).unzip) $ forM tys1 $ \case
+                    IFail -> return (([IFail], Nothing), [])
                     ITerm ity phi -> do
                         let env' = M.insert x ity env
                         cond <- fromBFormula ps phi
@@ -296,11 +511,32 @@ calcExp env fml pEdge (Exp l arg sty key) =
                                 (n2, tys2) <- calcExp env' fml' _edge2 e2
                                 edge2 <- newEdge _node n2 (ELetC (ity,phi))
                                 return (tys2, edge2)
-                            return (tys2, [edge2])
-                        else return ([], [])
-                ref <- liftIO$ newIORef edges
-                return (tys, MetaLet edge1 ref)
-            -- TODO ADD LETREC CASE
+                            return ((tys2, Just (ity,phi)), [edge2])
+                        else return (([], Just (ity,phi)), [])
+                ref <- liftIO $ newIORef edges
+                ref_tySet <- liftIO $ newIORef tySet 
+                return (tys, MetaLet edge1 ref ref_tySet)
+            (SLetRec, (fs, e)) -> do
+                let env0 = M.fromList [ (f, IFun []) | (f,_) <- fs ]
+                    env' = M.union env env0
+                edge_fs <- forM fs $ \(f,v_f) -> do
+                    (ty_f, edge_f) <- mfix $ \(_, _edge) -> do
+                        (n_f, ty_f) <- calcValue env' fml _edge v_f
+                        edge_f <- newEdge _node n_f (ELetRecD f)
+                        return (ty_f, edge_f)
+                    pushQuery (QValue edge_f ty_f)
+                    return edge_f
+                (tys, edge_e) <- mfix $ \(_, _edge) -> do
+                    (n_e, tys_e) <- calcExp env' fml _edge e
+                    edge_e <- newEdge _node n_e ENone
+                    return (tys_e, edge_e)
+                meta <- liftIO $ do
+                    history  <-  H.new
+                    ref_fs   <- newIORef edge_fs
+                    ref_env  <- newIORef env0
+                    ref_cont <- newIORef edge_e
+                    return $ MetaLetR ref_fs history ref_env ref_cont
+                return (tys, meta)
             (SAssume, (a, e)) -> do
                 cond <- toHFormula a 
                 b <- checkSat fml cond
@@ -322,7 +558,9 @@ calcExp env fml pEdge (Exp l arg sty key) =
                     (n2, tys2) <- calcExp env fml _edge2 e2
                     edge2 <- newEdge _node n2 (EBranch False)
                     return (tys2, edge2)
-                return (merge tys1 tys2, MetaBranch edge1 edge2)
+                let tySet = M.fromListWith (+) $ map (\ty -> (ty,1)) (tys1 ++ tys2)
+                ref <- liftIO $ newIORef tySet
+                return (merge tys1 tys2, MetaBranch edge1 edge2 ref)
             (SFail, _) -> return ([IFail], ())
             (SOmega, _) -> return ([], ())
         itypeRef <- liftIO $ newIORef itys
@@ -359,7 +597,9 @@ calcLExp env fml pEdge (LExp l arg sty key) =
                     (n2, tys2) <- calcExp env fml _edge2 e2
                     edge2 <- newEdge _node n2 (EBranch False)
                     return (tys2, edge2)
-                return (merge tys1 tys2, MetaBranch edge1 edge2)
+                let tySet = M.fromListWith (+) $ map (\ty -> (ty,1)) (tys1 ++ tys2)
+                ref <- liftIO $ newIORef tySet
+                return (merge tys1 tys2, MetaBranch edge1 edge2 ref)
             (SFail, _) -> return ([IFail], ())
             (SOmega, _) -> return ([], ())
             (SRand, _) -> return ([ITerm IInt (BConst True)], ())
@@ -375,7 +615,7 @@ calcLExp env fml pEdge (LExp l arg sty key) =
                 -- TODO: update flow
                 let tys = [ iota | (thetas', phi', iota) <- assoc,
                                    thetas == thetas' && phi == phi' ]
-                return (tys, MetaApp edges)
+                return (tys, MetaApp edges phi)
         itypeRef <- liftIO $ newIORef itys
         let node = Node { typeEnv = env
                         , constraint = fml
