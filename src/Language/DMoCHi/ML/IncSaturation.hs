@@ -38,6 +38,7 @@ data Node e where
             , types  :: IORef (SatType e)
             , parent :: Edge (Node e') (Node e)
             , edges :: Meta l e
+            , recalcator :: R (SatType e)
             } -> Node e
 
 type family SatType e where
@@ -253,114 +254,85 @@ mkLExpEdge env fml from e label = mfix $ \(_, _edge) -> do
     edge <- newEdge from to label
     return (tys, edge)
 
-calcFromValue :: HFormula -> UniqueKey -> IType -> R [ITermType]
-calcFromValue fml key theta = do
+calcFromValue :: HFormula -> UniqueKey -> (IType, a, R IType) -> R ([ITermType], a, R [ITermType])
+calcFromValue fml key (theta, meta, recalc) = do
     Just (_,ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
     phi <- calcCondition fml ps
-    return [ITerm theta phi]
+    let recalc' = (\theta -> [ITerm theta phi]) <$> recalc
+    return ([ITerm theta phi], meta, recalc')
 
-calcPair :: IEnv -> HFormula -> Node e -> (Value,Value) -> R (IType, Meta 'Pair e)
+calcPair :: IEnv -> HFormula -> Node e -> (Value,Value) -> R (IType, MetaPair e, R IType)
 calcPair env fml _node (v1,v2) = do
     (ty1,e1) <- mkValueEdge env fml _node v1 (EPair True)
     (ty2,e2) <- mkValueEdge env fml _node v2 (EPair False)
-    return (IPair ty1 ty2, MetaPair e1 e2)
-
-recalcPair :: Meta 'Pair e -> R IType
-recalcPair (MetaPair n1 n2) = do
-    ty1 <- liftIO $ readIORef (types $ to n1)
-    ty2 <- liftIO $ readIORef (types $ to n2)
-    return $ IPair ty1 ty2
+    let recalc = do
+            ty1 <- liftIO $ readIORef $ types $ to $ e1
+            ty2 <- liftIO $ readIORef $ types $ to $ e2
+            return $ IPair ty1 ty2
+    return (IPair ty1 ty2, MetaPair e1 e2, recalc)
     
-calcLambda :: IEnv -> HFormula -> Node e -> UniqueKey -> ([TId], Exp) -> R (IType, Meta 'Lambda e)
+calcLambda :: IEnv -> HFormula -> Node e -> UniqueKey -> ([TId], Exp) -> R (IType, MetaLambda e, R IType)
 calcLambda env fml _node key (xs, e) = do
     Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
-    fs <- getFlow key
     tbl <- liftIO H.new
-    ty_assocs <- fmap mconcat $ forM fs $ \(thetas, phi) -> do
-        let env' = foldr (uncurry M.insert) env (zip xs thetas)
-        cond <- fromBFormula ps phi
-        fml' <- mkBin SAnd fml cond
-        checkSat fml cond >>= \case
-            True -> do
-                (tys,edge) <- mkExpEdge env' fml' _node e (ELambda (thetas,phi))
-                liftIO $ H.insert tbl (thetas,phi) edge
-                return (map ((,,) thetas phi) tys)
-            False -> return []
-    return (IFun ty_assocs, MetaLambda tbl)
-
-recalcLambda :: IEnv -> HFormula -> Meta 'Lambda e -> Node e -> UniqueKey -> ([TId], Exp) -> R IType
-recalcLambda env fml meta node key (xs, e) = do
-    Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
-    fs <- getFlow key
-    ty_assocs <- fmap mconcat $ forM fs $ \(thetas, phi) ->
-        liftIO (H.lookup (lamChildren meta) (thetas,phi)) >>= \case
-            Just edge -> do
-                tys <- liftIO $ readIORef (types (to edge))
-                return $ map ((,,) thetas phi) tys
-            Nothing -> do
-                cond <- fromBFormula ps phi
-                fml' <- mkBin SAnd fml cond
-                checkSat fml cond >>= \case
-                    False -> return []
-                    True -> do
-                        let env' = foldr (uncurry M.insert) env (zip xs thetas)
-                        (tys,edge) <- mkExpEdge env' fml' node e (ELambda (thetas,phi))
-                        liftIO $ H.insert (lamChildren meta) (thetas,phi) edge
+    let recalc = do
+            fs <- getFlow key
+            ty_assocs <- fmap mconcat $ forM fs $ \(thetas, phi) ->
+                liftIO (H.lookup tbl (thetas,phi)) >>= \case
+                    Just edge -> do
+                        tys <- liftIO $ readIORef (types (to edge))
                         return $ map ((,,) thetas phi) tys
-    return (IFun ty_assocs)
+                    Nothing -> do
+                        cond <- fromBFormula ps phi
+                        fml' <- mkBin SAnd fml cond
+                        checkSat fml cond >>= \case
+                            False -> return []
+                            True -> do
+                                let env' = foldr (uncurry M.insert) env (zip xs thetas)
+                                (tys,edge) <- mkExpEdge env' fml' _node e (ELambda (thetas,phi))
+                                liftIO $ H.insert tbl (thetas,phi) edge
+                                return $ map ((,,) thetas phi) tys
+            return $ IFun ty_assocs
+    ty <- recalc 
+    return (ty, MetaLambda tbl, recalc)
                 
-calcBranch :: IEnv -> HFormula -> Node e -> (Exp, Exp) -> R ([ITermType] , Meta 'Branch e)
+calcBranch :: IEnv -> HFormula -> Node e -> (Exp, Exp) -> R ([ITermType] , MetaBranch e, R [ITermType])
 calcBranch env fml _node (e1, e2) = do
     (tys1, edge1) <- mkExpEdge env fml _node e1 (EBranch True)
     (tys2, edge2) <- mkExpEdge env fml _node e2 (EBranch False)
-    return (merge tys1 tys2, MetaBranch edge1 edge2)
+    let recalc = do
+            tys1 <- liftIO $ readIORef $ types $ to $ edge1
+            tys2 <- liftIO $ readIORef $ types $ to $ edge2
+            return $ merge tys1 tys2
+    return (merge tys1 tys2, MetaBranch edge1 edge2, recalc)
 
-recalcBranch :: MetaBranch e -> R [ITermType]
-recalcBranch (MetaBranch n1 n2) = do
-    tys1 <- liftIO $ readIORef (types $ to n1)
-    tys2 <- liftIO $ readIORef (types $ to n2)
-    return $ merge tys1 tys2
-
-calcLet :: IEnv -> HFormula -> ExpNode -> UniqueKey -> (TId, LExp, Exp) -> R ([ITermType], Meta 'Let Exp)
+calcLet :: IEnv -> HFormula -> ExpNode -> UniqueKey -> (TId, LExp, Exp) -> R ([ITermType], MetaLet Exp, R [ITermType])
 calcLet env fml _node key (x, e1, e2) = do
-    (tys1, edge1) <- mkLExpEdge env fml _node e1 ENone
     Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
     tbl <- liftIO $ H.new
-    tys <- fmap concatMerge $ forM tys1 $ \case
-        IFail -> return [IFail]
-        ITerm ity phi -> do
-            let env' = M.insert x ity env
-            cond <- fromBFormula ps phi
-            fml' <- mkBin SAnd fml cond
-            checkSat fml cond >>= \case 
-                False -> return []
-                True -> do 
-                    (tys, edge) <- mkExpEdge env' fml' _node e2 (ELetC (ity, phi))
-                    liftIO $ H.insert tbl (ity,phi) edge
-                    return tys
-    return (tys, MetaLet edge1 tbl)
+    let genericCalc :: [ITermType] -> R [ITermType]
+        genericCalc tys1 = do 
+            fmap concatMerge $ forM tys1 $ \case
+                IFail -> return [IFail]
+                ITerm ity phi -> do
+                    liftIO (H.lookup tbl (ity,phi)) >>= \case
+                        Just edge -> liftIO $ readIORef $ types $ to edge
+                        Nothing -> do
+                            let env' = M.insert x ity env
+                            cond <- fromBFormula ps phi
+                            fml' <- mkBin SAnd fml cond
+                            checkSat fml cond >>= \case 
+                                False -> return []
+                                True -> do 
+                                    (tys, edge) <- mkExpEdge env' fml' _node e2 (ELetC (ity, phi))
+                                    liftIO $ H.insert tbl (ity,phi) edge
+                                    return tys
+    (tys1, edge1) <- mkLExpEdge env fml _node e1 ENone
+    tys <- genericCalc tys1
+    let recalc = (liftIO $ readIORef $ types $ to $ edge1) >>= genericCalc
+    return (tys, MetaLet edge1 tbl, recalc)
 
-recalcLet :: IEnv -> HFormula -> MetaLet Exp -> ExpNode -> UniqueKey -> (TId, LExp, Exp) -> R [ITermType]
-recalcLet env fml meta node key (x, _, e2) = do
-    tys1 <- liftIO $ readIORef (types $ to $ letChild meta)
-    Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
-    fmap concatMerge $ forM tys1 $ \case
-        IFail -> return [IFail]
-        ITerm ity phi -> do
-            liftIO (H.lookup (letCont meta) (ity,phi)) >>= \case
-                Just edge -> liftIO $ readIORef $ types $ to edge
-                Nothing -> do
-                    let env' = M.insert x ity env
-                    cond <- fromBFormula ps phi
-                    fml' <- mkBin SAnd fml cond
-                    checkSat fml cond >>= \case
-                        False -> return []
-                        True -> do
-                            (tys, edge) <- mkExpEdge env' fml' node e2 (ELetC (ity, phi))
-                            liftIO $ H.insert (letCont meta) (ity,phi) edge
-                            return tys
-
-calcLetRec :: IEnv -> HFormula -> ExpNode -> ([(TId, Value)], Exp) -> R ([ITermType], Meta 'LetRec Exp)
+calcLetRec :: IEnv -> HFormula -> ExpNode -> ([(TId, Value)], Exp) -> R ([ITermType], MetaLetR Exp, R [ITermType])
 calcLetRec env fml _node (fs, e) = do
     let env0 = M.fromList [ (f, IFun []) | (f,_) <- fs ]
         env' = M.union env env0
@@ -373,81 +345,74 @@ calcLetRec env fml _node (fs, e) = do
                               <*> H.new
                               <*> newIORef env0
                               <*> newIORef edge_e
-    return (tys, meta)
+    let recalc = do
+            env0  <- liftIO $ readIORef $ letREnv meta
+            edges <- liftIO $ readIORef $ letRChildren meta
+            updated <- liftIO $ newIORef False
+            env1 <- fmap M.fromList $ forM edges $ \edge -> do
+                let ELetRecD f = label edge
+                IFun assocs <- liftIO $ readIORef (types $ to edge)
+                forM_ assocs $ \(thetas, phi, iota) -> 
+                    liftIO $ H.lookup (letRHistory meta) (f, (thetas,phi), iota) >>= \case 
+                        Just _ -> return ()
+                        Nothing -> do
+                           H.insert (letRHistory meta) (f, (thetas,phi), iota) (to edge)
+                           writeIORef updated True
+                let IFun assocs' = env0 M.! f
+                return (f, IFun (merge assocs assocs'))
+            liftIO (readIORef updated) >>= \case
+                True -> do
+                    let env' = M.union env env1
+                    edge_fs <- forM fs $ \(f, v_f) -> do
+                        (_, edge_f) <- mkValueEdge env' fml _node v_f (ELetRecD f)
+                        pushQuery (QValue edge_f)
+                        return edge_f
+                    liftIO $ writeIORef (letREnv meta) env1
+                    liftIO $ writeIORef (letRChildren meta) edge_fs
+                    (tys, edge_e) <- mkExpEdge env' fml _node e ENone
+                    liftIO $ writeIORef (letRCont meta) edge_e
+                    return tys
+                False -> liftIO $ readIORef (letRCont meta) >>= readIORef . types . to
+    return (tys, meta, recalc)
 
-recalcLetRec :: IEnv -> HFormula -> MetaLetR Exp -> ExpNode -> ([(TId,Value)], Exp) -> R [ITermType]
-recalcLetRec env fml meta node (fs, e) = do
-    env0 <- liftIO $ readIORef $ letREnv meta
-    edges <- liftIO $ readIORef $ letRChildren meta
-    updated <- liftIO $ newIORef False
-    env1 <- fmap M.fromList $ forM edges $ \edge -> do
-        let ELetRecD f = label edge
-        IFun assocs <- liftIO $ readIORef (types $ to edge)
-        forM_ assocs $ \(thetas, phi, iota) -> 
-            liftIO $ H.lookup (letRHistory meta) (f, (thetas,phi), iota) >>= \case 
-                Just _ -> return ()
-                Nothing -> do
-                   H.insert (letRHistory meta) (f, (thetas,phi), iota) (to edge)
-                   writeIORef updated True
-        let IFun assocs' = env0 M.! f
-        return (f, IFun (merge assocs assocs'))
-    liftIO (readIORef updated) >>= \case
-        True -> do
-            let env' = M.union env env1
-            edge_fs <- forM fs $ \(f, v_f) -> do
-                (_, edge_f) <- mkValueEdge env' fml node v_f (ELetRecD f)
-                pushQuery (QValue edge_f)
-                return edge_f
-            liftIO $ writeIORef (letREnv meta) env1
-            liftIO $ writeIORef (letRChildren meta) edge_fs
-            (tys, edge_e) <- mkExpEdge env' fml node e ENone
-            liftIO $ writeIORef (letRCont meta) edge_e
-            return tys
-        False -> liftIO $ readIORef (letRCont meta) >>= readIORef . types . to
-
-calcAssume :: IEnv -> HFormula -> ExpNode -> (Atom, Exp) -> R ([ITermType], Meta 'Assume Exp)
+calcAssume :: IEnv -> HFormula -> ExpNode -> (Atom, Exp) -> R ([ITermType], MetaAssume Exp, R [ITermType])
 calcAssume env fml _node (a, e) = do
     cond <- toHFormula a 
     checkSat fml cond >>= \case
         True -> do
             fml' <- mkBin SAnd fml cond
             (tys, edge) <- mkExpEdge env fml' _node e ENone
-            return (tys, MetaAssume (Just edge))
-        False -> return ([], MetaAssume Nothing)
+            let recalc = liftIO $ readIORef $ types $ to edge
+            return (tys, MetaAssume (Just edge), recalc)
+        False -> return ([], MetaAssume Nothing, return [])
 
-recalcAssume :: MetaAssume e -> R [ITermType]
-recalcAssume meta = case assumeCont meta of
-    Just edge -> liftIO $ readIORef (types (to edge))
-    Nothing -> return []
-
-calcApp :: IEnv -> HFormula -> LExpNode -> UniqueKey -> (TId, [Value]) -> R ([ITermType], Meta 'App LExp)
+calcApp :: IEnv -> HFormula -> LExpNode -> UniqueKey -> (TId, [Value]) -> R ([ITermType], MetaApp LExp, R [ITermType])
 calcApp env fml _node key (f, vs) = do
     let IFun assoc = env M.! f
     Just (_, ps) <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key)
     phi <- calcCondition fml ps
     (thetas,edges) <- fmap unzip $ forM (zip [0..] vs) $ \(i,v) -> 
         mkValueEdge env fml _node v (EApp i)
+    let appType thetas = 
+            [ iota | (thetas', phi', iota) <- assoc,
+                     thetas == thetas' && phi == phi' ]
+        recalc = do
+            thetas <- forM edges $ liftIO . readIORef . types . to
+            return $ appType thetas
     -- TODO: update flow
-    let tys = [ iota | (thetas', phi', iota) <- assoc,
-                       thetas == thetas' && phi == phi' ]
-    return (tys, MetaApp edges phi)
+    return (appType thetas, MetaApp edges phi, recalc)
 
-recalcApp :: IEnv -> MetaApp LExp -> (TId, [Value]) -> R [ITermType]
-recalcApp env (MetaApp edges phi) (f,_) = do
-    thetas <- forM edges $ liftIO . readIORef . types . to
-    let IFun assoc = env M.! f
-    let tys = [ iota | (thetas', phi', iota) <- assoc,
-                       thetas == thetas' && phi == phi' ]
-    return tys
-    
 calcValue :: IEnv -> HFormula -> Edge (Node e) ValueNode -> Value -> R (ValueNode, IType)
 calcValue env fml pEdge (Value l arg sty key) = 
-    mfix $ \(_node, _ity) -> do
-        (ity,meta) <- case l of
-            SLiteral -> return (calcAtom env (Atom l arg sty), ())
-            SVar    -> return (calcAtom env (Atom l arg sty), ())
-            SBinary -> return (calcAtom env (Atom l arg sty), ())
-            SUnary  -> return (calcAtom env (Atom l arg sty), ())
+    let fromAtom :: Atom -> (IType, (), R IType)
+        fromAtom atom = (ity, (), return ity)
+            where ity = calcAtom env atom
+    in mfix $ \(_node, _ity) -> do
+        (ity,meta, recalc) <- case l of
+            SLiteral -> return $ fromAtom (Atom l arg sty)
+            SVar    -> return $ fromAtom (Atom l arg sty)
+            SBinary -> return $ fromAtom (Atom l arg sty)
+            SUnary  -> return $ fromAtom (Atom l arg sty)
             SPair   -> calcPair env fml _node arg
             SLambda -> calcLambda env fml _node key arg
         itypeRef <- liftIO $ newIORef ity
@@ -457,27 +422,31 @@ calcValue env fml pEdge (Value l arg sty key) =
                         , term = (l, arg, sty, key)
                         , types = itypeRef
                         , parent = pEdge
-                        , edges = meta }
+                        , edges = meta
+                        , recalcator = recalc }
         return (node, ity)
 
 calcExp :: IEnv -> HFormula -> Edge (Node e) ExpNode -> Exp -> R (ExpNode, [ITermType])
 calcExp env fml pEdge (Exp l arg sty key) = 
-    let fromValue :: (IType, a) -> R ([ITermType], a)
-        fromValue (ity, meta) = (\tys -> (tys,meta)) <$> calcFromValue fml key ity
+    let fromValue :: (IType, a, R IType) -> R ([ITermType], a, R [ITermType])
+        fromValue = calcFromValue fml key
+        fromAtom atom = do
+            let ity = calcAtom env atom
+            calcFromValue fml key (ity,(), return ity)
     in mfix $ \(_node, _tys) -> do
-        (itys,meta) <- case l of
-            SLiteral -> fromValue (calcAtom env (Atom l arg sty), ())
-            SVar     -> fromValue (calcAtom env (Atom l arg sty), ())
-            SBinary  -> fromValue (calcAtom env (Atom l arg sty), ())
-            SUnary   -> fromValue (calcAtom env (Atom l arg sty), ())
+        (itys,meta,recalc) <- case l of
+            SLiteral -> fromAtom (Atom l arg sty)
+            SVar     -> fromAtom (Atom l arg sty)
+            SBinary  -> fromAtom (Atom l arg sty)
+            SUnary   -> fromAtom (Atom l arg sty)
             SPair    -> fromValue =<< calcPair env fml _node arg
             SLambda  -> fromValue =<< calcLambda env fml _node key arg
             SLet     -> calcLet env fml _node key arg
             SLetRec  -> calcLetRec env fml _node arg
             SAssume  -> calcAssume env fml _node arg
             SBranch  -> calcBranch env fml _node arg
-            SFail    -> return ([IFail], ())
-            SOmega   -> return ([], ())
+            SFail    -> return ([IFail], (), return [IFail])
+            SOmega   -> return ([], (), return [])
         itypeRef <- liftIO $ newIORef itys
         let node = Node { typeEnv = env
                         , constraint = fml
@@ -485,26 +454,30 @@ calcExp env fml pEdge (Exp l arg sty key) =
                         , term = (l, arg, sty, key)
                         , types = itypeRef
                         , parent = pEdge
-                        , edges = meta }
+                        , edges = meta
+                        , recalcator = recalc }
         return (node, itys)
 
 calcLExp :: IEnv -> HFormula -> Edge (Node e) LExpNode -> LExp -> R (LExpNode, [ITermType])
 calcLExp env fml pEdge (LExp l arg sty key) =  
-    let fromValue :: (IType, a) -> R ([ITermType], a)
-        fromValue (ity, meta) = (\tys -> (tys,meta)) <$> calcFromValue fml key ity
+    let fromValue :: (IType, a, R IType) -> R ([ITermType], a, R [ITermType])
+        fromValue = calcFromValue fml key
+        fromAtom atom = do
+            let ity = calcAtom env atom
+            calcFromValue fml key (ity,(), return ity)
     in mfix $ \(_node, _tys) -> do
-        (itys,meta) <- case l of
-            SLiteral -> fromValue (calcAtom env (Atom l arg sty), ())
-            SVar     -> fromValue (calcAtom env (Atom l arg sty), ())
-            SBinary  -> fromValue (calcAtom env (Atom l arg sty), ())
-            SUnary   -> fromValue (calcAtom env (Atom l arg sty), ())
+        (itys,meta,recalc) <- case l of
+            SLiteral -> fromAtom (Atom l arg sty)
+            SVar     -> fromAtom (Atom l arg sty)
+            SBinary  -> fromAtom (Atom l arg sty)
+            SUnary   -> fromAtom (Atom l arg sty)
             SPair    -> fromValue =<< calcPair env fml _node arg
             SLambda  -> fromValue =<< calcLambda env fml _node key arg
             SBranch  -> calcBranch env fml _node arg
-            SFail    -> return ([IFail], ())
-            SOmega   -> return ([], ())
-            SRand    -> return ([ITerm IInt (BConst True)], ())
             SApp     -> calcApp env fml _node key arg
+            SFail    -> return ([IFail], (), return [IFail])
+            SOmega   -> return ([], (), return [])
+            SRand    -> return ([ITerm IInt (BConst True)], (), return [ITerm IInt (BConst True)])
         itypeRef <- liftIO $ newIORef itys
         let node = Node { typeEnv = env
                         , constraint = fml
@@ -512,7 +485,8 @@ calcLExp env fml pEdge (LExp l arg sty key) =
                         , term = (l, arg, sty, key)
                         , types = itypeRef
                         , parent = pEdge
-                        , edges = meta }
+                        , edges = meta
+                        , recalcator = recalc }
         return (node, itys)
 
 popQuery :: R (Maybe UpdateQuery)
@@ -521,67 +495,21 @@ popQuery = undefined
 pushQuery :: UpdateQuery -> R ()
 pushQuery = undefined
 
+genericRecalc :: Node e -> (SatType e -> SatType e -> R b) -> R b
+genericRecalc node cont = do
+    new_ity <- recalcator node
+    old_ity <- liftIO $ readIORef (types node) 
+    liftIO $ writeIORef (types node) new_ity
+    cont new_ity old_ity
+    
 recalcValue :: ValueNode -> R (IType, Bool)
-recalcValue node@(Node { typeEnv = env
-                       , constraint = fml
-                       , term = (l, arg, sty, key)
-                       , types = ty_ref
-                       , edges = meta }) = do
-    new_ity <- case l of
-        SLiteral -> return (calcAtom env (Atom l arg sty))
-        SVar     -> return (calcAtom env (Atom l arg sty))
-        SBinary  -> return (calcAtom env (Atom l arg sty))
-        SUnary   -> return (calcAtom env (Atom l arg sty))
-        SPair    -> recalcPair meta
-        SLambda  -> recalcLambda env fml meta node key arg
-    old_ity <- liftIO $ readIORef ty_ref
-    liftIO $ writeIORef ty_ref new_ity
-    return (new_ity, new_ity /= old_ity)
+recalcValue node = genericRecalc node (\new_ity old_ity -> return (new_ity, new_ity /= old_ity))
 
 recalcExp :: ExpNode -> R ([ITermType], Bool)
-recalcExp node@(Node { typeEnv = env
-                     , constraint = fml
-                     , term = (l, arg, sty, key)
-                     , types = tys_ref
-                     , edges = meta}) = do
-    new_itys <- case l of
-        SLiteral -> calcFromValue fml key (calcAtom env (Atom l arg sty))
-        SVar     -> calcFromValue fml key (calcAtom env (Atom l arg sty))
-        SBinary  -> calcFromValue fml key (calcAtom env (Atom l arg sty))
-        SUnary   -> calcFromValue fml key (calcAtom env (Atom l arg sty))
-        SPair    -> recalcPair meta >>= calcFromValue fml key
-        SLambda  -> recalcLambda env fml meta node key arg >>= calcFromValue fml key
-        SLet     -> recalcLet env fml meta node key arg
-        SLetRec  -> recalcLetRec env fml meta node arg
-        SBranch  -> recalcBranch meta
-        SAssume  -> recalcAssume meta
-        SFail    -> return [IFail]
-        SOmega   -> return []
-    old_itys <- liftIO $ readIORef tys_ref
-    liftIO $ writeIORef tys_ref new_itys
-    return (new_itys, new_itys /= old_itys)
+recalcExp node = genericRecalc node (\new_ity old_ity -> return (new_ity, new_ity /= old_ity))
 
 recalcLExp :: LExpNode -> R ([ITermType], Bool)
-recalcLExp node@(Node { typeEnv = env
-                     , constraint = fml
-                     , term = (l, arg, sty, key)
-                     , types = tys_ref
-                     , edges = meta}) = do
-    new_itys <- case l of
-        SLiteral -> calcFromValue fml key (calcAtom env (Atom l arg sty))
-        SVar     -> calcFromValue fml key (calcAtom env (Atom l arg sty))
-        SBinary  -> calcFromValue fml key (calcAtom env (Atom l arg sty))
-        SUnary   -> calcFromValue fml key (calcAtom env (Atom l arg sty))
-        SPair    -> recalcPair meta >>= calcFromValue fml key
-        SLambda  -> recalcLambda env fml meta node key arg >>= calcFromValue fml key
-        SBranch  -> recalcBranch meta
-        SApp     -> recalcApp env meta arg
-        SFail    -> return [IFail]
-        SOmega   -> return []
-        SRand    -> return [ITerm IInt (BConst True)]
-    old_itys <- liftIO $ readIORef tys_ref
-    liftIO $ writeIORef tys_ref new_itys
-    return (new_itys, new_itys /= old_itys)
+recalcLExp node = genericRecalc node (\new_ity old_ity -> return (new_ity, new_ity /= old_ity))
 
 {-
 updateLoop :: R ()
