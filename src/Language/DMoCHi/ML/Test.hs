@@ -22,6 +22,8 @@ import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.ElimCast as PAbst
+import qualified Language.DMoCHi.ML.IncSaturation as IncSat
+import qualified Language.DMoCHi.ML.UnliftRec as IncSat
 import qualified Language.DMoCHi.ML.Saturate as Saturate
 import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
@@ -57,6 +59,7 @@ data Flag = Help
           | Interactive
           | FoolTraces Int
           | Fusion
+          | Incremental
           | Verbose
           deriving Eq
 data HCCSSolver = IT | GCH  deriving Eq
@@ -69,6 +72,7 @@ data Config = Config { targetProgram :: FilePath
                      , foolTraces :: Bool
                      , foolThreshold :: Int
                      , fusion :: Bool
+                     , incremental :: Bool
                      , verbose :: Bool
                      , interactive :: Bool }
 
@@ -86,6 +90,7 @@ defaultConfig path = Config { targetProgram = path
                             , foolTraces = False
                             , foolThreshold = 1
                             , fusion = False
+                            , incremental = False
                             , verbose = False
                             , interactive = False }
 
@@ -106,6 +111,7 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
                    "Enable context sensitive predicate discovery, this also enables --acc-traces flag"
           , Option [] ["fool-traces"] (OptArg (FoolTraces . fromMaybe 1 . fmap read) "N")  "Distinguish fool error traces in refinement phase, and set threshold (default = 1)"
           , Option [] ["fusion"] (NoArg Fusion) "enable model checking fusion"
+          , Option [] ["incremental"] (NoArg Incremental) "enable incremental saturation algorithm"
           , Option ['v'] ["verbose"] (NoArg Verbose) "set pretty level to verbose"
           , Option [] ["interactive"] (NoArg Interactive) "interactive counterexample generation" ]
     where
@@ -137,6 +143,7 @@ parseArgs = doit
                      ContextSensitive -> acc { accErrTraces = True, contextSensitive = True }
                      FoolTraces n -> acc { foolTraces = True, foolThreshold = n }
                      Fusion -> acc { fusion = True }
+                     Incremental -> acc { fusion = True, incremental = True }
                      Interactive -> acc { interactive = True } 
                      Help -> error "unexpected"
                      Verbose -> acc { verbose = True }
@@ -206,11 +213,19 @@ doit = do
                 castFreeProgram <- lift $ PAbst.elimCast curTypeMap normalizedProgram
                 prettyPrint castFreeProgram
 
+
                 reachable <- if (fusion conf) 
-                    then measure "Fusion" $ do
-                        (reachable,res) <- liftIO $ Saturate.saturate curTypeMap castFreeProgram
-                        liftIO $ print res
-                        return (Just reachable)
+                    then measure "Fusion" $ 
+                        if incremental conf
+                            then do
+                                unliftedProgram <- IncSat.unliftRec castFreeProgram
+                                (reachable,res) <- liftIO $ IncSat.saturate curTypeMap unliftedProgram
+                                liftIO $ print res
+                                return (Just reachable)
+                            else do
+                                (reachable,res) <- liftIO $ Saturate.saturate curTypeMap castFreeProgram
+                                liftIO $ print res
+                                return (Just reachable)
                     else return Nothing
 
                 boolProgram <- measure "Predicate Abstraction" $ lift $ PAbst.abstProg curTypeMap castFreeProgram

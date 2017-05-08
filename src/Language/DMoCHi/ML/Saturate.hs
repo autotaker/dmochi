@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase, BangPatterns, DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
+{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
 module Language.DMoCHi.ML.Saturate where
 
 import           Control.Monad
@@ -6,8 +6,10 @@ import           Control.Monad.Reader
 import           Control.Monad.Writer hiding((<>))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import           Data.Hashable
 import qualified Data.HashTable.IO as H
 import           Data.IORef
+import           GHC.Generics (Generic)
 import           Text.Printf
 import           Text.PrettyPrint.HughesPJClass
 import           Data.Time
@@ -26,6 +28,59 @@ import           Language.DMoCHi.ML.Flow
 import qualified Language.DMoCHi.ML.SMT as SMT
 
 
+data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
+                       , ctxTypeMap :: TypeMap
+                       , ctxFlowMap :: FlowMap
+                       , ctxRtnTypeTbl :: HashTable UniqueKey (PType, [HFormula]) 
+                       , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [HFormula]) 
+                       , ctxHFormulaTbl :: HFormulaTbl
+                       , ctxHFormulaSize :: IORef Int
+                       , ctxCheckSatCache :: HashTable (Int, Int) Bool
+                       , ctxUpdated :: IORef Bool
+                       , ctxSMTCount :: IORef Int
+                       , ctxSMTCountHit :: IORef Int
+                       , ctxMode  :: IORef TypingMode
+                       , ctxTimer :: HashTable MeasureKey NominalDiffTime
+                       , ctxSMTSolver :: Z3.Solver
+                       , ctxSMTContext :: Z3.Context }
+
+data TypingMode = Saturation 
+                | Extraction
+          deriving(Show,Ord,Eq)
+
+data MeasureKey = CheckSat | CalcCondition | Total | MSaturation | MExtraction
+    deriving (Eq, Ord, Show, Generic)
+
+instance Hashable MeasureKey 
+
+newtype R a = R { unR :: ReaderT Context IO a }
+    deriving (Monad, Applicative, Functor, MonadFix, MonadIO)
+
+instance MonadReader Context R where
+    ask = R ask
+    local f a = R (local f $ unR a)
+
+instance Z3.MonadZ3 R where
+    getSolver = ctxSMTSolver <$> ask
+    getContext = ctxSMTContext <$> ask
+
+instance HFormulaFactory R where
+    genHFormula generator m_iv = do
+        (_, _, v@(HFormula _ _ _ iv key)) <- mfix $ \ ~(ident, iv,_) ->  do
+            let key = generator iv ident
+            ctx <- ask
+            let tbl = ctxHFormulaTbl ctx
+            res <- liftIO $ H.lookup tbl key
+            case res of
+                Just v -> return (getIdent v, getIValue v, v)
+                Nothing -> do
+                    ident' <- liftIO $ readIORef (ctxHFormulaSize ctx)
+                    liftIO $ writeIORef (ctxHFormulaSize ctx) $! (ident'+1)
+                    liftIO $ H.insert tbl key key
+                    iv' <- m_iv
+                    return (ident', iv',key)
+        key `seq` iv `seq` return v
+
 pprintEnv :: Env -> Doc
 pprintEnv (penv, ienv) = brackets $ vcat $ punctuate comma (map pprintAssoc (M.keys penv)) 
     where
@@ -33,28 +88,6 @@ pprintEnv (penv, ienv) = brackets $ vcat $ punctuate comma (map pprintAssoc (M.k
         let pty = penv M.! f
             ity = ienv M.! f
         in pPrint (name f) <+> text ":" <+> pPrint pty <+> text "|>" <+> pPrint ity
-
-instance Pretty IType where
-    pPrintPrec plevel prec ity =
-        case ity of
-            IInt  -> text "int"
-            IBool -> text "bool"
-            IPair ity1 ity2 -> maybeParens (prec > 0) d 
-                where
-                    d1 = pPrintPrec plevel 1 ity1
-                    d2 = pPrintPrec plevel 1 ity2
-                    d  = d1 <+> text "*" <+> d2
-            IFun ty_assoc -> 
-                braces $ vcat $ punctuate comma $ 
-                    map (\(ty_xs, fml, ty_ret) -> 
-                            let d_xs = hsep $ punctuate comma (map (pPrintPrec plevel 0) ty_xs)
-                                d_fml = text $ show fml
-                                d_ret = pPrintPrec plevel 0 ty_ret
-                            in braces (d_xs <+> text "|" <+> d_fml) <+> text "->" <+> d_ret) ty_assoc
-instance Pretty ITermType where
-    pPrintPrec _ _ IFail = text "fail"
-    pPrintPrec plevel _ (ITerm ty fml) = braces $ pPrintPrec plevel 0 ty <+> text "|" <+> text (show fml)
-
 
 type Env = (PEnv, IEnv)
 type PEnv = M.Map TId PType

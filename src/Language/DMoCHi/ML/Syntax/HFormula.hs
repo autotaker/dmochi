@@ -1,23 +1,19 @@
 {-# LANGUAGE LambdaCase, BangPatterns, DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
 module Language.DMoCHi.ML.Syntax.HFormula where
 
-import           Control.Monad.Reader
-import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
 import           Data.Hashable
-import           Data.IORef
 import           Text.PrettyPrint.HughesPJClass
 import           Data.Type.Equality
-import           Data.Time
 import           GHC.Generics (Generic)
 import qualified Z3.Monad as Z3
 
-import           Language.DMoCHi.Common.Id
+-- import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.Syntax.Type
 import           Language.DMoCHi.ML.Syntax.PType hiding(Env)
 import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
-import           Language.DMoCHi.ML.Flow
+-- import           Language.DMoCHi.ML.Flow
 import qualified Language.DMoCHi.ML.SMT as SMT
 
 type HashTable k v = H.BasicHashTable k v
@@ -84,25 +80,11 @@ infix 4 ===
 
 (===) :: HFormula -> HFormula -> Bool
 (===) = (==) `on` getIdent
-            
-genHFormula :: (SMT.IValue -> Int -> HFormula) -> R SMT.IValue -> R HFormula
-genHFormula generator m_iv = do
-    (_, _, v@(HFormula _ _ _ iv key)) <- mfix $ \ ~(ident, iv,_) ->  do
-        let key = generator iv ident
-        ctx <- ask
-        let tbl = ctxHFormulaTbl ctx
-        res <- liftIO $ H.lookup tbl key
-        case res of
-            Just v -> return (getIdent v, getIValue v, v)
-            Nothing -> do
-                ident' <- liftIO $ readIORef (ctxHFormulaSize ctx)
-                liftIO $ writeIORef (ctxHFormulaSize ctx) $! (ident'+1)
-                liftIO $ H.insert tbl key key
-                iv' <- m_iv
-                return (ident', iv',key)
-    key `seq` iv `seq` return v
 
-mkBin :: SBinOp op -> HFormula -> HFormula -> R HFormula
+class Z3.MonadZ3 m => HFormulaFactory m where
+    genHFormula :: (SMT.IValue -> Int -> HFormula) -> m SMT.IValue -> m HFormula
+ 
+mkBin :: HFormulaFactory m => SBinOp op -> HFormula -> HFormula -> m HFormula
 mkBin op v1 v2 = 
     let iv1 = getIValue v1
         iv2 = getIValue v2
@@ -119,7 +101,7 @@ mkBin op v1 v2 =
         SAnd -> genHFormula ( HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkAnd [v1', v2'])
         SOr  -> genHFormula ( HFormula SBinary (BinArg SOr  v1 v2) TBool) (SMT.ASTValue <$> Z3.mkOr [v1', v2'])
 
-mkUni :: SUniOp op -> HFormula -> R HFormula
+mkUni :: HFormulaFactory m => SUniOp op -> HFormula -> m HFormula
 mkUni op v1@(HFormula _ _ sty _ _) = 
     case op of
         SNeg -> 
@@ -139,14 +121,14 @@ mkUni op v1@(HFormula _ _ sty _ _) =
                 genHFormula (HFormula SUnary (UniArg SSnd v1) sty2) (pure iv_snd)
             _ -> error "mkUni: Snd"
 
-mkLiteral :: Lit -> R HFormula
+mkLiteral :: HFormulaFactory m => Lit -> m HFormula
 mkLiteral l@(CInt i)  = genHFormula (HFormula SLiteral l TInt) (SMT.ASTValue <$> Z3.mkInteger i)
 mkLiteral l@(CBool b) = genHFormula (HFormula SLiteral l TInt) (SMT.ASTValue <$> Z3.mkBool b)
 
-mkVar :: TId -> R HFormula
+mkVar :: HFormulaFactory m => TId -> m HFormula
 mkVar x@(TId sty name_x) = genHFormula (HFormula SVar x sty) (SMT.toIValueId sty (show name_x))
 
-toHFormula :: Formula -> R HFormula
+toHFormula :: HFormulaFactory m => Formula -> m HFormula
 toHFormula (Atom l arg _) = 
     case (l, arg) of
         (SLiteral, arg) -> mkLiteral arg
@@ -158,6 +140,7 @@ toHFormula (Atom l arg _) =
         (SUnary, UniArg op v1) -> do
             f1 <- toHFormula v1
             mkUni op f1
+
 fromHFormula :: HFormula -> Formula
 fromHFormula (HFormula l arg sty _ _) = 
     case (l, arg) of
@@ -178,6 +161,27 @@ data ITermType = IFail | ITerm IType BFormula
 
 instance Hashable IType
 instance Hashable ITermType
+
+instance Pretty IType where
+    pPrintPrec plevel prec ity =
+        case ity of
+            IInt  -> text "int"
+            IBool -> text "bool"
+            IPair ity1 ity2 -> maybeParens (prec > 0) d 
+                where
+                    d1 = pPrintPrec plevel 1 ity1
+                    d2 = pPrintPrec plevel 1 ity2
+                    d  = d1 <+> text "*" <+> d2
+            IFun ty_assoc -> 
+                braces $ vcat $ punctuate comma $ 
+                    map (\(ty_xs, fml, ty_ret) -> 
+                            let d_xs = hsep $ punctuate comma (map (pPrintPrec plevel 0) ty_xs)
+                                d_fml = text $ show fml
+                                d_ret = pPrintPrec plevel 0 ty_ret
+                            in braces (d_xs <+> text "|" <+> d_fml) <+> text "->" <+> d_ret) ty_assoc
+instance Pretty ITermType where
+    pPrintPrec _ _ IFail = text "fail"
+    pPrintPrec plevel _ (ITerm ty fml) = braces $ pPrintPrec plevel 0 ty <+> text "|" <+> text (show fml)
 
 subTypeOf :: IType -> IType -> Bool
 subTypeOf IInt IInt = True
@@ -226,39 +230,3 @@ mkBOr (BConst True) _ = BConst True
 mkBOr b (BConst False) = b
 mkBOr _ (BConst True) = BConst True
 mkBOr b1 b2 = BOr b1 b2
-
-data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
-                       , ctxTypeMap :: TypeMap
-                       , ctxFlowMap :: FlowMap
-                       , ctxRtnTypeTbl :: HashTable UniqueKey (PType, [HFormula]) 
-                       , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [HFormula]) 
-                       , ctxHFormulaTbl :: HFormulaTbl
-                       , ctxHFormulaSize :: IORef Int
-                       , ctxCheckSatCache :: HashTable (Int, Int) Bool
-                       , ctxUpdated :: IORef Bool
-                       , ctxSMTCount :: IORef Int
-                       , ctxSMTCountHit :: IORef Int
-                       , ctxMode  :: IORef TypingMode
-                       , ctxTimer :: HashTable MeasureKey NominalDiffTime
-                       , ctxSMTSolver :: Z3.Solver
-                       , ctxSMTContext :: Z3.Context }
-
-data TypingMode = Saturation 
-                | Extraction
-          deriving(Show,Ord,Eq)
-
-data MeasureKey = CheckSat | CalcCondition | Total | MSaturation | MExtraction
-    deriving (Eq, Ord, Show, Generic)
-
-instance Hashable MeasureKey 
-
-newtype R a = R { unR :: ReaderT Context IO a }
-    deriving (Monad, Applicative, Functor, MonadFix, MonadIO)
-
-instance MonadReader Context R where
-    ask = R ask
-    local f a = R (local f $ unR a)
-
-instance Z3.MonadZ3 R where
-    getSolver = ctxSMTSolver <$> ask
-    getContext = ctxSMTContext <$> ask
