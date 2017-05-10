@@ -91,6 +91,11 @@ instance HFormulaFactory R where
 type PEnv = M.Map TId PType
 type IEnv = M.Map TId IType
 
+(!) :: (Ord k, Show k) => M.Map k v -> k -> v
+(!) f a = case M.lookup a f of
+    Just v -> v
+    Nothing -> error $ "no assoc found for key: " ++ show a
+
 calcContextV :: M.Map TId PType -> Value -> PType -> R ()
 calcContextV env (Value l arg _ key) pty = 
     case (l, arg) of
@@ -141,7 +146,7 @@ calcContextE env (Exp l arg sty key) tau =
                     calcContextE env' e2 tau
                 exprCase e1 = do
                     ctx <- ask
-                    let Right tau1@(y, ty_y, ps) = ctxTypeMap ctx M.! key1
+                    let Right tau1@(y, ty_y, ps) = ctxTypeMap ctx ! key1
                         subst = M.singleton y x
                         ps'   = map (substFormula subst) ps
                         ty_x  = substPType subst ty_y
@@ -156,7 +161,7 @@ calcContextE env (Exp l arg sty key) tau =
                 (SBinary, _)  -> atomCase (Atom l1 arg1 sty1)
                 (SUnary, _)   -> atomCase (Atom l1 arg1 sty1)
                 (SApp, (f, vs)) -> do
-                    let PFun _ argTy retTy = env M.! f
+                    let PFun _ argTy retTy = env ! f
                         (ys, ptys, ps) = argTy
                         subst = M.fromList $ zip ys vs
                         ptys' = map (substVPType subst) ptys
@@ -185,9 +190,9 @@ calcContextE env (Exp l arg sty key) tau =
         (SLetRec, (fs, e2)) -> do
             tbl <- ctxTypeMap <$> ask
             let as = [ (f, ty_f) | (f,v_f) <- fs, 
-                                   let Left ty_f = tbl M.! getUniqueKey v_f ]
+                                   let Left ty_f = tbl ! getUniqueKey v_f ]
                 env' = foldr (uncurry M.insert) env as
-            forM_ fs $ \(f,v_f) -> calcContextV env' v_f (env' M.! f)
+            forM_ fs $ \(f,v_f) -> calcContextV env' v_f (env' ! f)
             calcContextE env' e2 tau
         (SAssume, (_, e)) -> calcContextE env e tau
         (SBranch, (e1, e2)) -> calcContextE env e1 tau >> calcContextE env e2 tau
@@ -304,7 +309,7 @@ pprintContext prog = do
                         nest 4 d_e
 
 data CValue = CBase | CPair CValue CValue 
-            | CRec CEnv IEnv HFormula History UniqueKey [(UniqueKey, (TId, [TId], Exp))]
+            | CRec CEnv TId (HashTable (TId, ArgType, ITermType) ValueNode)
             | CCls CEnv [TId] (HashTable ArgType ExpNode)
 type CEnv = M.Map TId CValue
 type History = HashTable (TId, ArgType, ITermType) ValueNode
@@ -557,7 +562,7 @@ calcAtom :: IEnv -> Atom -> IType
 calcAtom env (Atom l arg _) = case (l, arg) of
     (SLiteral, CInt _)  -> IInt
     (SLiteral, CBool _) -> IInt
-    (SVar, x) -> env M.! x
+    (SVar, x) -> env ! x
     (SBinary, BinArg op _ _) -> case op of
         SAdd -> IInt
         SSub -> IInt
@@ -576,7 +581,7 @@ evalAtom :: CEnv -> Atom -> CValue
 evalAtom cenv (Atom l arg _) =
     case (l, arg) of
         (SLiteral, _) -> CBase
-        (SVar, x) -> cenv M.! x
+        (SVar, x) -> cenv ! x
         (SBinary, _) -> CBase
         (SUnary, UniArg op v) ->
             case op of
@@ -692,7 +697,8 @@ calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) =
             (tys,edge2) <- mkExpEdge env' fml _node e2 ENone
             let recalc :: R [ITermType]
                 recalc = liftIO $ readIORef $ types $ to $ edge2
-                extract = extractor (to edge2)
+                extract cenv iota = extractor (to edge2) cenv' iota 
+                    where cenv' = M.insert x CBase cenv
             return (tys, MetaLetAtom edge2, recalc, extract)
         _        -> genericCase)
     where 
@@ -705,7 +711,8 @@ calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) =
             (tys,edge2) <- mkExpEdge env' fml' _node e2 ENone
             let recalc :: R [ITermType]
                 recalc = liftIO $ readIORef $ types $ to $ edge2
-                extract = extractor (to edge2)
+                extract cenv iota = extractor (to edge2) cenv' iota 
+                    where cenv' = M.insert x (evalAtom cenv atom) cenv
             return (tys, MetaLetAtom edge2, recalc, extract)
         genericCase = do
             Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
@@ -778,7 +785,7 @@ calcLetRec env fml _node (fs, e) = do
                         Nothing -> do
                            H.insert (letRHistory meta) (f, (thetas,phi), iota) (to edge)
                            writeIORef updated True
-                let IFun assocs' = env0 M.! f
+                let IFun assocs' = env0 ! f
                 return (f, IFun (merge assocs assocs'))
             liftIO (readIORef updated) >>= \case
                 True -> do
@@ -793,8 +800,11 @@ calcLetRec env fml _node (fs, e) = do
                     liftIO $ writeIORef (letRCont meta) edge_e
                     return tys
                 False -> liftIO $ readIORef (letRCont meta) >>= readIORef . types . to
-        -- extract cenv iota = undefined
-    return (tys, meta, recalc,undefined)
+        extract cenv iota = do
+            let cenv' = foldr (uncurry M.insert) cenv [ (f, CRec cenv' f (letRHistory meta)) | (f,_) <- fs ]
+            edge_e <- liftIO $ readIORef (letRCont meta)
+            extractor (to edge_e) cenv' iota
+    return (tys, meta, recalc,extract)
 
 calcAssume :: IEnv -> HFormula -> ExpNode -> (Atom, Exp) -> R ([ITermType], MetaAssume Exp, R [ITermType], TermExtractor)
 calcAssume env fml _node (a, e) = do
@@ -813,30 +823,36 @@ calcAssume env fml _node (a, e) = do
 
 calcApp :: IEnv -> HFormula -> LExpNode -> UniqueKey -> (TId, [Value]) -> R ([ITermType], MetaApp LExp, R [ITermType], TermExtractor)
 calcApp env fml _node key (f, vs) = do
-    let IFun assoc = env M.! f
+    let IFun assoc = env ! f
     Just (_, ps) <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key)
     phi <- calcCondition fml ps
     (thetas,edges) <- fmap unzip $ forM (zip [0..] vs) $ \(i,v) -> 
         mkValueEdge env fml _node v (EApp i)
 
     flowMap <- ctxFlowMap <$> ask
-    forM_ (flowMap M.! f) $ \ident -> addFlow ident (thetas,phi)
+    forM_ (flowMap ! f) $ \ident -> addFlow ident (thetas,phi)
     
     let appType thetas = 
             [ iota | (thetas', phi', iota) <- assoc,
                      thetas == thetas' && phi == phi' ]
         recalc = do
             thetas <- forM edges $ liftIO . readIORef . types . to
-            forM_ (flowMap M.! f) $ \ident -> addFlow ident (thetas,phi)
+            forM_ (flowMap ! f) $ \ident -> addFlow ident (thetas,phi)
             return $ appType thetas
         extract cenv iota = do
             let cvs = map (\edge -> extractor (to edge) cenv) edges
             thetas <- forM edges $ liftIO . readIORef . types . to
-            case cenv M.! f of
-                CCls cenv_f xs tbl -> do
+            let closureCase (CCls cenv_f xs tbl) = do
                     Just node <- liftIO $ H.lookup tbl (thetas, phi)
                     let cenv_f' = foldr (uncurry M.insert) cenv_f (zip xs cvs)
                     extractor node cenv_f' iota
+                closureCase _ = error "unexpected pattern"
+            
+            case cenv ! f of
+                CRec cenv_f g hist -> do
+                    Just node <- liftIO $ H.lookup hist (g, (thetas, phi), iota)
+                    closureCase (extractor node cenv_f)
+                cv_f -> closureCase cv_f
     return (appType thetas, MetaApp edges phi, recalc, extract)
 
 calcValue :: IEnv -> HFormula -> Edge (Node e) ValueNode -> Value -> R (ValueNode, IType)
@@ -863,6 +879,8 @@ calcValue env fml pEdge (Value l arg sty key) =
                         , edges = meta
                         , recalcator = recalc
                         , extractor  = extract }
+        liftIO $ putStrLn "created"
+        liftIO $ printNode node
         return (node, ity)
 
 calcExp :: IEnv -> HFormula -> Edge (Node e) ExpNode -> Exp -> R (ExpNode, [ITermType])
@@ -891,6 +909,12 @@ calcExp env fml pEdge (Exp l arg sty key) =
             SOmega   -> 
                 let extract _ _ = error "extract@SOmega_calcExp: omega never returns value nor fails"
                 in return ([], (), return [], extract)
+        let extract' cenv iota = do
+                liftIO $ do
+                    putStrLn $ "extracting: " ++ show (pPrint iota)
+                    putStrLn $ "    cenv: " ++ show (M.keys cenv)
+                    printNode _node
+                extract cenv iota
         itypeRef <- liftIO $ newIORef itys
         let node = Node { typeEnv = env
                         , constraint = fml
@@ -900,7 +924,8 @@ calcExp env fml pEdge (Exp l arg sty key) =
                         , parent = pEdge
                         , edges = meta
                         , recalcator = recalc
-                        , extractor = extract }
+                        , extractor = extract' }
+        liftIO $ putStrLn "created"
         liftIO $ printNode node
         return (node, itys)
 
@@ -941,6 +966,8 @@ calcLExp env fml pEdge (LExp l arg sty key) =
                         , edges = meta
                         , recalcator = recalc 
                         , extractor = extract}
+        liftIO $ putStrLn "created"
+        liftIO $ printNode node
         return (node, itys)
 
 
@@ -949,6 +976,9 @@ genericRecalc node cont = do
     new_ity <- recalcator node
     old_ity <- liftIO $ readIORef (types node) 
     liftIO $ writeIORef (types node) new_ity
+    liftIO $ do
+        putStrLn "recalculated"
+        printNode node
     cont new_ity old_ity
     
 recalcValue :: ValueNode -> R (IType, Bool)
@@ -1002,7 +1032,6 @@ updateLoop = popQuery >>= \case
             QEdge edge -> do
                 b <- liftIO $ readIORef (alive edge)
                 liftIO $ putStrLn "Updating edge"
-                liftIO $ printNode (from edge)
                 when b $ 
                     case from edge of
                         n@(Node { parent = parent }) -> do
@@ -1014,7 +1043,6 @@ updateLoop = popQuery >>= \case
                             unless (IFail `elem` tys) updateLoop
             QFlow node@(Node {parent = parent}) -> do
                 liftIO $ putStrLn "Updating flow"
-                liftIO $ printNode node 
                 genericRecalc node $ \new_tys old_tys ->
                     when (new_tys /= old_tys) $ pushQuery (QEdge parent)
                 updateLoop
@@ -1053,5 +1081,9 @@ saturate typeMap prog = do
                 return (RootNode (to edge))
             updateLoop
             tys <- liftIO $ readIORef (types n)
-            return (IFail `elem` tys, (tys, Nothing))
+            if IFail `elem` tys
+            then do
+                bs <- execWriterT (extractor n M.empty IFail)
+                return (True, (tys, Just bs))
+            else return (False, (tys, Nothing))
     evalStateT (runReaderT (unR doit) ctx) emptyQueue
