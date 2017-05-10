@@ -1,5 +1,5 @@
-{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
-module Language.DMoCHi.ML.IncSaturation where
+{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances #-}
+module Language.DMoCHi.ML.IncSaturation(saturate) where
 import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
@@ -9,6 +9,7 @@ import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 
 -- import Control.Monad
 import           GHC.Generics (Generic)
+import           Data.Kind(Constraint)
 import           Control.Monad.Fix
 --import Control.Arrow ((***),second)
 import           Control.Monad.Reader
@@ -316,10 +317,10 @@ pushQueue :: a -> Queue a -> Queue a
 pushQueue a queue = queue Q.|> a
 
 data SomeNode where
-    SomeNode :: (e == Root) ~ 'False => Node e -> SomeNode
+    SomeNode :: NonRoot e => Node e -> SomeNode
 
 data Node e where
-    Node :: ((e == Root) ~ 'False, Normalized l e arg, Supported l (Labels e), Eq (SatType e)) => 
+    Node :: (NonRoot e, Normalized l e arg, Supported l (Labels e), Eq (SatType e)) => 
             { typeEnv    :: IEnv
             , constraint :: HFormula
             , refl   :: NodeProxy e
@@ -330,6 +331,9 @@ data Node e where
             , term   :: (SLabel l, arg, Type, UniqueKey)
             } -> Node e
     RootNode :: { main :: Node Exp } -> Node Root
+
+type family NonRoot e :: Constraint where
+    NonRoot e = (e == Root) ~ 'False
 
 type family SatType e where
     SatType Exp = [ITermType]
@@ -375,7 +379,8 @@ type family Meta (l :: Label) e where
 data MetaLet e = 
     MetaLet { letChild :: Edge (Node e) LExpNode
             , letCont  :: HashTable (IType,BFormula) (Edge (Node e) ExpNode)
-            }
+            } 
+  | MetaLetAtom (Edge (Node e) ExpNode)
 
 data MetaLetR e = 
     MetaLetR { letRChildren :: IORef [Edge (Node e) ValueNode]
@@ -397,7 +402,7 @@ data MetaBranch e =
 
 data UpdateQuery where
     QEdge :: Edge (Node e) (Node e') -> UpdateQuery
-    QFlow :: (e == Root) ~ 'False => Node e -> UpdateQuery
+    QFlow :: NonRoot e => Node e -> UpdateQuery
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
 getFlow i = do
@@ -590,7 +595,7 @@ calcPair env fml _node (v1,v2) = do
             return $ IPair ty1 ty2
     return (IPair ty1 ty2, MetaPair e1 e2, recalc)
     
-calcLambda :: (e == Root) ~ 'False => IEnv -> HFormula -> Node e -> UniqueKey -> ([TId], Exp) -> R (IType, MetaLambda e, R IType)
+calcLambda :: NonRoot e => IEnv -> HFormula -> Node e -> UniqueKey -> ([TId], Exp) -> R (IType, MetaLambda e, R IType)
 calcLambda env fml _node key (xs, e) = do
     Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
     tbl <- liftIO H.new
@@ -631,30 +636,47 @@ calcBranch env fml _node (e1, e2) = do
     return (merge tys1 tys2, MetaBranch edge1 edge2, recalc)
 
 calcLet :: IEnv -> HFormula -> ExpNode -> UniqueKey -> (TId, LExp, Exp) -> R ([ITermType], MetaLet Exp, R [ITermType])
-calcLet env fml _node key (x, e1, e2) = do
-    Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
-    tbl <- liftIO $ H.new
-    let genericCalc :: [ITermType] -> R [ITermType]
-        genericCalc tys1 = 
-            fmap concatMerge $ forM tys1 $ \case
-                IFail -> return [IFail]
-                ITerm ity phi -> do
-                    liftIO (H.lookup tbl (ity,phi)) >>= \case
-                        Just edge -> liftIO $ readIORef $ types $ to edge
-                        Nothing -> do
-                            let env' = M.insert x ity env
-                            cond <- fromBFormula ps phi
-                            fml' <- mkBin SAnd fml cond
-                            checkSat fml cond >>= \case 
-                                False -> return []
-                                True -> do 
-                                    (tys, edge) <- mkExpEdge env' fml' _node e2 (ELetC (ity, phi))
-                                    liftIO $ H.insert tbl (ity,phi) edge
-                                    return tys
-    (tys1, edge1) <- mkLExpEdge env fml _node e1 ENone
-    tys <- genericCalc tys1
-    let recalc = (liftIO $ readIORef $ types $ to $ edge1) >>= genericCalc
-    return (tys, MetaLet edge1 tbl, recalc)
+calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) = 
+    (case l1 of
+        SLiteral -> atomCase (Atom l1 arg1 sty1)
+        SVar     -> atomCase (Atom l1 arg1 sty1)
+        SUnary   -> atomCase (Atom l1 arg1 sty1)
+        SBinary  -> atomCase (Atom l1 arg1 sty1)
+        _        -> genericCase)
+    where 
+        atomCase atom = do
+            vx <- mkVar x
+            fml' <- toHFormula atom >>= mkBin SEq vx >>= mkBin SAnd fml
+            let ity = calcAtom env atom 
+                env' = M.insert x ity env
+            (tys,edge2) <- mkExpEdge env' fml' _node e2 ENone
+            let recalc :: R [ITermType]
+                recalc = liftIO $ readIORef $ types $ to $ edge2
+            return (tys, MetaLetAtom edge2, recalc)
+        genericCase = do
+            Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+            tbl <- liftIO $ H.new
+            let genericCalc :: [ITermType] -> R [ITermType]
+                genericCalc tys1 = 
+                    fmap concatMerge $ forM tys1 $ \case
+                        IFail -> return [IFail]
+                        ITerm ity phi -> do
+                            liftIO (H.lookup tbl (ity,phi)) >>= \case
+                                Just edge -> liftIO $ readIORef $ types $ to edge
+                                Nothing -> do
+                                    let env' = M.insert x ity env
+                                    cond <- fromBFormula ps phi
+                                    fml' <- mkBin SAnd fml cond
+                                    checkSat fml cond >>= \case 
+                                        False -> return []
+                                        True -> do 
+                                            (tys, edge) <- mkExpEdge env' fml' _node e2 (ELetC (ity, phi))
+                                            liftIO $ H.insert tbl (ity,phi) edge
+                                            return tys
+            (tys1, edge1) <- mkLExpEdge env fml _node e1 ENone
+            tys <- genericCalc tys1
+            let recalc = (liftIO $ readIORef $ types $ to $ edge1) >>= genericCalc
+            return (tys, MetaLet edge1 tbl, recalc)
 
 calcLetRec :: IEnv -> HFormula -> ExpNode -> ([(TId, Value)], Exp) -> R ([ITermType], MetaLetR Exp, R [ITermType])
 calcLetRec env fml _node (fs, e) = do
@@ -821,7 +843,7 @@ calcLExp env fml pEdge (LExp l arg sty key) =
         return (node, itys)
 
 
-genericRecalc :: ((e == Root) ~ 'False) => Node e -> (SatType e -> SatType e -> R b) -> R b
+genericRecalc :: NonRoot e => Node e -> (SatType e -> SatType e -> R b) -> R b
 genericRecalc node cont = do
     new_ity <- recalcator node
     old_ity <- liftIO $ readIORef (types node) 
