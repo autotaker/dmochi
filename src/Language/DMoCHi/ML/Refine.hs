@@ -97,7 +97,9 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
                     return (RFun IM.empty)
                 else do
                     let cls = closure (clsLookup (calleeId (head cs)))
-                    let (_,xs,_) = clsBody cls
+                    xs <- do
+                        let (_,xs',_) = clsBody cls
+                        mapM ML.alphaTId xs'
                     let env' = foldl' (flip push) env xs
                     fmap (RFun . IM.fromList) $ forM cs $ \info -> do
                         let j = callId info

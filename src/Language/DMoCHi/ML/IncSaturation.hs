@@ -133,7 +133,7 @@ getFlow i = do
     l <- liftIO (H.lookup tbl i) >>= \case
         Just v -> return (S.toList v)
         Nothing -> return []
-    liftIO $ print ("getFlow", i, l)
+    -- liftIO $ print ("getFlow", i, l)
     return l
 
 addFlow :: UniqueKey -> ([IType], BFormula) -> R ()
@@ -152,7 +152,7 @@ addFlow i v = do
             | S.member v vs -> return ()
             | otherwise -> cont (S.insert v vs)
         Nothing -> cont (S.singleton v)
-    liftIO $ print ("addFlow", i, v)
+    -- liftIO $ print ("addFlow", i, v)
 
 calcAtom :: IEnv -> Atom -> IType
 calcAtom env (Atom l arg _) = case (l, arg) of
@@ -219,7 +219,6 @@ calcLambda env fml _node key (xs, e) = do
     Just (_, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
     tbl <- liftIO H.new
     reg <- ctxFlowReg <$> ask
-    liftIO $ print ("register" :: String,key)
     liftIO $ H.lookup reg key >>= \case
         Just l  -> H.insert reg key (SomeNode _node:l)
         Nothing -> H.insert reg key [SomeNode _node]
@@ -613,7 +612,7 @@ updateLoop :: R ()
 updateLoop = popQuery >>= \case
     Nothing -> return ()
     Just (UpdateQuery _ node) -> do
-        liftIO $ putStrLn "Updating"
+        -- liftIO $ putStrLn "Updating"
         case node of
             Node {parent = parent, alive = alive} -> do
                 liftIO (readIORef alive) >>= \case

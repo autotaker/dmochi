@@ -220,7 +220,7 @@ flowAnalysis (Program fs e0) = do
             map (\case 
                 ELabel l1 l2 -> decompLabel l1 ++ decompLabel l2
                 EApp _ k ls l -> k : concat (map decompLabel (l:ls))) cs ++
-            map (\(Func _ ls l) -> concat (map decompLabel (l:ls))) funcs
+            map (\(Func ident ls l) -> KFun ident : concat (map decompLabel (l:ls))) funcs
     graph <- H.new :: IO Graph
     cache <- H.new :: IO Cache
     appTbl <- H.new
