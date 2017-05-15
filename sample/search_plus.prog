@@ -1,0 +1,19 @@
+let search n =
+    let rec sub1 x = 
+        let rec sub y =
+            if x + y = n 
+            then (x , y)
+            else if y <= 0
+            then sub1 (x - 1)
+            else sub (y - 1) in
+        if x <= 0
+        then (-1, -1)
+        else sub x in 
+    sub1 n in
+let n = * in
+let r = search n in
+let x = r.fst in
+let y = r.snd in
+assume( x > 0 );
+assert( x + y = n)
+
