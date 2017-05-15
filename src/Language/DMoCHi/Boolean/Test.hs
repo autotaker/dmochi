@@ -29,7 +29,7 @@ test path input = do
     (b,_ctx) <- liftIO $ saturate p g
     return b
 
-testTyped :: MonadIO m => FilePath -> Typed.Program -> ExceptT String m (Maybe [Bool])
+testTyped :: (MonadIO m) => FilePath -> Typed.Program -> ExceptT String m (Maybe [Bool])
 testTyped path p = do
     let graph_path = path ++ ".typed.dot"
     p_flow <- measure "0CFA" $ do

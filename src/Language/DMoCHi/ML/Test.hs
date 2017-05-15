@@ -13,6 +13,7 @@ import Text.Printf
 
 import           Language.DMoCHi.Boolean.Syntax.Typed as B(tCheck)
 import           Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
+import           Language.DMoCHi.Boolean.LiftRec as B(liftRec)
 import           Language.DMoCHi.Boolean.Test 
 import           Language.DMoCHi.ML.Parser
 import           Language.DMoCHi.ML.Alpha
@@ -201,7 +202,36 @@ doit = do
         return _normalizedProgram
 
     (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
-    let cegar _ k _  | k >= cegarLimit conf = return ()
+    let mc k curTypeMap castFreeProgram 
+            | incremental conf = measure "Fusion(Inc)" $ do
+                unliftedProgram <- IncSat.unliftRec castFreeProgram
+                (_,res) <- liftIO $ IncSat.saturate curTypeMap unliftedProgram
+                liftIO $ print res
+                return (snd res)
+            | fusion conf = measure "Fusion" $ do
+                (_,res) <- liftIO $ Saturate.saturate curTypeMap castFreeProgram
+                liftIO $ print res
+                return (snd res)
+            | otherwise = do
+                boolProgram <- measure "Predicate Abstraction" $ lift $ PAbst.abstProg curTypeMap castFreeProgram
+                liftIO $ putStrLn "Converted program"
+                liftIO $ putStrLn $ render $ B.pprintProgram boolProgram
+                case runExcept (B.tCheck boolProgram) of
+                    Left (s1,s2,str,ctx) -> do
+                        liftIO $ do
+                            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+                            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                                printf "Context %d: %s\n" i (show t)
+                        throwError $ BooleanError "Abstracted Program is ill-typed"
+                    Right _ -> return ()
+                boolProgram' <- lift $ B.liftRec boolProgram
+                liftIO $ putStrLn "Recursion lifted program"
+                liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
+                let file_boolean = printf "%s_%d.bool" path k
+                liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
+                r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
+                return r
+        cegar _ k _  | k >= cegarLimit conf = return ()
         cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs) = do
             res <- measure (printf "CEGAR-%d" k) $ do
 
@@ -213,44 +243,7 @@ doit = do
                 castFreeProgram <- lift $ PAbst.elimCast curTypeMap normalizedProgram
                 prettyPrint castFreeProgram
 
-
-                reachable <- if (fusion conf) 
-                    then measure "Fusion" $ 
-                        if incremental conf
-                            then do
-                                unliftedProgram <- IncSat.unliftRec castFreeProgram
-                                (reachable,res) <- liftIO $ IncSat.saturate curTypeMap unliftedProgram
-                                liftIO $ print res
-                                return (Just reachable)
-                            else do
-                                (reachable,res) <- liftIO $ Saturate.saturate curTypeMap castFreeProgram
-                                liftIO $ print res
-                                return (Just reachable)
-                    else return Nothing
-
-                boolProgram <- measure "Predicate Abstraction" $ lift $ PAbst.abstProg curTypeMap castFreeProgram
-                let file_boolean = printf "%s_%d.bool" path k
-                liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram
-                liftIO $ putStrLn "Converted program"
-                liftIO $ putStrLn $ render $ B.pprintProgram boolProgram
-                case runExcept (B.tCheck boolProgram) of
-                    Left (s1,s2,str,ctx) -> do
-                        liftIO $ do
-                            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
-                            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
-                                printf "Context %d: %s\n" i (show t)
-                        throwError $ BooleanError "Abstracted Program is ill-typed"
-                    Right _ -> return ()
-
-                r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram
-                {-
-                case (r, reachable) of
-                    (Just _, Just True) -> return ()
-                    (Nothing, Just False) -> return ()
-                    (_, Nothing) -> return ()
-                    _ -> throwError Debugging
-                -}
-                case r of
+                mc k curTypeMap castFreeProgram >>= \case
                     Just trace -> measure "Refinement" $ do
                         let traceFile = printf "%s_%d.trace.dot" path k
                         (trace,isFoolI) <- case interactive conf of

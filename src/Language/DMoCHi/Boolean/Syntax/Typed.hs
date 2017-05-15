@@ -268,4 +268,3 @@ freeVariables t = case t of
     Not t     -> freeVariables t
     Fail _    -> S.empty
     Omega _   -> S.empty
-    

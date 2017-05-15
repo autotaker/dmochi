@@ -326,15 +326,17 @@ calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) =
                 extractCont cenv iota = go =<< (liftIO $ readIORef $ types node1)
                     where
                     go (IFail: tys1) = go tys1
-                    go (ITerm ity phi: tys1) = do
-                        Just node2 <- liftIO (H.lookup tbl (ity, phi))
-                        tys2 <- liftIO $ readIORef $ types node2
-                        if any (flip subTermTypeOf iota) tys2
-                        then do
-                            Just cv1 <- extractor node1 cenv (ITerm ity phi)
-                            let cenv' = M.insert x cv1 cenv
-                            extractor node2 cenv' iota
-                        else go tys1
+                    go (ITerm ity phi: tys1) = 
+                        liftIO (H.lookup tbl (ity, phi)) >>= \case
+                            Nothing -> go tys1 
+                            Just node2 -> do
+                                tys2 <- liftIO $ readIORef $ types node2
+                                if any (flip subTermTypeOf iota) tys2
+                                then do
+                                    Just cv1 <- extractor node1 cenv (ITerm ity phi)
+                                    let cenv' = M.insert x cv1 cenv
+                                    extractor node2 cenv' iota
+                                else go tys1
                     go [] = error "unexpected pattern"
                 destruct = do
                     destructor node1
@@ -496,8 +498,10 @@ calcValue env fml parent value@(Value l arg sty key) =
                         , destructor = destruct'
                         , alive    = alive
                         , pprinter = pp}
+        {-
         liftIO $ putStrLn "created"
         liftIO $ printNode node
+        -}
         return (node, ity)
 
 calcExp :: IEnv -> HFormula -> Node e -> Exp -> R (ExpNode, [ITermType])
@@ -527,10 +531,12 @@ calcExp env fml parent exp@(Exp l arg sty key) =
                 let extract _ _ = error "extract@SOmega_calcExp: omega never returns value nor fails"
                 in return ([], return [], extract, return ())
         let extract' cenv iota = do
+                {- 
                 liftIO $ do
                     putStrLn $ "extracting: " ++ show (pPrint iota)
-                    putStrLn $ "    cenv: " ++ show (M.keys cenv)
+                    putStrLn $ "cenv: " ++ show (M.keys cenv)
                     printNode _node
+                    -}
                 extract cenv iota
         itypeRef <- liftIO $ newIORef itys
         nodeIdent <- incrNodeCounter
@@ -548,8 +554,10 @@ calcExp env fml parent exp@(Exp l arg sty key) =
                         , destructor = destruct'
                         , alive = alive
                         , pprinter = pp }
+                        {-
         liftIO $ putStrLn "created"
         liftIO $ printNode node
+        -}
         return (node, itys)
 
 calcLExp :: IEnv -> HFormula -> Node e -> LExp -> R (LExpNode, [ITermType])
@@ -595,8 +603,10 @@ calcLExp env fml parent lexp@(LExp l arg sty key) =
                         , destructor = destruct'
                         , alive = alive
                         , pprinter = pp}
+                        {-
         liftIO $ putStrLn "created"
         liftIO $ printNode node
+        -}
         return (node, itys)
 
 updateLoop :: R ()
@@ -611,9 +621,11 @@ updateLoop = popQuery >>= \case
                         new_ity <- recalcator node
                         old_ity <- liftIO $ readIORef (types node) 
                         liftIO $ writeIORef (types node) new_ity
+                        {-
                         liftIO $ do
                             putStrLn "recalculated"
                             printNode node
+                            -}
                         when (new_ity /= old_ity) $ pushQuery (UpdateQuery QEdge parent) 
                         updateLoop
                     False -> updateLoop

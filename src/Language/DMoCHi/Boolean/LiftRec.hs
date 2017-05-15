@@ -17,10 +17,11 @@ liftRec (Program ds t0) =
             add (f, t_f')
         go M.empty t0
     add def = modify' (def:)
+    rename env f = case M.lookup f env of
+        Just t -> t
+        Nothing -> V f
     go _ (C b) = pure (C b)
-    go env (V f) = case M.lookup f env of
-        Just t -> pure t
-        Nothing -> pure (V f)
+    go env (V f) = pure (rename env f)
     go env (T ts) = T <$> mapM (go env) ts
     go env (Lam x t) = Lam x <$> go env t
     go env (Let s x t1 t2) = 
@@ -28,7 +29,8 @@ liftRec (Program ds t0) =
     go env (LetRec _ fs t2) = do
         let (names, values) = unzip fs
         let fvs = S.toList $ S.unions (map freeVariables values) `S.difference` S.fromList names
-            as  = [ (f, f_app (V f) (T (map V fvs))) | f <- names ]
+            g ty = Tuple (map getSort fvs) :-> ty
+            as  = [ (f, f_app (V (modifySort g f)) (T (map (rename env) fvs))) | f <- names ]
         let env' = foldr (uncurry M.insert) env as 
         forM_ fs $ \(f,t_f) -> do
             xs <- mapM (\x -> freshSym (name x) (getSort x)) fvs
@@ -37,7 +39,7 @@ liftRec (Program ds t0) =
             let n = length fvs
             let t = Lam arg (foldr (\(x,i) t -> 
                         f_let x (f_proj i n (V arg)) t) t_f' (zip xs [0..]))
-            add (f, t)
+            add (modifySort g f, t)
         go env' t2
     go env (App s t1 t2) = App s <$> go env t1 <*> go env t2
     go env (Proj s i n t) = Proj s i n <$> go env t

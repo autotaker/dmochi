@@ -137,16 +137,30 @@ exprP = simpleP `chainl1` (reservedOp "<>" >> mkBranch' ) <?> "expr" where
     omegaP   = reserved "Omega" >> mkOmega
 
 letP :: Parser Exp
-letP = (do x <- reserved "let" *> identifier
-           e1 <- sub
-           e2 <- reserved "in" *> exprP
-           mkLet x e1 e2) <?> "let"
-    where sub = (do ty <- reservedOp ":" *> typeP 
-                    e1 <- reservedOp "=" *> exprP
-                    let !key = getUniqueKey e1
-                    modifyState ((key, ty):)
-                    return e1) <|> 
-                (reservedOp "=" *> (valueP <|> (reservedOp "*" >> mkRand)))
+letP = (do reserved "let" 
+           cnstr <- (do reserved "rec"
+                        mkLetRec <$> sepBy1 bindFunc (reserved "and")) <|> 
+                    (uncurry mkLet <$> (try bind <|> bindFunc)) 
+           e <- reserved "in" *> exprP
+           cnstr e) <?> "let"
+    where 
+        bindFunc = do
+            f <- identifier
+            xs <- many1 identifier
+            e  <- reservedOp "=" *> exprP
+            v <- mkLambda xs e
+            return (f, v)
+        bind = do 
+            x <- identifier
+            optional $ do 
+                _ <- reservedOp ":" *> typeP
+                return ()
+                {- 
+                let !key = getUniqueKey e1
+                modifyState ((key, ty):) -}
+            e <- reservedOp "=" *> (exprP <|> 
+                (reservedOp "*" >> mkRand))
+            return (x, e)
 
 valueP :: Parser Exp
 valueP = buildExpressionParser opTable termP <?> "value" where

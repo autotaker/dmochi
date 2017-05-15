@@ -356,7 +356,7 @@ genericPPrint pp pLevel prec op arg =
         (SLetRec, (fs,e)) -> maybeParens (prec > 0) $
             text "let rec" <+> 
                 vcat (punctuate (text "and") 
-                        [ pPrintIdent pp prettyBind 0 x <+> text "=" 
+                        [ nest 8 $ pPrintIdent pp prettyBind 0 x <+> text "=" 
                           <+> pPrintExp pp pLevel 0 e1 | (x,e1) <- fs ])
                 <+> text "in" $+$
             pPrintExp pp pLevel 0 e

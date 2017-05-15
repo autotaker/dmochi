@@ -25,7 +25,7 @@ main = do
     let opts = info (helper <*> config)
                     (fullDesc <> progDesc "Check the safety for boolena programs"
                               <> header "hiboch - Higher-order Boolean Model Checker")
-    conf <- execParser opts
+    conf <- liftIO $ execParser opts
     let path = arg conf
 
     measure "Elapsed Time" $ do

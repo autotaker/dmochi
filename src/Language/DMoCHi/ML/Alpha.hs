@@ -101,10 +101,13 @@ renameE (U.Exp label arg key) =
             (x', e2') <- register x (renameE e2)
             return $! Exp label (x', e1', e2') key
         (SLetRec, (fs, e)) -> do
-            fs' <- mapM (\(f,e1) -> register f (renameE e1)) fs
-            let as = zipWith (\a b -> (fst a, fst b)) fs fs'
-            e' <- local (\env -> foldr (uncurry M.insert) env as) (renameE e)
-            return $! Exp label (fs', e') key
+            let (names, values) = unzip fs
+            names' <- mapM identify names
+            let as = zip names names'
+            local (\env -> foldr (uncurry M.insert) env as) $ do
+                values' <- mapM renameE values
+                e' <- renameE e
+                return $! Exp label (zip names' values', e') key
         (SAssume, (cond,e)) -> Exp label <$> ((,) <$> renameE cond <*> renameE e) <*> pure key
         (SIf, (e1,e2,e3)) -> Exp label <$> ((,,) <$> renameE e1 
                                                  <*> renameE e2
