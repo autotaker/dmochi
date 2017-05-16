@@ -10,7 +10,7 @@ import qualified Data.IntMap as IM
 import           Data.List(intersperse,foldl',sortBy)
 import           Text.PrettyPrint.HughesPJClass hiding(first)
 import           Text.Printf
---import Debug.Trace
+import Debug.Trace
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
 -- import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
@@ -97,9 +97,13 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
                     return (RFun IM.empty)
                 else do
                     let cls = closure (clsLookup (calleeId (head cs)))
-                    xs <- do
-                        let (_,xs',_) = clsBody cls
-                        mapM ML.alphaTId xs'
+                    let (_,xs',_) = clsBody cls
+                    xs <- mapM ML.alphaTId xs' 
+                    {- Example:let rec f x =   <- f : { x : int | P_f(x) } -> { r : int | Q_f(x,r) }
+                                   let rec g y = f in  <- g : { y : int | P_g(x,y) } -> 
+                                                              { ({z : int | P_g1(x,y,z)} -> ... ) | Q_g(x,y) }
+                                   let f1 = g 0 in 
+                                   f1 (x-1) -}
                     let env' = foldl' (flip push) env xs
                     fmap (RFun . IM.fromList) $ forM cs $ \info -> do
                         let j = callId info
@@ -108,7 +112,7 @@ genRTypeFactory calls closures returns = (genRType, genRPostType)
                         -- fの中でxが参照できたり、sの第一要素の中でsの第二要素が参照できることに注意
                         -- { x : int, f : { y : int | P(y,x) } -> { r : int | Q(r,y,x) } | U(x) } -> 
                         --      { s : ({ z : int | R(z,s.snd,x) } -> { t : int | S(t,z,s.snd,x) }) * int | T(x,s.snd) }
-                        arg_tys <- forM (zip [(0::Int)..] xs) $ \(i,xi) ->
+                        arg_tys <- forM (zip [(0::Int)..] xs') $ \(i,xi) -> -- for asscessors, we use unrenamed name
                             gen (meta_add meta ("pre_" ++ show i)) env' (AVar j xi)
                         p1 <- freshInt
                         let rv = retValue $ rtnLookup j
@@ -283,7 +287,7 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                             (ML.SApp, (f, vs)) -> do
                                 let (RFun fassoc,_) = env M.! f
                                     j = callTbl M.! (callSite,key1)
-                                    ty_f = fassoc IM.! unCallId j
+                                    Just ty_f = IM.lookup (unCallId j) fassoc
                                 svs <- mapM (genSValue env) vs
                                 let subst = M.fromList $ zip (argNames ty_f) svs
                                 let tys = map (substRType subst) (argTypes ty_f)
