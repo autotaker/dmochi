@@ -33,6 +33,7 @@ data TypeError = UndefinedVariable String
                | Synonym  SynonymError
                | Infer  InferError
                | OtherError String
+               deriving(Eq)
 
 fromUnTyped :: U.Program -> ExceptT TypeError FreshIO Program
 fromUnTyped prog = do
@@ -52,7 +53,7 @@ type InferM m = RWST (M.Map U.SynName U.SynonymDef) (DL.DList (UniqueKey, U.Type
 data InferError = RecursiveType
                 | SynError SynonymError
                 | CannotUnify
-                deriving Show
+                deriving (Show,Eq)
 
 updateSubst :: MonadState TSubst m => String -> U.Type -> m ()
 updateSubst key value = do

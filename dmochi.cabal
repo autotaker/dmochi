@@ -24,7 +24,20 @@ library
   default-language:    Haskell2010
   hs-source-dirs:      src
   ghc-options:         -O2 -W
-  default-extensions:  FlexibleInstances, FlexibleContexts, StandaloneDeriving, BangPatterns, TupleSections, OverloadedStrings, LambdaCase, ViewPatterns, ScopedTypeVariables, GADTs, DataKinds, TypeFamilies, TypeOperators, RankNTypes, DeriveFunctor
+  default-extensions:  FlexibleInstances
+                     , FlexibleContexts
+                     , StandaloneDeriving
+                     , BangPatterns
+                     , TupleSections
+                     , LambdaCase
+                     , ViewPatterns
+                     , ScopedTypeVariables
+                     , GADTs
+                     , DataKinds
+                     , TypeFamilies
+                     , TypeOperators
+                     , RankNTypes
+                     , DeriveFunctor
   build-depends:       base >=4.9 && <5.0,
                        mtl >=2.2 && <2.3, 
                        containers >=0.5 && <0.6, 
@@ -72,7 +85,7 @@ library
                        Language.DMoCHi.ML.ElimUnreachable,
                        Language.DMoCHi.ML.HornClause,
                        Language.DMoCHi.ML.HornClauseParser,
-                       Language.DMoCHi.ML.Test,
+                       Language.DMoCHi.ML.Main,
                        Language.DMoCHi.Boolean.Util,
                        Language.DMoCHi.Boolean.Flow,
                        Language.DMoCHi.Boolean.Flow2,
@@ -127,5 +140,5 @@ test-suite unit-test
     type:              exitcode-stdio-1.0
     main-is:           Main.hs
     hs-source-dirs:    test
-    build-depends:     base >=4.9 && <5.0, dmochi, hspec >= 2.2, hspec-core >= 2.2, hspec-expectations >= 0.7, hspec-discover, pretty >=1.1 && <1.2
+    build-depends:     base >=4.9 && <5.0, dmochi, hspec >= 2.2, hspec-core >= 2.2, hspec-expectations >= 0.7, hspec-discover, pretty >=1.1 && <1.2, filepath >= 1.4.1 && < 1.4.2
     default-language:  Haskell2010

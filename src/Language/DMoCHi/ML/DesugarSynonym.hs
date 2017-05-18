@@ -12,6 +12,7 @@ import Text.Printf
 data SynonymError = ArgLengthDiffer Int Int
                   | UndefinedSynonym SynName
                   | UndefinedTypeVariable String
+                  deriving(Eq)
 
 instance Show SynonymError where
     show (ArgLengthDiffer expected actual) = 

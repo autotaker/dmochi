@@ -482,8 +482,8 @@ calcValue env fml parent value@(Value l arg sty key) =
             SPair   -> calcPair env fml _node arg
             SLambda -> calcLambda env fml _node key arg
         itypeRef <- liftIO $ newIORef ity
-        let pp = genericPrint env fml value itypeRef pPrint pPrint
         nodeIdent <- incrNodeCounter
+        let pp = genericPrint env fml value itypeRef nodeIdent pPrint pPrint
         alive <- liftIO $ newIORef True
         let destruct' = (destruct :: R ()) >> liftIO (writeIORef alive False)
         let node = Node { typeEnv = env
@@ -530,7 +530,7 @@ calcExp env fml parent exp@(Exp l arg sty key) =
                 let extract _ _ = error "extract@SOmega_calcExp: omega never returns value nor fails"
                 in return ([], return [], extract, return ())
         let extract' cenv iota = do
-                {- 
+                {-
                 liftIO $ do
                     putStrLn $ "extracting: " ++ show (pPrint iota)
                     putStrLn $ "cenv: " ++ show (M.keys cenv)
@@ -541,7 +541,7 @@ calcExp env fml parent exp@(Exp l arg sty key) =
         nodeIdent <- incrNodeCounter
         alive <- liftIO $ newIORef True
         let destruct' = (destruct :: R ()) >> liftIO (writeIORef alive False)
-        let pp = genericPrint env fml exp itypeRef pPrint pPrint
+        let pp = genericPrint env fml exp itypeRef nodeIdent pPrint pPrint
         let node = Node { typeEnv = env
                         , constraint = fml
                         , ident = nodeIdent
@@ -589,8 +589,16 @@ calcLExp env fml parent lexp@(LExp l arg sty key) =
         itypeRef <- liftIO $ newIORef itys
         alive <- liftIO $ newIORef True
         let destruct' = (destruct :: R ()) >> liftIO (writeIORef alive False)
-        let pp = genericPrint env fml lexp itypeRef pPrint pPrint
+        let extract' cenv iota = do
+                {-
+                liftIO $ do
+                    putStrLn $ "extracting: " ++ show (pPrint iota)
+                    putStrLn $ "cenv: " ++ show (M.keys cenv)
+                    printNode _node
+                    -}
+                extract cenv iota
         nodeIdent <- incrNodeCounter
+        let pp = genericPrint env fml lexp itypeRef nodeIdent pPrint pPrint
         let node = Node { typeEnv = env
                         , constraint = fml
                         , ident = nodeIdent
@@ -598,7 +606,7 @@ calcLExp env fml parent lexp@(LExp l arg sty key) =
                         , types = itypeRef
                         , parent = parent
                         , recalcator = recalc 
-                        , extractor = extract
+                        , extractor = extract'
                         , destructor = destruct'
                         , alive = alive
                         , pprinter = pp}
@@ -628,9 +636,10 @@ updateLoop = popQuery >>= \case
                         when (new_ity /= old_ity) $ pushQuery (UpdateQuery QEdge parent) 
                         updateLoop
                     False -> updateLoop
-            RootNode main -> do
-                tys <- liftIO $ readIORef (types main)
-                unless (IFail `elem` tys) updateLoop
+            RootNode _main -> do
+                -- tys <- liftIO $ readIORef (types main)
+                -- unless (IFail `elem` tys) 
+                updateLoop
 
 saturate :: TypeMap -> Program -> IO (Bool, ([ITermType], Maybe [Bool]))
 saturate typeMap prog = do

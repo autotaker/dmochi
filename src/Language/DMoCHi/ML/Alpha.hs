@@ -12,6 +12,7 @@ import Data.List(sort,group)
 
 data AlphaError = UndefinedVariable String
                 | MultipleDefinition [String]
+                deriving(Eq)
 
 data Exp where
     Exp :: (WellFormed l Exp arg, Supported l (Labels Exp)) => SLabel l -> arg -> UniqueKey -> Exp

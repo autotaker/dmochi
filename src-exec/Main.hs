@@ -1,4 +1,4 @@
-import Language.DMoCHi.ML.Test
+import Language.DMoCHi.ML.Main
 
 main :: IO ()
 main = run

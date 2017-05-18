@@ -1,4 +1,4 @@
-module Language.DMoCHi.ML.Test(run) where
+module Language.DMoCHi.ML.Main(run, verify, Config(..), defaultConfig) where
 import System.Environment
 import System.IO
 import System.Process(callCommand)
@@ -40,8 +40,10 @@ data MainError = NoInputSpecified
                | RefinementFailed ParseError
                | AlphaFailed AlphaError
                | IllTyped Typed.TypeError 
+               | CEGARLimitExceeded
                | Debugging
                | BooleanError String
+               deriving(Eq)
 
 instance Show MainError where
     show NoInputSpecified = "NoInputSpecified"
@@ -50,6 +52,7 @@ instance Show MainError where
     show (IllTyped err)    = "IllTyped: " ++ show err
     show (RefinementFailed err)    = "RefinementFailed: " ++ show err
     show (BooleanError s) = "Boolean: " ++ s
+    show CEGARLimitExceeded = "CEGARLimitExceeded"
     show Debugging = "Debugging"
 
 data Flag = Help 
@@ -97,9 +100,9 @@ defaultConfig path = Config { targetProgram = path
 
 run :: IO ()
 run = do
-    hSetBuffering stdout NoBuffering
-    m <- measure "Total" $ runFreshT $ runExceptT doit
-    case m of
+    -- check args
+    conf <- parseArgs
+    verify conf >>= \case
         Left err -> putStr "Error: " >> print err >> exitFailure
         Right _ -> return ()
         
@@ -156,11 +159,8 @@ parseArgs = doit
 
 data CEGARResult a = Safe | Unsafe | Refine a
 
-
-doit :: ExceptT MainError FreshIO ()
-doit = do
-    -- check args
-    conf <- measure "ParseArg" $ liftIO parseArgs
+verify :: Config -> IO (Either MainError ())
+verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
     hccsSolver <- liftIO getHCCSSolver
     
     -- parsing
@@ -244,16 +244,16 @@ doit = do
                 prettyPrint castFreeProgram
 
                 mc k curTypeMap castFreeProgram >>= \case
+                    Nothing -> return Safe
                     Just trace -> measure "Refinement" $ do
                         let traceFile = printf "%s_%d.trace.dot" path k
                         (trace,isFoolI) <- case interactive conf of
                             True -> Refine.interactiveCEGen normalizedProgram traceFile trace
                             False -> return (trace, Nothing)
-                        refine <- Refine.refineCGen normalizedProgram 
-                                                    traceFile 
-                                                    (contextSensitive conf) 
-                                                    (foolThreshold conf) trace
-                        case refine of
+                        Refine.refineCGen normalizedProgram 
+                                          traceFile 
+                                          (contextSensitive conf) 
+                                          (foolThreshold conf) trace >>= \case
                             Nothing -> return Unsafe
                             Just (isFool,(clauses, assoc)) -> do
                                 let file_hcs = printf "%s_%d.hcs" path k
@@ -293,7 +293,6 @@ doit = do
                                     let typeMap' | accErrTraces conf = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
                                                  | otherwise         = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
                                     return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc)
-                    Nothing -> return Safe
             case res of
                 Safe -> liftIO $ putStrLn "Safe!"
                 Unsafe -> liftIO $ putStrLn "Unsafe!"

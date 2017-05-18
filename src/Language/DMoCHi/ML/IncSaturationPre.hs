@@ -375,14 +375,15 @@ checkSat p1 p2 = measureTime CheckSat $ do
             liftIO $ H.insert (ctxCheckSatCache ctx) key v
             return v
 
-genericPrint :: IEnv -> HFormula -> e -> IORef (SatType e) -> (e -> Doc) -> (SatType e -> Doc) -> IO Doc
-genericPrint env fml e tys_ref termPrinter typePrinter = do
+genericPrint :: IEnv -> HFormula -> e -> IORef (SatType e) -> Int -> (e -> Doc) -> (SatType e -> Doc) -> IO Doc
+genericPrint env fml e tys_ref ident termPrinter typePrinter = do
     tys <- readIORef tys_ref
     let doc_term = termPrinter e
         doc_ity = typePrinter tys
         doc = text "env: " <+> (nest 4 $
               brackets $ vcat $ [ pPrint (name f) <+> text ":" <+> pPrint ity | (f,ity) <- M.assocs env ])
           $+$ text "cond: " <+> (pPrint fml)
+          $+$ text "idnt: " <+> (pPrint ident)
           $+$ text "term: " <+> (text (takeWhile (/='\n') $ show doc_term))
           $+$ text "type:" <+> doc_ity
     return doc
