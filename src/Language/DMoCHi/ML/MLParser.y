@@ -1,0 +1,178 @@
+{
+module Language.DMoCHi.ML.MLParser where
+
+import Language.DMoCHi.ML.Syntax.UnTyped
+import Language.DMoCHi.ML.MLLexer
+}
+
+%tokentype { Token }
+%token
+  let  { TokenLet  }
+  rec  { TokenRec  }
+  in   { TokenIn   }
+  VAR  { TokenVar $$ }
+  TVAR { TokenTVar $$}
+  NUM  { TokenNum $$ }
+  true { TokenTrue }
+  false{ TokenFalse }
+  type { TokenType }
+  int  { TokenInt }
+  bool { TokenBool }
+  unit { TokenUnit }
+  and  { TokenAnd  }
+  fun  { TokenFun  }
+  '->' { TokenArr  }
+  ';'  { TokenSemi }
+  ':'  { TokenColon}
+  ','  { TokenComma}
+  if   { TokenIf   }
+  then { TokenThen }
+  else { TokenElse }
+  '||' { TokenOr   }
+  '&&' { TokenLAnd }
+  '='  { TokenEq   }
+  '<>' { TokenNEq  }
+  '<'  { TokenLt   }
+  '<=' { TokenLe   }
+  '>'  { TokenGt   }
+  '>=' { TokenGe   }
+  '+'  { TokenAdd  }
+  '-'  { TokenSub  }
+  '/'  { TokenDiv  }
+  '*'  { TokenMul  }
+  '('  { TokenLPar }
+  ')'  { TokenRPar }
+  ';;' { TokenEOL  }
+
+
+%monad { Alex } { (>>=) } { return }
+%error { tokenError }
+%lexer { lexer }{ TokenEOF }
+
+%name prog Prog
+
+%right in
+%right '->'
+%right ';'
+%right  then else
+%nonassoc ','
+%left  '||'
+%left  '&&'
+%nonassoc '=' '<>' '<' '>' '<=' '>='
+%left '+' '-'
+%left '/' '*'
+%nonassoc NEG
+%%
+
+Prog : Def ';;' Prog { $1 : $3 }
+     | Def Defs      { $1 : $2 }
+     | Def ';;'      { [$1] } 
+     | Def           { [$1] }
+
+Defs : let LetDef Defs        { $2 : $3 }
+     | let LetDef ';;' Prog   { $2 : $4 }
+     | type TypDef Defs      { $2 : $3 }
+     | type TypDef ';;' Prog { $2 : $4 }
+
+Def : Expr                       { DLet unusedVar $1 }
+    | let LetDef                 { $2 }
+    | type TypDef                { $2 }
+
+LetDef 
+ : Arg ':' Type  '=' Expr { DLet $1 (annot $5 $3) }
+ | Arg '=' Expr           { DLet $1 $3 }
+ | FunDef                 { let (f,e) = $1 in DLet f e }
+ | rec RecDef             { DRec $2 }
+
+TypDef : SynLHS '=' Type       { let (s,tvars) = $1 in DSyn (SynonymDef s tvars $3) }
+
+SynLHS : TVAR VAR              { ($2, [$1])} 
+       | '(' TVarTuple ')' VAR { ($4, $2) }
+       | VAR                   { ($1, []) }
+
+TVarTuple : TVAR               { [$1] }
+          | TVAR ',' TVarTuple { $1 : $3 }
+
+Type  : TPrim          { $1 }
+      | Type '*' Type  { TPair $1 $3 }
+      | Type '->' Type { TFun [$1] $3 }
+
+
+TPrim : TPrimNP      { $1 }
+      | '(' Type ')' { $2 }
+
+TPrimNP : int                            { TInt  }
+        | bool                           { TBool }
+        | unit                           { TUnit }
+        | TVAR                           { TVar $1 }
+        | VAR                            { TSyn [] $1 }
+        | TPrimNP VAR                    { TSyn [$1] $2 }
+        | '(' Type ')' VAR               { TSyn [$2] $4 }
+        | '(' Type ',' TypeTuple ')' VAR { TSyn ($2 : $4) $6 }
+
+TypeTuple : Type               { [$1] }
+          | Type ',' TypeTuple { $1 : $3 }
+
+FunDef : Arg Args '=' Expr          { ($1, mkLambda $2 $4) }
+       | Arg Args ':' Type '=' Expr { ($1, mkLambda $2 (annot $6 $4)) }
+
+RecDef : FunDef             { [$1] }
+       | FunDef and RecDef  { $1 : $3 }
+
+Arg : VAR                   { V $1 Nothing }
+    | '(' VAR ':' Type ')'  { V $2 (Just $4) }
+
+Args : Arg Args { $1 : $2 }
+     | Arg      { [$1] }
+
+Expr : let Arg ':' Type '=' Expr in Expr { mkLet $2 (annot $6 $4) $8 }
+     | let Arg '=' Expr in Expr          { mkLet $2 $4 $6 }
+     | let FunDef in Expr                { let (f,e) = $2 in mkLet f e $4 }
+     | let rec RecDef in Expr            { mkLetRec $3 $5 }
+     | fun Args '->' Expr                { mkLambda $2 $4 }
+     | Expr ';' Expr                     { mkLet unusedVar $1 $3 }
+     | if Expr then Expr else Expr       { mkIf $2 $4 $6 }
+     | if Expr then Expr                 { mkIf $2 $4 (mkLiteral CUnit) }
+     | Expr ',' Expr                     { mkPair $1 $3 }
+     | Expr '&&' Expr                    { mkBinary SAnd $1 $3 }
+     | Expr '||' Expr                    { mkBinary SOr  $1 $3 }
+     | Expr '<' Expr                     { mkBinary SLt  $1 $3 }
+     | Expr '>' Expr                     { mkBinary SGt  $1 $3 }
+     | Expr '=' Expr                     { mkBinary SEq  $1 $3 }
+     | Expr '<>' Expr                    { mkBinary SNEq $1 $3 }
+     | Expr '<=' Expr                    { mkBinary SLte $1 $3 }
+     | Expr '>=' Expr                    { mkBinary SGte $1 $3 }
+     | Expr '+' Expr                     { mkBinary SAdd $1 $3 }
+     | Expr '-' Expr                     { mkBinary SSub $1 $3 }
+     | Expr '*' Expr                     { mkBinary SMul $1 $3 } 
+     | Expr '/' Expr                     { mkBinary SDiv $1 $3 }
+     | '-' Expr %prec NEG                { mkUnary SNeg $2 }
+     | Fact                              { $1 }
+  
+Fact : Atom AtomList  { mkApp $1 $2}
+     | Atom           { $1 }
+
+AtomList : Atom           { [$1] }
+         | Atom AtomList  { $1 : $2 }
+
+Atom : VAR                    { mkVar (V $1 Nothing) }    
+     | NUM                    { mkLiteral (CInt $1) }
+     | true                   { mkLiteral (CBool True) }
+     | false                  { mkLiteral (CBool False) }
+     | '(' ')'                { mkLiteral CUnit }
+     | '(' Expr ')'           { $2 }
+     | '(' Expr ':' Type ')'  { annot $2 $4 }
+
+{
+data Def = DLet (AnnotVar String) Exp
+         | DSyn SynonymDef
+         | DRec [(AnnotVar String, Exp)]
+
+parseExpr :: String -> Either String [Def]
+parseExpr input = runAlex input prog
+
+lexer :: (Token -> Alex a) -> Alex a
+lexer cont = scanToken >>= cont
+
+-- vim:ft=happy
+}

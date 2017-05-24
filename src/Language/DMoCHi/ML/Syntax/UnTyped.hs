@@ -1,6 +1,6 @@
 {-# LANGUAGE GADTs, TypeFamilies, LambdaCase #-}
 module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..)
-                                        , Type(..), SynName 
+                                        , Type(..), SynName, annot
                                         , SynonymDef(..), Program(..), unusedVar
                                         , mkLiteral, mkVar, mkUnary, mkBinary
                                         , mkPair, mkLambda, mkApp, mkLet, mkLetRec
@@ -43,6 +43,9 @@ data Type = TInt | TBool | TPair Type Type | TUnit
 instance HasUniqueKey Exp where
     getUniqueKey (Exp _ _ key) = key
     -}
+
+annot :: Exp -> Type -> Exp
+annot (Exp l arg _) ty = Exp l arg (Just ty)
 
 
 unusedVar :: Var

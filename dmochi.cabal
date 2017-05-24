@@ -56,6 +56,7 @@ library
                        process >= 1.2, 
                        z3 >= 4.1, 
                        optparse-applicative >= 0.12
+  build-tools:         alex, happy
   exposed-modules:     Language.DMoCHi.Common.Heap,
                        Language.DMoCHi.Common.Id,
                        Language.DMoCHi.Common.Util,
@@ -70,6 +71,8 @@ library
                        Language.DMoCHi.ML.DesugarSynonym,
                        Language.DMoCHi.ML.Alpha,
                        Language.DMoCHi.ML.Parser,
+                       Language.DMoCHi.ML.MLParser,
+                       Language.DMoCHi.ML.MLLexer,
                        Language.DMoCHi.ML.PredicateAbstraction,
                        Language.DMoCHi.ML.TypeCheck,
                        Language.DMoCHi.ML.SymbolicExec,
