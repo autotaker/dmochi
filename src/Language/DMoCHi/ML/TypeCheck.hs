@@ -10,7 +10,7 @@ import Language.DMoCHi.ML.Syntax.Typed
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.ML.Syntax.Type
 import qualified Language.DMoCHi.ML.Alpha as U
-import qualified Language.DMoCHi.ML.Syntax.UnTyped as U(SynName, SynonymDef(..), Type(..), Lit(..))
+import qualified Language.DMoCHi.ML.Syntax.UnTyped as U(AnnotVar(..),SynName, SynonymDef(..), Type(..), Lit(..))
 import qualified Language.DMoCHi.Common.Id as Id
 import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey, FreshIO, getUniqueKey)
 import Language.DMoCHi.ML.DesugarSynonym
@@ -38,11 +38,11 @@ data TypeError = UndefinedVariable String
 fromUnTyped :: U.Program -> ExceptT TypeError FreshIO Program
 fromUnTyped prog = do
     annot <- withExceptT Infer (infer prog)
-    let env = M.fromList [ (f, annot M.! key) | (f, _, U.Exp _ _ key) <- U.functions prog ]
+    let env = M.fromList [ (U.varName f, annot M.! key) | (f, _, U.Exp _ _ (_,key)) <- U.functions prog ]
     fs' <- forM (U.functions prog) $ \(f, _, e) -> do
         Exp l arg sty key <- convertE annot env e
         case (l, arg) of
-            (SLambda, (xs, e)) -> return (TId sty f, key, xs, e)
+            (SLambda, (xs, e)) -> return (TId sty (U.varName f), key, xs, e)
             _ -> throwError $ OtherError "RHS of definition should be a function"
     e0 <- convertE annot env (U.mainTerm prog)
     return $ Program { functions = fs', mainTerm = e0 }
@@ -63,6 +63,7 @@ updateSubst key value = do
 subst :: (MonadState TSubst m) => U.Type -> m U.Type
 subst U.TInt = pure U.TInt
 subst U.TBool = pure U.TBool
+subst U.TUnit = pure U.TUnit
 subst (U.TPair ty1 ty2) = U.TPair <$> subst ty1 <*> subst ty2
 subst (U.TFun ts ty) = U.TFun <$> mapM subst ts <*> subst ty
 subst (U.TSyn ts synName) = U.TSyn <$> mapM subst ts <*> pure synName
@@ -80,6 +81,7 @@ unify :: (MonadError InferError m,
           MonadState TSubst m) => U.Type -> U.Type -> m ()
 unify U.TInt U.TInt = return ()
 unify U.TBool U.TBool = return ()
+unify U.TUnit U.TUnit = return ()
 unify (U.TPair ty1 ty2) (U.TPair ty3 ty4) = unify ty1 ty3 >> unify ty2 ty4
 unify (U.TFun tys1 ty1) (U.TFun tys2 ty2) = zipWithM_ unify tys1 tys2 >> unify ty1 ty2
 unify (U.TSyn ts name) ty = do
@@ -106,12 +108,14 @@ unify (U.TVar x) ty2 = do
 unify ty1 ty2@(U.TVar _) = unify ty2 ty1
 unify U.TInt _ = throwError CannotUnify 
 unify U.TBool _ = throwError CannotUnify
+unify U.TUnit _ = throwError CannotUnify
 unify (U.TPair _ _) _ = throwError CannotUnify
 unify (U.TFun _ _) _ = throwError CannotUnify
     
 elemType :: String -> U.Type -> Bool
 elemType _ U.TInt = False
 elemType _ U.TBool = False
+elemType _ U.TUnit = False
 elemType x (U.TPair ty1 ty2) = elemType x ty1 || elemType x ty2
 elemType x (U.TFun tys ty) = any (elemType x) (ty:tys)
 elemType x (U.TVar y) = x == y
@@ -125,12 +129,14 @@ infer prog = do
                 env <- fmap M.fromList $ mapM (\(f,ty',_) -> do
                             ty <- U.TVar <$> Id.freshId "t"
                             unify ty ty'
-                            return (f, ty)) (U.functions prog)
-                forM_ (U.functions prog) $ \(f,_,e) -> inferE env e >>= unify (env M.! f)
+                            return (U.varName f, ty)) (U.functions prog)
+                forM_ (U.functions prog) $ \(f,_,e) -> inferE env e >>= unify (env M.! (U.varName f))
                 ty <- inferE env (U.mainTerm prog)
-                unify ty U.TInt
+                unify ty U.TUnit
+        {-
         let annotEnv = M.fromList (DL.toList annot)
         forM_ (U.typeAnn prog) $ \(key, ty) -> unify ty (annotEnv M.! key)
+        -}
         fmap M.fromList $ mapM (\(key,ty) -> do
             ty' <- subst ty
             case runExcept (convertType synEnv ty') of
@@ -140,13 +146,14 @@ infer prog = do
              
 
 inferE :: (MonadId m, MonadIO m) => M.Map (Id.Id String) U.Type -> U.Exp -> InferM m U.Type
-inferE env (U.Exp l arg key) = do
+inferE env (U.Exp l arg (_,key)) = do
     tvar <- U.TVar <$> Id.freshId "ty"
     tell (DL.singleton (key, tvar))
     ty <- case (l, arg) of
         (SLiteral, U.CInt _) -> pure U.TInt
         (SLiteral, U.CBool _) -> pure U.TBool
-        (SVar, x) -> return $! env M.! x
+        (SLiteral, U.CUnit) -> pure U.TUnit
+        (SVar, x) -> return $! env M.! (U.varName x)
         (SBinary, BinArg op e1 e2) -> do
             ty1 <- inferE env e1
             ty2 <- inferE env e2
@@ -155,7 +162,10 @@ inferE env (U.Exp l arg key) = do
             case op of
                 SAdd -> f U.TInt >> pure U.TInt
                 SSub -> f U.TInt >> pure U.TInt
+                SDiv -> f U.TInt >> pure U.TInt
+                SMul -> f U.TInt >> pure U.TInt
                 SEq  -> f U.TInt >> pure U.TBool
+                SNEq -> f U.TInt >> pure U.TBool
                 SLt  -> f U.TInt >> pure U.TBool
                 SGt  -> f U.TInt >> pure U.TBool
                 SLte -> f U.TInt >> pure U.TBool
@@ -177,24 +187,25 @@ inferE env (U.Exp l arg key) = do
                                      <*> inferE env e2
         (SLambda, (xs,e)) -> do
             tys <- mapM (\_ -> U.TVar <$> Id.freshId "t") xs
-            let env' = foldr (uncurry M.insert) env (zip xs tys)
+            let env' = foldr (uncurry M.insert) env (zip (map U.varName xs) tys)
             U.TFun tys <$> inferE env' e
-        (SApp, (f, es)) -> do
+        (SApp, (e, es)) -> do
             tys <- mapM (inferE env) es
             let ty_f = U.TFun tys tvar
-            tvar <$ unify (env M.! f) ty_f
+            ty <- inferE env e
+            tvar <$ unify ty ty_f
         (SLet, (x, e1, e2)) -> do
             ty_x <- inferE env e1
-            let env' = M.insert x ty_x env
+            let env' = M.insert (U.varName x) ty_x env
             inferE env' e2
         (SLetRec, (fs, e)) -> do
-            as <- forM fs $ \(f, U.Exp _ _ key_f) -> do
+            as <- forM fs $ \(f, U.Exp _ _ (_,key_f)) -> do
                 tvar_f <- U.TVar <$> Id.freshId "ty"
                 tell (DL.singleton (key_f, tvar_f))
-                return (f, tvar_f)
+                return (U.varName f, tvar_f)
             let env' = foldr (uncurry M.insert) env as
             forM_ fs $ \(f, e1) -> do
-                let ty_f = env' M.! f
+                let ty_f = env' M.! (U.varName f)
                 ty_f' <- inferE env' e1
                 unify ty_f ty_f'
             inferE env' e
@@ -230,6 +241,7 @@ convertType synEnv ty = do
         go ty = case ty of
             U.TInt -> return TInt
             U.TBool -> return TBool
+            U.TUnit -> return TInt 
             U.TPair ty1 ty2 -> go ty1 >>= \sty1 -> go ty2 >>= \sty2 -> return (TPair sty1 sty2)
             U.TFun tys ty -> do
                 stys <- mapM go tys
@@ -238,7 +250,7 @@ convertType synEnv ty = do
             U.TVar _x -> return TInt
 
 convertE :: Annot -> Env -> U.Exp -> ExceptT TypeError FreshIO Exp
-convertE annot env (U.Exp l arg key) = 
+convertE annot env (U.Exp l arg (_,key)) = 
     let !sty = annot M.! key in
     case (l,arg) of
         (SLiteral, U.CInt _)  -> do
@@ -247,10 +259,13 @@ convertE annot env (U.Exp l arg key) =
         (SLiteral, U.CBool _) -> do
             shouldBe (key,env) sty TBool
             return $ Exp l arg sty key
+        (SLiteral, U.CUnit) -> do
+            shouldBe (key, env) sty TInt
+            return $ Exp l (U.CInt 0) sty key
         (SVar, x) -> do
-            let !sty' = env M.! x
+            let !sty' = env M.! (U.varName x)
             shouldBe (key,env) sty sty'
-            return $ Exp l (TId sty' x) sty key
+            return $ Exp l (TId sty' (U.varName x)) sty key
         (SBinary, BinArg op e1 e2) ->  do
             e1' <- convertE annot env e1
             e2' <- convertE annot env e2
@@ -277,15 +292,16 @@ convertE annot env (U.Exp l arg key) =
                         m = length xs
                     when (length ty_args /= length xs) $ 
                         throwError $ ArityMisMatch (key,env) n m
-                    let env' = foldr (uncurry M.insert) env $ zip xs ty_args
-                        ys = zipWith (\x ty -> TId ty x) xs ty_args
+                    let env' = foldr (uncurry M.insert) env $ zip (map U.varName xs) ty_args
+                        ys = zipWith (\x ty -> TId ty (U.varName x)) xs ty_args
                     e1' <- convertE annot env' e1
                     shouldBe (getUniqueKey e1',env) (getType e1') sty1'
                     return $ Exp l (ys, e1') sty key
                 _ -> throwError $ OtherError $ "This function expected to have type " ++ show sty
-        (SApp, (f, es)) -> do
-            case env M.! f of
-                sty_f@(TFun tys sty') -> do
+        (SApp, (e, es)) -> do
+            e' <- convertE annot env e
+            case getType e' of
+                TFun tys sty' -> do
                     es' <- mapM (convertE annot env) es
                     let g :: Exp -> Type -> ExceptT TypeError FreshIO ()
                         g e_i sty_i' = 
@@ -295,20 +311,20 @@ convertE annot env (U.Exp l arg key) =
                         m = length tys
                     when (n /= m) $ throwError $ ArityMisMatch (key,env) n m
                     shouldBe (key,env) sty sty'
-                    return $ Exp l (TId sty_f f, es') sty key
+                    return $ Exp l (e', es') sty key
                 sty_f -> throwError $ OtherError $ "App" ++ show sty_f
         (SLet, (x, e1, e2)) -> do
             e1' <- convertE annot env e1
-            let env' = M.insert x (getType e1') env
+            let env' = M.insert (U.varName x) (getType e1') env
             e2' <- convertE annot env' e2
             shouldBe (key,env) sty (getType e2')
-            return $ Exp l (TId (getType e1') x, e1', e2') sty key
+            return $ Exp l (TId (getType e1') (U.varName x), e1', e2') sty key
         (SLetRec, (fs, e)) -> do
-            let as = [ (f, annot M.! (getUniqueKey f_e)) | (f, f_e) <- fs ]
+            let as = [ (U.varName f, annot M.! (getUniqueKey f_e)) | (f, f_e) <- fs ]
                 env' = foldr (uncurry M.insert) env as
             fs' <- forM fs $ \(f, e1) -> do
                 e1' <- convertE annot env' e1
-                return (TId (getType e1') f, e1')
+                return (TId (getType e1') (U.varName f), e1')
             e' <- convertE annot env' e
             shouldBe (key, env) sty (getType e')
             return $ Exp l (fs', e') sty key
@@ -357,7 +373,10 @@ typeOfBinOp :: Env -> SBinOp op -> Type -> UniqueKey -> Type -> UniqueKey ->
 typeOfBinOp env op sty1 key1 sty2 key2 k = (case op of
     SAdd -> intOp TInt
     SSub -> intOp TInt
-    SEq -> intOp TBool
+    SMul -> intOp TInt
+    SDiv -> intOp TInt
+    SEq  -> intOp TBool
+    SNEq -> intOp TBool
     SLt -> intOp TBool
     SGt -> intOp TBool
     SLte -> intOp TBool

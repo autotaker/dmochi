@@ -161,9 +161,12 @@ abstAValue env cs pv = go
         (ML.SVar,x) -> cast cs pv (B.V (toSymbol x (env M.! x))) (env M.! x) ty
         (ML.SLiteral, ML.CInt _) -> return $ B.T []
         (ML.SLiteral, ML.CBool b) -> return $ (B.C b)
+        (ML.SLiteral, ML.CUnit) -> error "unexpected pattern"
         (ML.SBinary, ML.BinArg op _ _) -> case op of
             ML.SAdd  -> return $ B.T []
             ML.SSub  -> return $ B.T []
+            ML.SDiv  -> return $ B.T []
+            ML.SMul  -> return $ B.T []
             ML.SEq   -> abstFormula cs pv v
             ML.SLt   -> abstFormula cs pv v
             ML.SLte  -> abstFormula cs pv v

@@ -169,7 +169,7 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
         prettyPrint | verbose conf = liftIO . putStrLn . render . pPrintPrec (PrettyLevel 1) 0
                     | otherwise    = liftIO . putStrLn . render . pPrint
     parsedProgram <- measure "Parse" $ do
-        program <- withExceptT ParseFailed $ ExceptT $ parseProgramFromFile path
+        program <- withExceptT ParseFailed $ ExceptT $ liftIO $ parseProgramFromFile path
         liftIO $ putStrLn "Parsed Program"
         prettyPrint program
         return program

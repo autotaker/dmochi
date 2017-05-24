@@ -1,8 +1,9 @@
 {-# LANGUAGE BangPatterns, GADTs #-}
-module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..), getSMTCount, resetSMTCount,IValue(..), toIValueId, mkEqIValue) where
+module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..), initSMTContext, mkUMul, mkUDiv,
+                              getSMTCount, resetSMTCount,IValue(..), toIValueId, mkEqIValue) where
 
-import Language.DMoCHi.ML.Syntax.PNormal
-import Z3.Monad hiding(mkVar)
+import Language.DMoCHi.ML.Syntax.PNormal hiding(mkApp)
+import Z3.Monad 
 import Control.Monad.IO.Class
 import Control.Monad
 import Data.Function(on)
@@ -14,6 +15,19 @@ import System.IO.Unsafe
 
 smtCounter :: IORef Int
 smtCounter = unsafePerformIO (newIORef 0)
+
+data SMTContext = SMTContext { mulFD :: FuncDecl
+                             , divFD :: FuncDecl }
+smtContext :: IORef SMTContext
+smtContext = unsafePerformIO (newIORef (SMTContext undefined undefined))
+
+initSMTContext :: MonadZ3 z3 => z3 ()
+initSMTContext = do
+    int <- mkIntSort
+    fd1 <- mkFreshFuncDecl "mul" [int, int] int
+    fd2 <- mkFreshFuncDecl "div" [int, int] int
+    liftIO $ writeIORef smtContext $ SMTContext fd1 fd2
+
 data IValue = Func | ASTValue AST | IPair IValue IValue deriving(Show)
 
 getSMTCount :: IO Int
@@ -29,6 +43,21 @@ toIValue v@(Value l arg _ _) = case atomOfValue v of
         (SLambda, _) -> return Func
         (SPair, (v1,v2)) -> IPair <$> toIValue v1 <*> toIValue v2
         _ -> error "impossible"
+
+mkUDiv :: MonadZ3 z3 => IValue -> IValue -> z3 IValue
+mkUDiv (ASTValue v1) (ASTValue v2) = do
+    ctx <- liftIO $ readIORef smtContext
+    ASTValue <$> mkApp (divFD ctx) [v1, v2] 
+mkUDiv _ _ = error "unexpected pattern"
+
+{- the first boolean argument represents that this is scalar or not -}
+mkUMul :: MonadZ3 z3 => Bool -> IValue -> IValue -> z3 IValue
+mkUMul True (ASTValue v1) (ASTValue v2) = ASTValue <$> mkMul [v1, v2]
+mkUMul False (ASTValue v1) (ASTValue v2) = do
+    ctx <- liftIO $ readIORef smtContext
+    ASTValue <$> mkApp (mulFD ctx) [v1, v2] 
+mkUMul _ _ _ = error "unexpected pattern"
+    
 
 toIValueId :: MonadZ3 z3 => Type -> String -> z3 IValue
 toIValueId TInt x = do
@@ -52,6 +81,7 @@ toIValueA (Atom l arg sty) = case (l,arg) of
     (SVar,(TId _ name_x)) -> toIValueId sty (show name_x)
     (SLiteral, CInt i)  -> ASTValue <$> mkInteger i
     (SLiteral, CBool b) -> ASTValue <$> mkBool b
+    (SLiteral, CUnit) -> error "toIValueA: unexpected"
     (SBinary, BinArg op v1 v2) -> do
         iv1 <- toIValueA v1
         iv2 <- toIValueA v2
@@ -60,6 +90,11 @@ toIValueA (Atom l arg sty) = case (l,arg) of
         case op of
             SAdd -> ASTValue <$> mkAdd [v1',v2']
             SSub -> ASTValue <$> mkSub [v1',v2']
+            SMul -> case (v1, v2) of
+                (Atom SLiteral (CInt _) _, _) -> mkUMul True iv1 iv2
+                (_, Atom SLiteral (CInt _) _) -> mkUMul True iv1 iv2
+                _ -> mkUMul False iv1 iv2
+            SDiv -> mkUDiv iv1 iv2
             SEq -> mkEqIValue iv1 iv2
             SLt -> ASTValue <$> mkLt v1' v2'
             SLte -> ASTValue <$> mkLe v1' v2'

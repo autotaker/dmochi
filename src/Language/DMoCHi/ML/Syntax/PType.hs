@@ -126,6 +126,7 @@ substVFormula subst = atomic . go where
                 Nothing -> cast e
         (SLiteral, CInt  _) -> cast e
         (SLiteral, CBool _) -> cast e
+        (SLiteral, CUnit) -> error "unexpected"
         -- Pair v1 v2 -> Pair (go v1) (go v2)
         (SBinary, BinArg op v1 v2) ->  
             let !v1' = atomic $ go v1
@@ -133,6 +134,8 @@ substVFormula subst = atomic . go where
             case op of
             SAdd -> cast $ mkBin op v1' v2'
             SSub -> cast $ mkBin op v1' v2'
+            SDiv -> cast $ mkBin op v1' v2'
+            SMul -> cast $ mkBin op v1' v2'
             SEq  -> cast $ mkBin op v1' v2'
             SLt  -> cast $ mkBin op v1' v2'
             SLte -> cast $ mkBin op v1' v2'
@@ -154,9 +157,12 @@ typeOfAtom env = go where
         (SVar,x) -> env M.! x
         (SLiteral,CInt _) -> PInt
         (SLiteral,CBool _) -> PBool
+        (SLiteral,CUnit) -> error "unexpected pattern"
         (SBinary, BinArg op _ _) -> case op of
             SAdd -> PInt
             SSub -> PInt
+            SMul -> PInt
+            SDiv -> PInt
             SEq  -> PBool
             SLt  -> PBool
             SLte -> PBool

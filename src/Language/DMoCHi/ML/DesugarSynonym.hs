@@ -25,6 +25,7 @@ instance Show SynonymError where
 desugarType :: Monad m => M.Map SynName SynonymDef -> Type -> ExceptT SynonymError m Type
 desugarType _synEnv TInt = return TInt
 desugarType _synEnv TBool = return TBool
+desugarType _synEnv TUnit = return TUnit
 desugarType synEnv (TPair ty1 ty2) = 
     TPair <$> desugarType synEnv ty1 <*> desugarType synEnv ty2
 desugarType synEnv (TFun tys ty) =
@@ -42,6 +43,7 @@ desugarType _synEnv (TVar x) = return $ TVar x
 substType :: Monad m => M.Map String Type -> Type -> ExceptT SynonymError m Type
 substType _env TInt = return TInt
 substType _env TBool = return TBool
+substType _env TUnit = return TUnit
 substType env (TPair t1 t2) = liftA2 TPair (substType env t1) (substType env t2)
 substType env (TFun ts t) = liftA2 TFun (mapM (substType env) ts) (substType env t)
 substType env (TSyn ts syn) = flip TSyn syn <$> (mapM (substType env) ts)
@@ -63,6 +65,7 @@ desugarEnv syns = doit where
         dep <- (fix $ \loop t -> case t of
             TInt -> mempty
             TBool -> mempty
+            TUnit -> mempty
             TPair ty1 ty2 -> loop ty1 <> loop ty2 
             TFun tys ty -> mconcat (map loop tys) <> loop ty
             TVar _ -> mempty

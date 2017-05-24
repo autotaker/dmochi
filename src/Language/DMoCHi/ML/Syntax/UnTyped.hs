@@ -1,120 +1,99 @@
 {-# LANGUAGE GADTs, TypeFamilies, LambdaCase #-}
-module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id
+module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..)
                                         , Type(..), SynName 
-                                        , SynonymDef(..), Program(..)
+                                        , SynonymDef(..), Program(..), unusedVar
                                         , mkLiteral, mkVar, mkUnary, mkBinary
-                                        , mkUnary', mkBinary'
                                         , mkPair, mkLambda, mkApp, mkLet, mkLetRec
                                         , mkAssume, mkIf
-                                        , mkBranch, mkBranch', mkFail, mkOmega, mkRand
+                                        , mkBranch,  mkFail, mkOmega, mkRand
                                         , module Language.DMoCHi.ML.Syntax.Base ) where
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.Common.Id
 import Text.PrettyPrint.HughesPJClass
 
 data Exp where
-    Exp :: (WellFormed l Exp arg, Supported l (Labels Exp)) => SLabel l -> arg -> UniqueKey -> Exp
+    Exp :: (WellFormed l Exp arg, Supported l (Labels Exp)) => !(SLabel l) -> arg -> Maybe Type -> Exp
 
-type instance Ident Exp = String
+data AnnotVar a = V { varName :: a 
+                  , varType :: Maybe Type }
+                  deriving(Eq,Show)
+type Var = AnnotVar String
+
+type instance Ident Exp  = Var
 type instance Labels Exp = AllLabels
 type instance BinOps Exp = AllBinOps
 type instance UniOps Exp = AllUniOps
 
 type SynName = String
 
-data Program = Program { functions :: [(String,Type,Exp)] 
+data Program = Program { functions :: [(Var,Type,Exp)] 
                        , synonyms :: [SynonymDef]
-                       , typeAnn :: [(UniqueKey, Type)]
                        , mainTerm  :: Exp }
 
 data SynonymDef = SynonymDef { synName :: SynName
                              , typVars :: [String]
                              , synDef :: Type }
 
-data Type = TInt | TBool | TPair Type Type 
+data Type = TInt | TBool | TPair Type Type | TUnit
           | TFun [Type] Type | TSyn [Type] SynName
           | TVar String
           deriving(Eq,Show)
 
+{-
 instance HasUniqueKey Exp where
     getUniqueKey (Exp _ _ key) = key
+    -}
 
-{-# INLINE mkLiteral #-}
-mkLiteral :: MonadId m => Lit -> m Exp
-mkLiteral lit = Exp SLiteral lit <$> freshKey
 
-{-# INLINE mkVar #-}
-mkVar :: MonadId m => String -> m Exp
-mkVar lit = Exp SVar lit <$> freshKey
+unusedVar :: Var
+unusedVar = V "" Nothing
 
-{-# INLINE mkUnary #-}
-mkUnary :: (MonadId m, Supported op (UniOps Exp)) => SUniOp op -> Exp -> m Exp
-mkUnary op e = Exp SUnary (UniArg op e) <$> freshKey
-{-# INLINE mkUnary' #-}
-mkUnary' :: (MonadId m, Supported op (UniOps Exp)) => SUniOp op -> m (Exp -> Exp)
-mkUnary' op = do
-    key <- freshKey
-    return (\e -> Exp SUnary (UniArg op e) key)
+mkLiteral :: Lit -> Exp
+mkLiteral lit = Exp SLiteral lit Nothing
 
-{-# INLINE mkBinary #-}
-mkBinary :: (MonadId m,Supported op (BinOps Exp)) => SBinOp op -> Exp -> Exp -> m Exp
-mkBinary op e1 e2 = Exp SBinary (BinArg op e1 e2) <$> freshKey
+mkVar :: Var -> Exp
+mkVar x = Exp SVar x Nothing
 
-{-# INLINE mkBinary' #-}
-mkBinary' :: (MonadId m, Supported op (BinOps Exp)) => SBinOp op -> m (Exp -> Exp -> Exp)
-mkBinary' op = do
-    key <- freshKey
-    return (\e1 e2 -> Exp SBinary (BinArg op e1 e2) key)
+mkUnary :: (Supported op (UniOps Exp)) => SUniOp op -> Exp -> Exp
+mkUnary op e = Exp SUnary (UniArg op e) Nothing
 
-{-# INLINE mkPair #-}
-mkPair :: MonadId m => Exp -> Exp -> m Exp
-mkPair e1 e2 = Exp SPair (e1,e2) <$> freshKey
+mkBinary :: (Supported op (BinOps Exp)) => SBinOp op -> Exp -> Exp -> Exp
+mkBinary op e1 e2 = Exp SBinary (BinArg op e1 e2) Nothing
 
-{-# INLINE mkLambda #-}
-mkLambda :: MonadId m => [String] -> Exp -> m Exp
-mkLambda xs e = Exp SLambda (xs, e) <$> freshKey
+mkPair :: Exp -> Exp -> Exp
+mkPair e1 e2 = Exp SPair (e1,e2) Nothing
 
-{-# INLINE mkApp #-}
-mkApp :: MonadId m => String -> [Exp] -> m Exp
-mkApp f es = Exp SApp (f, es) <$> freshKey
+mkLambda :: [Var] -> Exp -> Exp
+mkLambda xs e = Exp SLambda (xs, e) Nothing
 
-{-# INLINE mkLet #-}
-mkLet :: MonadId m => String -> Exp -> Exp -> m Exp
-mkLet x e1 e2 = Exp SLet (x, e1, e2) <$> freshKey
+mkApp :: Exp -> [Exp] -> Exp
+mkApp e es = Exp SApp (e, es) Nothing
 
-{-# INLINE mkLetRec #-}
-mkLetRec :: MonadId m => [(String, Exp)] -> Exp -> m Exp
-mkLetRec xs e = Exp SLetRec (xs, e) <$> freshKey
+mkLet :: Var -> Exp -> Exp -> Exp
+mkLet x e1 e2 = Exp SLet (x, e1, e2) Nothing
 
-{-# INLINE mkAssume #-}
-mkAssume :: MonadId m => Exp -> Exp -> m Exp
-mkAssume cond e = Exp SAssume (cond, e) <$> freshKey
+mkLetRec :: [(Var, Exp)] -> Exp -> Exp
+mkLetRec xs e = Exp SLetRec (xs, e) Nothing
 
-{-# INLINE mkIf #-}
-mkIf :: MonadId m => Exp -> Exp -> Exp -> m Exp
-mkIf e1 e2 e3 = Exp SIf (e1,e2,e3) <$> freshKey
+mkAssume :: Exp -> Exp -> Exp
+mkAssume cond e = Exp SAssume (cond, e) Nothing
 
-{-# INLINE mkBranch #-}
-mkBranch :: MonadId m => Exp -> Exp -> m Exp
-mkBranch e1 e2 = Exp SBranch (e1, e2) <$> freshKey
-{-# INLINE mkBranch' #-}
-mkBranch' :: MonadId m => m (Exp -> Exp -> Exp)
-mkBranch' = do
-    key <- freshKey
-    return (\e1 e2 -> Exp SBranch (e1,e2) key)
+mkIf :: Exp -> Exp -> Exp -> Exp
+mkIf e1 e2 e3 = Exp SIf (e1,e2,e3) Nothing
 
-{-# INLINE mkFail #-} 
-{-# INLINE mkOmega #-}
-{-# INLINE mkRand #-}
-mkFail, mkOmega, mkRand :: MonadId m => m Exp
-mkFail  = Exp SFail () <$> freshKey
-mkOmega = Exp SOmega () <$> freshKey
-mkRand = Exp SRand () <$> freshKey
+mkBranch :: Exp -> Exp -> Exp
+mkBranch e1 e2 = Exp SBranch (e1, e2) Nothing
+
+mkFail, mkOmega, mkRand :: Exp
+mkFail  = Exp SFail () Nothing
+mkOmega = Exp SOmega () Nothing
+mkRand = Exp SRand () Nothing
 
 instance Pretty Type where
     pPrintPrec plevel prec = \case
         TInt -> text "int"
         TBool -> text "bool"
+        TUnit -> text "unit"
         TVar x -> text ('\'':x)
         TPair t1 t2 -> maybeParens (prec >= 1) (d1 <+> text "*" <+> d2)
             where
@@ -131,6 +110,10 @@ instance Pretty Type where
                 [ty] -> pPrintPrec plevel 1 ty
                 _ -> parens $ hsep $ punctuate comma (map (pPrintPrec plevel 0) tys)
 
+instance Pretty a => Pretty (AnnotVar a) where
+    pPrintPrec plevel prec (V x Nothing) = pPrintPrec plevel prec x
+    pPrintPrec plevel _ (V x (Just ty)) = 
+        parens $ pPrintPrec plevel 0 x <+> text ":" <+> pPrintPrec plevel 0 ty
 
 instance Pretty Exp where
     pPrintPrec plevel prec (Exp l arg key) = 
@@ -139,16 +122,16 @@ instance Pretty Exp where
             pp :: WellFormedPrinter Exp
             pp = WellFormedPrinter {
                    pPrintExp = pPrintPrec,
-                   pPrintIdent = \_ _ -> text
+                   pPrintIdent = pPrintPrec
                  }
             doc = genericPPrint pp plevel prec l arg
 
 
 instance Pretty Program where
-    pPrintPrec plevel _ (Program fs syns annot t) = 
+    pPrintPrec plevel _ (Program fs syns t) = 
         text "(* functions *)" $+$ 
         vcat (map (\(f,ty,e) -> 
-            text "let" <+> text f <+> colon <+> pPrintPrec plevel 0 ty <+> equals $+$
+            text "let" <+> text (varName f) <+> colon <+> pPrintPrec plevel 0 ty <+> equals $+$
             nest 4 (pPrintPrec plevel 0 e <> text ";;")) fs) $+$
         text "(* synonyms *)" $+$
         vcat (map (\syn -> 
@@ -159,9 +142,10 @@ instance Pretty Program where
             in
             text "type" <+> dargs <+> text (synName syn) <+> equals 
                         <+> pPrintPrec plevel 0 (synDef syn) <> text ";;") syns) $+$
+                        {-
         (if plevel == prettyNormal
          then empty
          else text "(* annotations *)" $+$
-              vcat (map (\(key, ty) -> pPrint key <+> colon <+> pPrintPrec plevel 0 ty) annot)) $+$
+              vcat (map (\(key, ty) -> pPrint key <+> colon <+> pPrintPrec plevel 0 ty) annot)) $+$ -}
         text "(*main*)" $+$
         pPrintPrec plevel 0 t

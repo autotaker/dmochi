@@ -132,12 +132,15 @@ evalRTypeA env = go  where
         (ML.SVar, x) -> env M.! x
         (ML.SLiteral, ML.CInt i) -> (RInt, Int i)
         (ML.SLiteral, ML.CBool b) -> (RBool, Bool b)
+        (ML.SLiteral, ML.CUnit) -> error "unexpected pattern"
         (ML.SBinary, ML.BinArg op v1 v2) ->
             let sv1 = snd $ go v1
                 sv2 = snd $ go v2
             in case op of
                 ML.SAdd -> (RInt, Add sv1 sv2)
                 ML.SSub -> (RInt, Sub sv1 sv2)
+                ML.SMul -> (RInt, Mul sv1 sv2)
+                ML.SDiv -> (RInt, Div sv1 sv2)
                 ML.SEq -> (RBool, Eq sv1 sv2)
                 ML.SLt -> (RBool, Lt sv1 sv2)
                 ML.SLte -> (RBool, Lte sv1 sv2)
@@ -490,6 +493,8 @@ substSValue subst _sv = case _sv of
     P sv1 sv2   -> P (substSValue subst sv1) (substSValue subst sv2)
     Add sv1 sv2 -> Add (substSValue subst sv1) (substSValue subst sv2)
     Sub sv1 sv2 -> Sub (substSValue subst sv1) (substSValue subst sv2)
+    Mul sv1 sv2 -> Mul (substSValue subst sv1) (substSValue subst sv2)
+    Div sv1 sv2 -> Div (substSValue subst sv1) (substSValue subst sv2)
     Eq  sv1 sv2 -> Eq  (substSValue subst sv1) (substSValue subst sv2)
     Lt  sv1 sv2 -> Lt  (substSValue subst sv1) (substSValue subst sv2)
     Lte sv1 sv2 -> Lte (substSValue subst sv1) (substSValue subst sv2)
@@ -546,9 +551,12 @@ refineLFormula penv env fml = phi' where
             Nothing -> error $ "Error!:" ++ show (ML.name x, env)
         (ML.SLiteral, ML.CInt i) -> ML.mkLiteral $ ML.CInt i
         (ML.SLiteral, ML.CBool b) -> ML.mkLiteral $ ML.CBool b
+        (ML.SLiteral, ML.CUnit) -> error "unexpected pattern"
         (ML.SBinary, ML.BinArg op a b) -> case op of
             ML.SAdd -> ML.mkBin ML.SAdd (go a) (go b)
             ML.SSub -> ML.mkBin ML.SSub (go a) (go b)
+            ML.SMul -> ML.mkBin ML.SMul (go a) (go b)
+            ML.SDiv -> ML.mkBin ML.SDiv (go a) (go b)
             ML.SEq  -> ML.mkBin ML.SEq (go a) (go b)
             ML.SLt  -> ML.mkBin ML.SLt (go a) (go b)
             ML.SLte -> ML.mkBin ML.SLte (go a) (go b)

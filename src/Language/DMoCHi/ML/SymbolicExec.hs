@@ -66,6 +66,8 @@ data SValue = SVar Id
             | P SValue SValue
             | Add SValue SValue
             | Sub SValue SValue
+            | Mul SValue SValue
+            | Div SValue SValue
             | Eq SValue SValue
             | Lt SValue SValue
             | Lte SValue SValue
@@ -107,6 +109,8 @@ instance ML.HasType SValue where
     getType (P v1 v2) = ML.TPair (ML.getType v1) (ML.getType v2)
     getType (Add _ _) = ML.TInt
     getType (Sub _ _) = ML.TInt
+    getType (Mul _ _) = ML.TInt
+    getType (Div _ _) = ML.TInt
     getType (Eq _ _)  = ML.TBool
     getType (Lt _ _)  = ML.TBool
     getType (Lte _ _) = ML.TBool
@@ -127,6 +131,10 @@ instance Show SValue where
         showParen (d >= 6) $ (showsPrec 6 v1) . (showString " + ") . (showsPrec 6 v2)
     showsPrec d (Sub v1 v2) = 
         showParen (d >= 6) $ (showsPrec 6 v1) . (showString " - ") . (showsPrec 6 v2)
+    showsPrec d (Mul v1 v2) = 
+        showParen (d >= 7) $ (showsPrec 7 v1) . (showString " * ") . (showsPrec 7 v2)
+    showsPrec d (Div v1 v2) = 
+        showParen (d >= 7) $ (showsPrec 7 v1) . (showString " / ") . (showsPrec 7 v2)
     showsPrec d (Eq v1 v2) = 
         showParen (d >= 5) $ (showsPrec 5 v1) . (showString " == ") . (showsPrec 5 v2)
     showsPrec d (Lt v1 v2) = 
@@ -201,6 +209,8 @@ fromSValue = \case
     P v1 v2 -> ML.mkPair (fromSValue v1) (fromSValue v2) reservedKey
     Add v1 v2 -> bin (ML.mkBin ML.SAdd) v1 v2
     Sub v1 v2 -> bin (ML.mkBin ML.SSub) v1 v2
+    Mul v1 v2 -> bin (ML.mkBin ML.SMul) v1 v2
+    Div v1 v2 -> bin (ML.mkBin ML.SDiv) v1 v2
     Eq v1 v2 -> bin (ML.mkBin ML.SEq) v1 v2
     Lt v1 v2 -> bin (ML.mkBin ML.SLt) v1 v2
     Lte v1 v2 -> bin (ML.mkBin ML.SLte) v1 v2
@@ -317,9 +327,12 @@ symbolicExec prog trace = do
                                                Nothing -> error $ "lookup error: key " ++ (show x)
         (ML.SLiteral, ML.CInt x) -> Int x
         (ML.SLiteral, ML.CBool x) -> Bool x
+        (ML.SLiteral, _) -> error "unexpected unit"
         (ML.SBinary, ML.BinArg op v1 v2) -> case op of
             ML.SAdd -> Add (evalA env v1) (evalA env v2)
             ML.SSub -> Sub (evalA env v1) (evalA env v2)
+            ML.SMul -> Mul (evalA env v1) (evalA env v2)
+            ML.SDiv -> Div (evalA env v1) (evalA env v2)
             ML.SEq  -> Eq  (evalA env v1) (evalA env v2)
             ML.SLt  -> Lt  (evalA env v1) (evalA env v2)
             ML.SLte -> Lte (evalA env v1) (evalA env v2)

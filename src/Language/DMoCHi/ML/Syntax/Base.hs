@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs, DataKinds, KindSignatures, TypeFamilies, ConstraintKinds, TypeOperators, PolyKinds, UndecidableInstances, FlexibleContexts #-}
+{-# LANGUAGE GADTs, DataKinds, KindSignatures, TypeFamilies, ConstraintKinds, TypeOperators, PolyKinds, UndecidableInstances, FlexibleContexts, DeriveGeneric #-}
 module Language.DMoCHi.ML.Syntax.Base(Label(..), 
                                       BinOp(..),
                                       UniOp(..),
@@ -27,6 +27,7 @@ import GHC.Exts(Constraint)
 import Text.Parsec.Expr(Assoc(..))
 import Data.Type.Bool
 import Data.Hashable
+import GHC.Generics(Generic)
 import Data.Type.Equality
 import Text.PrettyPrint.HughesPJClass
 
@@ -36,13 +37,13 @@ data Label = Literal | Var | Binary | Unary | Pair
            | Fail | Omega | Rand
            deriving(Eq,Ord)
            
-data BinOp = Add | Sub | Eq | Lt | Gt | Lte | Gte | And | Or 
+data BinOp = Add | Sub | NEq | Eq | Lt | Gt | Lte | Gte | And | Or  | Mul | Div
     deriving (Eq,Ord)
 data UniOp = Fst | Snd | Not | Neg
     deriving (Eq,Ord)
 
-data Lit = CInt Integer | CBool Bool
-    deriving(Eq,Ord)
+data Lit = CInt Integer | CBool Bool | CUnit
+    deriving(Eq,Ord,Generic)
 
 type family Ident e
 type family Labels e :: [Label]
@@ -50,7 +51,7 @@ type family BinOps e :: [BinOp]
 type family UniOps e :: [UniOp]
 
 type family AllBinOps where
-    AllBinOps = '[ 'Add, 'Sub, 'Eq, 'Lt, 'Gt, 'Lte, 'Gte, 'And, 'Or ]
+    AllBinOps = '[ 'Add, 'Sub, 'NEq, 'Eq, 'Lt, 'Gt, 'Lte, 'Gte, 'And, 'Or, 'Mul, 'Div ]
 
 type family AllUniOps where
     AllUniOps = '[ 'Fst, 'Snd, 'Not, 'Neg ]
@@ -94,7 +95,10 @@ reflectBinOp :: SBinOp op -> BinOp
 reflectBinOp l = case l of
     SAdd -> Add 
     SSub -> Sub
+    SMul -> Mul
+    SDiv -> Div
     SEq -> Eq
+    SNEq -> NEq
     SLt -> Lt
     SLte -> Lte
     SGt -> Gt
@@ -131,8 +135,6 @@ instance Ord e => Ord (UniArg e) where
         `mappend` compare e1 e2
 
 instance Hashable Lit where
-    hashWithSalt salt (CInt i) = salt `hashWithSalt` (1 :: Int) `hashWithSalt` i
-    hashWithSalt salt (CBool b) = salt `hashWithSalt` (1 :: Int) `hashWithSalt` b
 
 
 instance Hashable (SBinOp op) where
@@ -149,6 +151,9 @@ instance Hashable (SBinOp op) where
             SGte -> 7 
             SAnd -> 8
             SOr  -> 9
+            SNEq -> 10
+            SMul -> 11
+            SDiv -> 12
 
 instance Hashable (SUniOp op) where
     hashWithSalt salt op = salt `hashWithSalt` v
@@ -167,7 +172,7 @@ type family WellFormed (l :: Label)  (e :: *)  (arg :: *) :: Constraint where
     WellFormed 'Binary  e arg = arg ~ BinArg e
     WellFormed 'Pair    e arg = arg ~ (e, e)
     WellFormed 'Lambda  e arg = arg ~ ([Ident e], e)
-    WellFormed 'App     e arg = arg ~ (Ident e, [e])
+    WellFormed 'App     e arg = arg ~ (e, [e])
     WellFormed 'Let     e arg = arg ~ (Ident e, e, e)
     WellFormed 'LetRec  e arg = arg ~ ([(Ident e, e)], e)
     WellFormed 'Assume  e arg = arg ~ (e, e)
@@ -222,23 +227,32 @@ data SBinOp (op :: BinOp) where
     SGte     :: SBinOp 'Gte
     SAnd     :: SBinOp 'And
     SOr      :: SBinOp 'Or
+    SNEq     :: SBinOp 'NEq
+    SDiv     :: SBinOp 'Div
+    SMul     :: SBinOp 'Mul
 
 type family EqBinOp a b where
     EqBinOp 'Add 'Add = 'True
     EqBinOp 'Sub 'Sub = 'True
     EqBinOp 'Eq  'Eq = 'True
+    EqBinOp 'NEq 'NEq = 'True
     EqBinOp 'Lt  'Lt = 'True
     EqBinOp 'Gt  'Gt = 'True
     EqBinOp 'Lte 'Lte = 'True
     EqBinOp 'Gte 'Gte = 'True
     EqBinOp 'And 'And = 'True
     EqBinOp 'Or  'Or = 'True
+    EqBinOp 'Div 'Div = 'True
+    EqBinOp 'Mul 'Mul = 'True
     EqBinOp a b = 'False
 
 instance TestEquality SBinOp where
     testEquality SAdd SAdd = Just Refl
     testEquality SSub SSub = Just Refl
+    testEquality SDiv SDiv = Just Refl
+    testEquality SMul SMul = Just Refl
     testEquality SEq  SEq  = Just Refl
+    testEquality SNEq SNEq  = Just Refl
     testEquality SLt  SLt  = Just Refl
     testEquality SGt  SGt  = Just Refl
     testEquality SLte SLte = Just Refl
@@ -246,7 +260,6 @@ instance TestEquality SBinOp where
     testEquality SAnd SAnd = Just Refl
     testEquality SOr  SOr  = Just Refl
     testEquality _ _ = Nothing
-
 
 data SUniOp (op :: UniOp) where
     SFst     :: SUniOp 'Fst
@@ -277,12 +290,15 @@ instance Show (SBinOp op) where
     show SAdd = "SAdd"
     show SSub = "SSub"
     show SEq = "SEq"
+    show SNEq = "SNEq"
     show SLt = "SLt"
     show SGt = "SGt"
     show SLte = "SLte"
     show SGte = "SLte"
     show SAnd = "SAnd"
     show SOr = "SOr"
+    show SDiv = "SDiv"
+    show SMul = "SMul"
 instance Show (SUniOp op) where
     show SFst = "SFst"
     show SSnd = "SSnd"
@@ -298,7 +314,10 @@ unaryPrec SSnd = (9, ".snd", False)
 binaryPrec :: SBinOp op -> (Rational, String, Assoc)
 binaryPrec SAdd = (6, "+", AssocLeft)
 binaryPrec SSub = (6, "-", AssocLeft)
+binaryPrec SDiv = (7, "*", AssocLeft)
+binaryPrec SMul = (8, "/", AssocLeft)
 binaryPrec SEq   = (4, "=", AssocNone)
+binaryPrec SNEq  = (4, "<>", AssocNone)
 binaryPrec SLt   = (4, "<", AssocNone)
 binaryPrec SLte  = (4, "<=", AssocNone)
 binaryPrec SGt   = (4, ">", AssocNone)
@@ -313,6 +332,8 @@ instance Pretty Lit where
                    | otherwise -> integer i
             CBool True -> text "true"
             CBool False -> text "false"
+            CUnit -> text "()"
+            
 
 data WellFormedPrinter e = 
     WellFormedPrinter { pPrintExp    :: PrettyLevel -> Rational -> e -> Doc
@@ -347,8 +368,8 @@ genericPPrint pp pLevel prec op arg =
         (SLambda, (xs, e)) -> maybeParens (prec > 0) $
             text "fun" <+> hsep (map (pPrintIdent pp prettyBind 0) xs) <+> text "->" $+$
             nest 4 (pPrintExp pp pLevel 0 e)
-        (SApp, (f, [])) -> maybeParens (prec > 8) $ pPrintIdent pp pLevel prec f <+> text "()"
-        (SApp, (f, es)) -> maybeParens (prec > 8) $ pPrintIdent pp pLevel 8 f <+> hsep (map (pPrintExp pp pLevel 9) es)
+        (SApp, (e, [])) -> maybeParens (prec > 8) $ pPrintExp pp pLevel 9 e <+> text "()"
+        (SApp, (e, es)) -> maybeParens (prec > 8) $ pPrintExp pp pLevel 9 e <+> hsep (map (pPrintExp pp pLevel 9) es)
         (SLet, (x, e1, e2)) -> maybeParens (prec > 0) $ 
             text "let" <+> pPrintIdent pp prettyBind 0 x <+> text "=" 
                        <+> pPrintExp pp pLevel 0 e1 <+> text "in" $+$
@@ -368,10 +389,12 @@ genericPPrint pp pLevel prec op arg =
             nest 2 (text "then" <+> pPrintExp pp pLevel 0 e1) $+$
             nest 2 (text "else" <+> pPrintExp pp pLevel 0 e2)
         (SBranch, (e1, e2)) -> maybeParens (prec > 0) $
-            pPrintExp pp pLevel 1 e1 <+> text "<>" $+$ pPrintExp pp pLevel 1 e2
-        (SFail, _) -> text "Fail"
-        (SOmega, _) -> text "Omega"
-        (SRand, _) -> text "*"
+            text "if" <+> text "_" $+$
+            nest 2 (text "then" <+> pPrintExp pp pLevel 0 e1) $+$
+            nest 2 (text "else" <+> pPrintExp pp pLevel 0 e2)
+        (SFail, _) -> text "assert(false)"
+        (SOmega, _) -> text "assume(false)"
+        (SRand, _) -> text "random()"
 
 comment :: Pretty a => a -> Doc
 comment a = text "(*" <+> pPrint a <+> text "*)"

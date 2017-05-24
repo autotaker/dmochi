@@ -141,4 +141,5 @@ test-suite unit-test
     main-is:           Main.hs
     hs-source-dirs:    test
     build-depends:     base >=4.9 && <5.0, dmochi, hspec >= 2.2, hspec-core >= 2.2, hspec-expectations >= 0.7, hspec-discover, pretty >=1.1 && <1.2, filepath >= 1.4.1 && < 1.4.2
+    other-modules:     MainSpec
     default-language:  Haskell2010

@@ -90,7 +90,7 @@ type instance Labels LExp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
                              , 'App, 'Branch, 'Rand, 'Fail, 'Omega ]
 type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda ]
 type instance Labels Atom  = '[ 'Literal, 'Var, 'Binary, 'Unary ]
-type instance BinOps Atom  = '[ 'Add, 'Sub, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
+type instance BinOps Atom  = '[ 'Add, 'Sub, 'Div, 'Mul, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
 type instance UniOps Atom  = '[ 'Fst, 'Snd, 'Not, 'Neg ]
 type instance Ident  Exp = TId
 type instance Ident  LExp = TId
@@ -101,7 +101,10 @@ mkBin :: SBinOp op -> Atom -> Atom -> Atom
 mkBin op v1 v2 = case op of
     SAdd -> Atom SBinary (BinArg SAdd v1 v2) TInt
     SSub -> Atom SBinary (BinArg SSub v1 v2) TInt
+    SDiv -> Atom SBinary (BinArg SDiv v1 v2) TInt
+    SMul -> Atom SBinary (BinArg SMul v1 v2) TInt
     SEq  -> Atom SBinary (BinArg SEq v1 v2) TBool
+    SNEq  -> Atom SUnary (UniArg SNot (Atom SBinary (BinArg SEq v1 v2) TBool)) TBool
     SLt  -> Atom SBinary (BinArg SLt v1 v2) TBool
     SLte -> Atom SBinary (BinArg SLte v1 v2) TBool
     SGt  -> Atom SBinary (BinArg SLt v2 v1) TBool
@@ -123,6 +126,7 @@ mkUni op v1@(Atom _ _ sty) = case op of
 mkLiteral :: Lit -> Atom
 mkLiteral l@(CInt _) = Atom SLiteral l TInt
 mkLiteral l@(CBool _) = Atom SLiteral l TInt
+mkLiteral CUnit = error "mkLiteral: unexpected unit literal"
 
 mkVar :: TId -> Atom
 mkVar x@(TId sty _) = Atom SVar x sty
@@ -242,6 +246,8 @@ instance Castable LExp Typed.Exp where
                     SAdd -> BinArg op a' b'
                     SSub -> BinArg op a' b'
                     SEq  -> BinArg op a' b'
+                    SDiv -> BinArg op a' b'
+                    SMul -> BinArg op a' b'
                     SLt  -> BinArg op a' b'
                     SLte -> BinArg op a' b'
                     SAnd -> BinArg op a' b'
@@ -258,7 +264,8 @@ instance Castable LExp Typed.Exp where
             in Typed.Exp l arg' sty key
         (SPair, (e1, e2)) -> Typed.Exp l (cast e1, cast e2) sty key
         (SLambda, (xs, e)) -> Typed.Exp l (xs, cast e) sty key
-        (SApp, (f, vs)) -> Typed.Exp l (f, map cast vs) sty key
+        (SApp, (f, vs)) -> Typed.Exp l (e_f, map cast vs) sty key
+            where e_f = Typed.Exp SVar f (getType f) reservedKey
         (SBranch, (e1, e2)) -> Typed.Exp l (cast e1, cast e2) sty key
         (SRand, ()) -> Typed.Exp l arg sty key
         (SFail, ()) -> Typed.Exp l arg sty key
@@ -276,6 +283,8 @@ instance Castable Exp Typed.Exp where
                 arg' = case op of
                     SAdd -> BinArg op a' b'
                     SSub -> BinArg op a' b'
+                    SDiv -> BinArg op a' b'
+                    SMul -> BinArg op a' b'
                     SEq  -> BinArg op a' b'
                     SLt  -> BinArg op a' b'
                     SLte -> BinArg op a' b'
@@ -341,7 +350,9 @@ convertL e@(Typed.Exp l arg sty key) =
         (SBinary, _)  -> castWith key <$> convertA e
         (SPair, _)    -> cast <$> convertV e
         (SLambda, _)  -> cast <$> convertV e
-        (SApp, (f, es)) -> mkApp f <$> mapM convertV es <*> pure key
+        (SApp, (e, es)) -> do
+            f <- convertVar e
+            mkApp f <$> mapM convertV es <*> pure key
         (SLet, (x, e1, e2)) -> do
             e1' <- convertL e1
             ContT $ \cont -> do
@@ -374,8 +385,6 @@ convertL e@(Typed.Exp l arg sty key) =
         (SOmega, ()) -> pure $ mkOmegaL sty key
         (SRand, ()) -> pure $ mkRand key
             
-        
-   
 convertE :: MonadId m => Typed.Exp -> ContT Exp m Exp
 convertE e@(Typed.Exp l arg sty key) = 
     case (l, arg) of
@@ -385,8 +394,9 @@ convertE e@(Typed.Exp l arg sty key) =
         (SBinary, _)  -> castWith key <$> convertA e
         (SPair, _)    -> cast <$> convertV e
         (SLambda, _)  -> cast <$> convertV e
-        (SApp, (f, es)) -> do
+        (SApp, (e, es)) -> do
             r <- TId sty <$> identify "r"
+            f <- convertVar e
             app <- mkApp f <$> mapM convertV es <*> freshKey
             key' <- freshKey
             return $ mkLet r app (castWith key' $ mkVar r) key
@@ -424,21 +434,29 @@ convertE e@(Typed.Exp l arg sty key) =
             key' <- freshKey
             return $ mkLet r rand (castWith key' $ mkVar r) key
 
+convertVar :: MonadId m => Typed.Exp -> ContT Exp m TId
+convertVar e@(Typed.Exp _ _ sty _) = do
+    r <- TId sty <$> identify "tmp"
+    e' <- convertL e
+    shiftT $ \cont -> lift (mkLet r e' <$> cont r <*> freshKey)
+    
 convertA :: MonadId m => Typed.Exp -> ContT Exp m Atom
-convertA e@(Typed.Exp l arg sty _) = 
+convertA e@(Typed.Exp l arg _ _) = 
     case (l,arg) of
         (SLiteral, lit) -> pure (mkLiteral lit)
         (SVar, x) -> pure (mkVar x)
         (SUnary,  UniArg op e1)    -> mkUni op <$> convertA e1
         (SBinary, BinArg op e1 e2) -> mkBin op <$> convertA e1 
                                                <*> convertA e2 
-        _ -> do
+        _ -> mkVar <$> convertVar e
+            {-
             e' <- convertL e
             r <- TId sty <$> identify "tmp"
             shiftT $ \cont -> lift (mkLet r e' <$> cont (mkVar r) <*> freshKey)
+            -}
 
 convertV :: MonadId m => Typed.Exp -> ContT Exp m Value
-convertV e@(Typed.Exp l arg sty key) =
+convertV e@(Typed.Exp l arg _ key) =
     case (l,arg) of
         (SLiteral, _) -> castWith key <$> convertA e
         (SVar, _) -> castWith key <$> convertA e
@@ -447,10 +465,8 @@ convertV e@(Typed.Exp l arg sty key) =
         (SPair, (e1, e2)) -> mkPair <$> convertV e1 <*> convertV e2 <*> pure key
         (SLambda, (x, e1)) -> mkLambda x <$> resetT (convertE e1) <*> pure key
         _ -> do
-            e' <- convertL e
-            r <- TId sty <$> identify "tmp"
-            kr <- freshKey
-            shiftT $ \cont -> lift (mkLet r e' <$> cont (castWith kr (mkVar r)) <*> freshKey)
+            kr <- freshKey 
+            castWith kr . mkVar <$> convertVar e
 
 {-# INLINE atomOfValue #-}
 atomOfValue :: Value -> Maybe Atom

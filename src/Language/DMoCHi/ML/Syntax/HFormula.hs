@@ -30,7 +30,7 @@ getIValue (HFormula _ _ _ iv _) = iv
 
 type instance Ident HFormula  = TId
 type instance Labels HFormula  = '[ 'Literal, 'Var, 'Unary, 'Binary ]
-type instance BinOps HFormula = '[ 'Add, 'Sub, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
+type instance BinOps HFormula = '[ 'Add, 'Sub, 'Div, 'Mul, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
 type instance UniOps HFormula = '[ 'Fst, 'Snd, 'Not, 'Neg ]
 
 type HFormulaTbl = HashTable HFormula HFormula
@@ -84,22 +84,26 @@ infix 4 ===
 class Z3.MonadZ3 m => HFormulaFactory m where
     genHFormula :: (SMT.IValue -> Int -> HFormula) -> m SMT.IValue -> m HFormula
  
-mkBin :: HFormulaFactory m => SBinOp op -> HFormula -> HFormula -> m HFormula
+mkBin :: (HFormulaFactory m, Supported op (BinOps HFormula))  => SBinOp op -> HFormula -> HFormula -> m HFormula
 mkBin op v1 v2 = 
     let iv1 = getIValue v1
         iv2 = getIValue v2
         SMT.ASTValue v1' = iv1
         SMT.ASTValue v2' = iv2
+        isLinear = case (v1, v2) of
+            (HFormula SLiteral (CInt _) _ _ _, _ ) -> True
+            (_, HFormula SLiteral (CInt _) _ _ _) -> True
+            _ -> False
     in case op of
-        SAdd -> genHFormula ( HFormula SBinary (BinArg SAdd v1 v2) TInt) (SMT.ASTValue <$> Z3.mkAdd [v1', v2']) 
-        SSub -> genHFormula ( HFormula SBinary (BinArg SSub v1 v2) TInt) (SMT.ASTValue <$> Z3.mkSub [v1', v2'])
-        SEq  -> genHFormula ( HFormula SBinary (BinArg SEq v1 v2) TBool) (SMT.mkEqIValue iv1 iv2)
-        SLt  -> genHFormula ( HFormula SBinary (BinArg SLt v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLt v1' v2')
-        SLte -> genHFormula ( HFormula SBinary (BinArg SLte v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLe v1' v2')
-        SGt  -> genHFormula ( HFormula SBinary (BinArg SLt v2 v1) TBool)  (SMT.ASTValue <$> Z3.mkGt v1' v2')
-        SGte -> genHFormula ( HFormula SBinary (BinArg SLte v2 v1) TBool) (SMT.ASTValue <$> Z3.mkGe v1' v2')
-        SAnd -> genHFormula ( HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkAnd [v1', v2'])
-        SOr  -> genHFormula ( HFormula SBinary (BinArg SOr  v1 v2) TBool) (SMT.ASTValue <$> Z3.mkOr [v1', v2'])
+        SAdd -> genHFormula (HFormula SBinary (BinArg SAdd v1 v2) TInt) (SMT.ASTValue <$> Z3.mkAdd [v1', v2']) 
+        SSub -> genHFormula (HFormula SBinary (BinArg SSub v1 v2) TInt) (SMT.ASTValue <$> Z3.mkSub [v1', v2'])
+        SDiv -> genHFormula (HFormula SBinary (BinArg SDiv v1 v2) TInt) (SMT.mkUDiv iv1 iv2)
+        SMul -> genHFormula (HFormula SBinary (BinArg SMul v1 v2) TInt) (SMT.mkUMul isLinear iv1 iv2)
+        SEq  -> genHFormula (HFormula SBinary (BinArg SEq v1 v2) TBool) (SMT.mkEqIValue iv1 iv2)
+        SLt  -> genHFormula (HFormula SBinary (BinArg SLt v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLt v1' v2')
+        SLte -> genHFormula (HFormula SBinary (BinArg SLte v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLe v1' v2')
+        SAnd -> genHFormula (HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkAnd [v1', v2'])
+        SOr  -> genHFormula (HFormula SBinary (BinArg SOr  v1 v2) TBool) (SMT.ASTValue <$> Z3.mkOr [v1', v2'])
 
 mkUni :: HFormulaFactory m => SUniOp op -> HFormula -> m HFormula
 mkUni op v1@(HFormula _ _ sty _ _) = 
@@ -123,7 +127,8 @@ mkUni op v1@(HFormula _ _ sty _ _) =
 
 mkLiteral :: HFormulaFactory m => Lit -> m HFormula
 mkLiteral l@(CInt i)  = genHFormula (HFormula SLiteral l TInt) (SMT.ASTValue <$> Z3.mkInteger i)
-mkLiteral l@(CBool b) = genHFormula (HFormula SLiteral l TInt) (SMT.ASTValue <$> Z3.mkBool b)
+mkLiteral l@(CBool b) = genHFormula (HFormula SLiteral l TBool) (SMT.ASTValue <$> Z3.mkBool b)
+mkLiteral CUnit = error "unexpected pattern"
 
 mkVar :: HFormulaFactory m => TId -> m HFormula
 mkVar x@(TId sty name_x) = genHFormula (HFormula SVar x sty) (SMT.toIValueId sty (show name_x))

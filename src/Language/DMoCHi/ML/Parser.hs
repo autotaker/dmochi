@@ -1,12 +1,12 @@
 {-# LANGUAGE BangPatterns #-}
 module Language.DMoCHi.ML.Parser where
 import Text.Parsec
+import Text.Parsec.String
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Expr
 import Language.DMoCHi.ML.Syntax.UnTyped 
-import Language.DMoCHi.Common.Id(UniqueKey, FreshIO, getUniqueKey)
 import Data.Either
-import Control.Monad.IO.Class
+import Control.Monad.Identity
 
 reservedNames :: [String]
 reservedNames = ["let","rec","in","and","fun","not",
@@ -27,11 +27,6 @@ language = P.LanguageDef { P.commentStart = "(*"
                          , P.reservedOpNames = ["=","<",">","&&","||","->","<>","+","-",";;","<=",">=","*"]
                          , P.caseSensitive = True }
 
-
-type Parser a = ParsecT String [(UniqueKey,Type)] FreshIO a
-
-type UserState = [(UniqueKey, Type)]
-type UserMonad = [(UniqueKey, Type)]
 
 lexer = P.makeTokenParser language
 
@@ -70,32 +65,28 @@ brackets = P.brackets lexer
 typVar :: Parser String
 typVar = char '\'' *> identifier
 
-parseProgramFromFile :: FilePath -> FreshIO (Either ParseError Program)
-parseProgramFromFile f = do
-    input <- liftIO $ readFile f
-    runParserT progP [] f input
+parseProgramFromFile :: FilePath -> IO (Either ParseError Program)
+parseProgramFromFile f = parseFromFile progP f
 
 progP :: Parser Program
 progP = do
     (funDefs, synDefs) <- partitionEithers <$> many defP
     e <- exprP
-    annots <- getState
     return $ Program { functions = funDefs
                      , synonyms = synDefs
-                     , typeAnn = annots
                      , mainTerm = e }
 
-defP :: Parser (Either (String,Type,Exp) SynonymDef)
+defP :: Parser (Either (AnnotVar String,Type,Exp) SynonymDef)
 defP = Right <$> synDefP <|> Left <$> funDefP 
 
-funDefP :: Parser (String,Type,Exp)
+funDefP :: Parser (AnnotVar String,Type,Exp)
 funDefP = try $ do
     x <- reserved "let" *> identifier
     ty <- colon *> typeP
     reservedOp "="
     t <- exprP
     optional (reservedOp ";;")
-    return (x,ty,t)
+    return (V x Nothing,ty,t)
 
 synDefP :: Parser SynonymDef
 synDefP = do
@@ -114,13 +105,14 @@ exprP = simpleP `chainl1` (reservedOp "<>" >> mkBranch' ) <?> "expr" where
     simpleP = try valueP <|> letP <|> assumeP <|> assertP <|> lambdaP <|> ifP <|> failP <|> omegaP <|> parens exprP
     assumeP = do cond <- (reserved "assume" *> valueP <* semi) 
                  e <- exprP
-                 mkAssume cond e
+                 pure $ mkAssume cond e
+    mkBranch' = pure mkBranch
     assertP = do
         reserved "assert" 
         v <- termP
-        e2 <- mkLiteral (CInt 0)
-        e3 <- mkFail
-        mkIf v e2 e3
+        let e2 = mkLiteral CUnit
+        let e3 = mkFail
+        pure $ mkIf v e2 e3
     ifP = do
         reserved "if"
         pred <- valueP
@@ -128,13 +120,18 @@ exprP = simpleP `chainl1` (reservedOp "<>" >> mkBranch' ) <?> "expr" where
         eThen <- exprP
         reserved "else"
         eElse <- exprP
-        mkIf pred eThen eElse
+        pure $ mkIf pred eThen eElse
     lambdaP = do xs <- reserved "fun" *> argsP <* reservedOp "->" 
                  e <- exprP
-                 mkLambda xs e
-    argsP = parens (pure []) <|> many1 identifier
-    failP   = reserved "Fail" >> mkFail
-    omegaP   = reserved "Omega" >> mkOmega
+                 pure $ mkLambda xs e
+    argsP = many1 argP 
+    argP = (identifier >>= \x -> pure (V x Nothing)) <|> parens (do
+                x <- identifier
+                reservedOp ":"
+                ty <- typeP
+                pure (V x (Just ty)))
+    failP   = mkFail <$ reserved "Fail"
+    omegaP   = mkOmega <$ reserved "Omega"
 
 letP :: Parser Exp
 letP = (do reserved "let" 
@@ -142,25 +139,22 @@ letP = (do reserved "let"
                         mkLetRec <$> sepBy1 bindFunc (reserved "and")) <|> 
                     (uncurry mkLet <$> (try bind <|> bindFunc)) 
            e <- reserved "in" *> exprP
-           cnstr e) <?> "let"
+           pure (cnstr e)) <?> "let"
     where 
         bindFunc = do
             f <- identifier
             xs <- many1 identifier
             e  <- reservedOp "=" *> exprP
-            v <- mkLambda xs e
-            return (f, v)
+            let v = mkLambda (map (\x -> V x Nothing) xs) e
+            return (V f Nothing, v)
         bind = do 
             x <- identifier
-            optional $ do 
-                _ <- reservedOp ":" *> typeP
-                return ()
-                {- 
-                let !key = getUniqueKey e1
-                modifyState ((key, ty):) -}
+            mty <- optionMaybe $ do 
+                ty <- reservedOp ":" *> typeP
+                return ty
             e <- reservedOp "=" *> (exprP <|> 
-                (reservedOp "*" >> mkRand))
-            return (x, e)
+                (reservedOp "*" >> return mkRand))
+            return (V x mty, e)
 
 valueP :: Parser Exp
 valueP = buildExpressionParser opTable termP <?> "value" where
@@ -175,35 +169,35 @@ valueP = buildExpressionParser opTable termP <?> "value" where
               , [binary "&&" SAnd AssocLeft]
               , [binary "||" SOr AssocLeft]
               ]
-    binary :: Supported op (BinOps Exp) => String -> SBinOp op -> Assoc -> Operator String [(UniqueKey,Type)] FreshIO Exp
-    binary name op assoc = Infix (reservedOp name >> mkBinary' op) assoc
-    prefix, prefix' :: Supported op (UniOps Exp) => String -> SUniOp op  -> Operator String [(UniqueKey,Type)] FreshIO Exp
-    prefix name op       = Prefix (reservedOp name >> mkUnary' op)
-    prefix' name op      = Prefix (reserved name >> mkUnary' op)
-    fstOrSnd = Postfix $ dot >> ((reserved "fst" >> mkUnary' SFst) <|>
-                                 (reserved "snd" >> mkUnary' SSnd))
+    binary :: Supported op (BinOps Exp) => String -> SBinOp op -> Assoc -> Operator String () Identity Exp
+    binary name op assoc = Infix (mkBinary op <$ reservedOp name) assoc
+    prefix, prefix' :: Supported op (UniOps Exp) => String -> SUniOp op  -> Operator String () Identity Exp
+    prefix name op       = Prefix (mkUnary op <$ reservedOp name)
+    prefix' name op      = Prefix (mkUnary op <$ reserved name)
+    fstOrSnd = Postfix $ dot >> ((mkUnary SFst <$ reserved "fst") <|>
+                                 (mkUnary SSnd <$ reserved "snd"))
 
 termP :: Parser Exp
 termP = varOrApp
-    <|> (natural >>= mkLiteral . CInt)
-    <|> (reserved "true" >> mkLiteral (CBool True))
-    <|> (reserved "false" >> mkLiteral (CBool False))
+    <|> (mkLiteral . CInt <$> natural)
+    <|> (mkLiteral (CBool True) <$ reserved "true")
+    <|> (mkLiteral (CBool False) <$ reserved "false")
     <|> parens (do p1 <- valueP
                    mp2 <- optionMaybe (comma >> valueP)
                    case mp2 of
                         Nothing -> return p1
-                        Just p2 -> mkPair p1 p2)
+                        Just p2 -> pure $ mkPair p1 p2)
 
 argP :: Parser Exp
-argP = (identifier >>= mkVar)
-    <|> (natural >>= mkLiteral . CInt)
-    <|> (reserved "true" >> mkLiteral (CBool True))
-    <|> (reserved "false" >> mkLiteral (CBool False))
+argP = (mkVar . (\x -> V x Nothing) <$> identifier)
+    <|> (mkLiteral . CInt <$> natural)
+    <|> (mkLiteral (CBool True) <$ reserved "true")
+    <|> (mkLiteral (CBool False) <$ reserved "false")
     <|> parens (do p1 <- valueP
                    mp2 <- optionMaybe (comma >> valueP)
                    case mp2 of
                         Nothing -> return p1
-                        Just p2 -> mkPair p1 p2)
+                        Just p2 -> pure $ mkPair p1 p2)
 
 varOrApp :: Parser Exp
 varOrApp = do
@@ -212,8 +206,8 @@ varOrApp = do
         l2m vs = Just vs
     l <- try (parens (pure (Just []))) <|> l2m <$> many argP
     case l of
-        Nothing -> mkVar f
-        Just vs -> mkApp f vs
+        Nothing -> pure $ mkVar (V f Nothing)
+        Just vs -> pure $ mkApp (mkVar (V f Nothing)) vs
 
 typeP :: Parser Type
 typeP = prim <|> func 
