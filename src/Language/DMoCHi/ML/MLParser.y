@@ -178,10 +178,12 @@ primFuncs :: [(AnnotVar String, TypeScheme, Exp)]
 primFuncs = 
     [ build "read_int" (TFun [TUnit] TInt) readIntDef
     , build "assume"   (TFun [TBool] TUnit) assumeDef
-    , build "fst"      (TFun [TPair (TVar "a") (TVar "b")] (TVar "a")) fstDef
-    , build "snd"      (TFun [TPair (TVar "a") (TVar "b")] (TVar "b")) sndDef
+    , build "fst"      (TFun [TPair ta tb] (TVar "a")) fstDef
+    , build "snd"      (TFun [TPair ta tb] (TVar "b")) sndDef
     ]
     where
+    ta = TVar "a"
+    tb = TVar "b"
     build fname ty def = (V fname Nothing, toTypeScheme ty, def)
     readIntDef = mkLambda [unusedVar] mkRand
     assumeDef  = mkLambda [x] (mkAssume (mkVar x) (mkLiteral CUnit))
