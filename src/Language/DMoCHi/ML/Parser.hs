@@ -76,17 +76,17 @@ progP = do
                      , synonyms = synDefs
                      , mainTerm = e }
 
-defP :: Parser (Either (AnnotVar String,Type,Exp) SynonymDef)
+defP :: Parser (Either (AnnotVar String,TypeScheme,Exp) SynonymDef)
 defP = Right <$> synDefP <|> Left <$> funDefP 
 
-funDefP :: Parser (AnnotVar String,Type,Exp)
+funDefP :: Parser (AnnotVar String,TypeScheme,Exp)
 funDefP = try $ do
     x <- reserved "let" *> identifier
     ty <- colon *> typeP
     reservedOp "="
     t <- exprP
     optional (reservedOp ";;")
-    return (V x Nothing,ty,t)
+    return (V x Nothing,toTypeScheme ty,t)
 
 synDefP :: Parser SynonymDef
 synDefP = do

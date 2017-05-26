@@ -1,6 +1,6 @@
 {-# LANGUAGE GADTs, TypeFamilies, LambdaCase #-}
 module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..)
-                                        , Type(..), SynName, annot
+                                        , Type(..), TypeScheme(..), SynName, annot, annotVar, toTypeScheme
                                         , SynonymDef(..), Program(..), unusedVar
                                         , mkLiteral, mkVar, mkUnary, mkBinary
                                         , mkPair, mkLambda, mkApp, mkLet, mkLetRec
@@ -10,6 +10,7 @@ module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..)
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.Common.Id
 import Text.PrettyPrint.HughesPJClass
+import qualified Data.Set as S
 
 data Exp where
     Exp :: (WellFormed l Exp arg, Supported l (Labels Exp)) => !(SLabel l) -> arg -> Maybe Type -> Exp
@@ -26,7 +27,7 @@ type instance UniOps Exp = AllUniOps
 
 type SynName = String
 
-data Program = Program { functions :: [(Var,Type,Exp)] 
+data Program = Program { functions :: [(Var,TypeScheme,Exp)] 
                        , synonyms :: [SynonymDef]
                        , mainTerm  :: Exp }
 
@@ -37,7 +38,23 @@ data SynonymDef = SynonymDef { synName :: SynName
 data Type = TInt | TBool | TPair Type Type | TUnit
           | TFun [Type] Type | TSyn [Type] SynName
           | TVar String
-          deriving(Eq,Show)
+          deriving(Eq,Ord,Show)
+data TypeScheme = 
+    TypeScheme { typeArgs :: [String] 
+               , typeBody :: Type }
+               deriving(Eq,Show)
+
+toTypeScheme :: Type -> TypeScheme
+toTypeScheme ty = TypeScheme fvs ty
+    where
+    fvs = S.toList $ go S.empty ty
+    go acc TInt = acc
+    go acc TBool = acc
+    go acc TUnit = acc
+    go acc (TPair ty1 ty2) = go (go acc ty1) ty2
+    go acc (TFun tys ty) = foldl go (go acc ty) tys
+    go acc (TSyn tys _) = foldl go acc tys
+    go acc (TVar x) = S.insert x acc
 
 {-
 instance HasUniqueKey Exp where
@@ -47,6 +64,8 @@ instance HasUniqueKey Exp where
 annot :: Exp -> Type -> Exp
 annot (Exp l arg _) ty = Exp l arg (Just ty)
 
+annotVar :: Var -> Type -> Var
+annotVar (V x _) ty = V x (Just ty)
 
 unusedVar :: Var
 unusedVar = V "" Nothing
@@ -112,6 +131,13 @@ instance Pretty Type where
             darg = case tys of
                 [ty] -> pPrintPrec plevel 1 ty
                 _ -> parens $ hsep $ punctuate comma (map (pPrintPrec plevel 0) tys)
+
+instance Pretty TypeScheme where
+    pPrintPrec plevel prec (TypeScheme [] ty) = pPrintPrec plevel prec ty
+    pPrintPrec plevel prec (TypeScheme xs ty) = 
+        maybeParens (prec >= 1) $ 
+            text "forall" <+> hsep (map (text.('\'':)) xs) <> text 
+                      "." <+> pPrintPrec plevel 0 ty
 
 instance Pretty a => Pretty (AnnotVar a) where
     pPrintPrec plevel prec (V x Nothing) = pPrintPrec plevel prec x

@@ -15,7 +15,8 @@ import           Language.DMoCHi.Boolean.Syntax.Typed as B(tCheck)
 import           Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
 import           Language.DMoCHi.Boolean.LiftRec as B(liftRec)
 import           Language.DMoCHi.Boolean.Test 
-import           Language.DMoCHi.ML.Parser
+import qualified Language.DMoCHi.ML.Parser as Parser
+import qualified Language.DMoCHi.ML.MLParser as MLParser
 import           Language.DMoCHi.ML.Alpha
 import qualified Language.DMoCHi.ML.Inline  as Inline
 import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
@@ -36,7 +37,7 @@ import qualified Language.DMoCHi.ML.HornClause as Horn
 import qualified Language.DMoCHi.ML.HornClauseParser as Horn
 
 data MainError = NoInputSpecified
-               | ParseFailed ParseError
+               | ParseFailed String
                | RefinementFailed ParseError
                | AlphaFailed AlphaError
                | IllTyped Typed.TypeError 
@@ -47,7 +48,7 @@ data MainError = NoInputSpecified
 
 instance Show MainError where
     show NoInputSpecified = "NoInputSpecified"
-    show (ParseFailed err) = "ParseFailed: " ++ show err
+    show (ParseFailed err) = "ParseFailed: " ++ err
     show (AlphaFailed err) = "AlphaFailed: " ++ show err
     show (IllTyped err)    = "IllTyped: " ++ show err
     show (RefinementFailed err)    = "RefinementFailed: " ++ show err
@@ -169,7 +170,7 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
         prettyPrint | verbose conf = liftIO . putStrLn . render . pPrintPrec (PrettyLevel 1) 0
                     | otherwise    = liftIO . putStrLn . render . pPrint
     parsedProgram <- measure "Parse" $ do
-        program <- withExceptT ParseFailed $ ExceptT $ liftIO $ parseProgramFromFile path
+        program <- withExceptT ParseFailed $ ExceptT $ liftIO $ MLParser.parseProgramFromFile path
         liftIO $ putStrLn "Parsed Program"
         prettyPrint program
         return program

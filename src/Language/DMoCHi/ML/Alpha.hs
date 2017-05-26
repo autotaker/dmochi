@@ -1,10 +1,10 @@
 {-# LANGUAGE GADTs, FlexibleContexts, TypeFamilies #-}
-module Language.DMoCHi.ML.Alpha(alpha,AlphaError, Exp(..), Program(..)) where
+module Language.DMoCHi.ML.Alpha(alpha,AlphaError, Exp(..), Program(..), refresh) where
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
-import Language.DMoCHi.ML.Syntax.UnTyped(Type(..), SynonymDef(..))
+import Language.DMoCHi.ML.Syntax.UnTyped(Type(..), TypeScheme, SynonymDef(..))
 import Language.DMoCHi.ML.Syntax.Base
-import Language.DMoCHi.Common.Id hiding(identify)
-import qualified Language.DMoCHi.Common.Id as Id(identify)
+import Language.DMoCHi.Common.Id hiding(identify, refresh)
+import qualified Language.DMoCHi.Common.Id as Id(identify, refresh)
 import Control.Monad.Except
 import Control.Monad.Reader
 import qualified Data.Map as M
@@ -19,7 +19,7 @@ data Exp where
     Exp :: (WellFormed l Exp arg, Supported l (Labels Exp)) => 
       !(SLabel l) -> arg -> !(Maybe Type, UniqueKey) -> Exp
 
-data Program = Program { functions :: [(Var, Type, Exp)]
+data Program = Program { functions :: [(Var, TypeScheme, Exp)]
                        , synonyms :: [SynonymDef]
                        {- , typeAnn :: [(UniqueKey, Type)] -}
                        , mainTerm :: Exp }
@@ -84,6 +84,9 @@ alpha (U.Program fs syns t0) = runExceptT $ do
         t0' <- renameE t0
         return $ Program fs' syns t0'
 
+refresh :: MonadId m => U.AnnotVar (Id String) -> m (U.AnnotVar (Id String))
+refresh (U.V x ty) = U.V <$> Id.refresh x <*> pure ty
+
 rename :: U.AnnotVar String -> M (U.AnnotVar (Id String))
 rename x = do
     env <- ask
@@ -93,6 +96,7 @@ rename x = do
         Just x' -> return x'
 
 identify :: MonadId m => U.AnnotVar String -> m (U.AnnotVar (Id String))
+identify (U.V "" ty) = U.V <$> Id.identify "tmp" <*> pure ty
 identify (U.V x ty) = U.V <$> Id.identify x <*> pure ty
 
 renameE :: U.Exp -> M Exp

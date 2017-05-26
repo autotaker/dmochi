@@ -1,4 +1,5 @@
 {
+{-# OPTIONS_GHC -fno-warn-unused-matches  -fno-warn-unused-imports #-}
 module Language.DMoCHi.ML.MLLexer (
   Token(..), Alex, runAlex, scanToken, tokenError
 ) where
@@ -18,43 +19,45 @@ $eol = [\n]
 @ident = $symstart $symchar*
 
 tokens :-
-  $eol    ;
-  $white+ ;
-  let     { lexeme $ \s -> TokenLet}
-  rec     { lexeme $ \s -> TokenRec }
-  and     { lexeme $ \s -> TokenAnd }
-  type    { lexeme $ \s -> TokenType}
-  fun     { lexeme $ \s -> TokenFun }
-  "->"    { lexeme $ \s -> TokenArr }
-  ";;"    { lexeme $ \s -> TokenEOL }
-  ";"     { lexeme $ \s -> TokenSemi}
-  ","     { lexeme $ \s -> TokenComma}
-  ":"     { lexeme $ \s -> TokenColon}
-  if      { lexeme $ \s -> TokenIf  }
-  then    { lexeme $ \s -> TokenThen}
-  else    { lexeme $ \s -> TokenElse}
-  "||"    { lexeme $ \s -> TokenOr  }
-  "&&"    { lexeme $ \s -> TokenLAnd}
-  \=      { lexeme $ \s -> TokenEq  }
-  "<>"    { lexeme $ \s -> TokenNEq }
-  "<"     { lexeme $ \s -> TokenLt  }
-  ">"     { lexeme $ \s -> TokenGt  }
-  "<="    { lexeme $ \s -> TokenLe  }
-  ">="    { lexeme $ \s -> TokenGe  }
-  "+"     { lexeme $ \s -> TokenAdd }
-  "-"     { lexeme $ \s -> TokenSub }
-  "/"     { lexeme $ \s -> TokenDiv }
-  \(      { lexeme $ \s -> TokenLPar}
-  \)      { lexeme $ \s -> TokenRPar}
-  "*"     { lexeme $ \s -> TokenMul }
-<0,commentSC>  "(*" { beginComment } 
-<commentSC>    "*)" { endComment   }
-<commentSC>    [.\n] ;
-  true    { lexeme $ \s -> TokenTrue }
-  false   { lexeme $ \s -> TokenTrue }
-  @ident  { lexeme $ \s -> TokenVar s }
-  \'@ident{ lexeme $ \s -> TokenTVar s }
-  $digit+ { lexeme $ \s -> TokenNum (read $s) }
+<0>            $eol    ;
+<0>            $white+ ;
+<0,commentSC>  "(*"    { beginComment } 
+<commentSC>    "*)"    { endComment   }
+<commentSC>    [.\n]   ;
+<0>            let     { lexeme $ \_ -> TokenLet}
+<0>            in      { lexeme $ \_ -> TokenIn}
+<0>            rec     { lexeme $ \_ -> TokenRec }
+<0>            and     { lexeme $ \_ -> TokenAnd }
+<0>            type    { lexeme $ \_ -> TokenType}
+<0>            fun     { lexeme $ \_ -> TokenFun }
+<0>            "->"    { lexeme $ \_ -> TokenArr }
+<0>            ";;"    { lexeme $ \_ -> TokenEOL }
+<0>            ";"     { lexeme $ \_ -> TokenSemi}
+<0>            ","     { lexeme $ \_ -> TokenComma}
+<0>            ":"     { lexeme $ \_ -> TokenColon}
+<0>            if      { lexeme $ \_ -> TokenIf  }
+<0>            then    { lexeme $ \_ -> TokenThen}
+<0>            else    { lexeme $ \_ -> TokenElse}
+<0>            "||"    { lexeme $ \_ -> TokenOr  }
+<0>            "&&"    { lexeme $ \_ -> TokenLAnd}
+<0>            \=      { lexeme $ \_ -> TokenEq  }
+<0>            "<>"    { lexeme $ \_ -> TokenNEq }
+<0>            "<"     { lexeme $ \_ -> TokenLt  }
+<0>            ">"     { lexeme $ \_ -> TokenGt  }
+<0>            "<="    { lexeme $ \_ -> TokenLe  }
+<0>            ">="    { lexeme $ \_ -> TokenGe  }
+<0>            "+"     { lexeme $ \_ -> TokenAdd }
+<0>            "-"     { lexeme $ \_ -> TokenSub }
+<0>            "/"     { lexeme $ \_ -> TokenDiv }
+<0>            \(      { lexeme $ \_ -> TokenLPar}
+<0>            \)      { lexeme $ \_ -> TokenRPar}
+<0>            "*"     { lexeme $ \_ -> TokenMul }
+<0>            true    { lexeme $ \_ -> TokenTrue }
+<0>            false   { lexeme $ \_ -> TokenTrue }
+<0>            assert  { lexeme $ \_ -> TokenAssert }
+<0>            @ident  { lexeme $ \s -> if s == "_" then TokenHole else TokenVar s }
+<0>            \'@ident{ lexeme $ \s -> TokenTVar s }
+<0>            $digit+ { lexeme $ \s -> TokenNum (read $s) }
 {
 data Token
  = TokenLet
@@ -65,6 +68,7 @@ data Token
  | TokenVar String
  | TokenTVar String
  | TokenNum Integer
+ | TokenAssert
  | TokenAnd
  | TokenType
  | TokenInt
@@ -75,6 +79,7 @@ data Token
  | TokenSemi
  | TokenColon
  | TokenComma
+ | TokenHole
  | TokenLPar
  | TokenRPar
  | TokenIf
@@ -97,7 +102,7 @@ data Token
  deriving(Show,Eq)
 
 lexeme :: (String -> Token) -> AlexAction Token
-lexeme p inp@(pos,_,_,s) l = do
+lexeme p (pos,_,_,s) l = do
     ust <- alexGetUserState
     alexSetUserState (ust { lexerLastPos = pos 
                           , lexerLastLexeme = (take l s)})
@@ -125,7 +130,7 @@ endComment _ _ = do
     s <- alexGetUserState
     let d = lexerCommentDepth s - 1
     alexSetUserState s{ lexerCommentDepth = d }
-    when (d == 0) $ alexSetStartCode commentSC
+    when (d == 0) $ alexSetStartCode 0 
     alexMonadScan
         
 alexInitUserState = AlexUserState undefined undefined 0
@@ -134,7 +139,7 @@ scanToken :: Alex Token
 scanToken = alexMonadScan
 
 tokenError :: Token -> Alex a
-tokenError token = do
+tokenError _ = do
     ust <- alexGetUserState
     let AlexPn _ line col = lexerLastPos ust
     alexError $ "ParseError: unexpected token " ++ show (lexerLastLexeme ust) 

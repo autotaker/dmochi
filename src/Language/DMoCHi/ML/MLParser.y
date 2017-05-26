@@ -1,5 +1,6 @@
 {
-module Language.DMoCHi.ML.MLParser where
+{-# OPTIONS_GHC -fno-warn-unsed-matches #-}
+module Language.DMoCHi.ML.MLParser(parseProg, parseProgramFromFile)  where
 
 import Language.DMoCHi.ML.Syntax.UnTyped
 import Language.DMoCHi.ML.MLLexer
@@ -7,42 +8,44 @@ import Language.DMoCHi.ML.MLLexer
 
 %tokentype { Token }
 %token
-  let  { TokenLet  }
-  rec  { TokenRec  }
-  in   { TokenIn   }
-  VAR  { TokenVar $$ }
-  TVAR { TokenTVar $$}
-  NUM  { TokenNum $$ }
-  true { TokenTrue }
-  false{ TokenFalse }
-  type { TokenType }
-  int  { TokenInt }
-  bool { TokenBool }
-  unit { TokenUnit }
-  and  { TokenAnd  }
-  fun  { TokenFun  }
-  '->' { TokenArr  }
-  ';'  { TokenSemi }
-  ':'  { TokenColon}
-  ','  { TokenComma}
-  if   { TokenIf   }
-  then { TokenThen }
-  else { TokenElse }
-  '||' { TokenOr   }
-  '&&' { TokenLAnd }
-  '='  { TokenEq   }
-  '<>' { TokenNEq  }
-  '<'  { TokenLt   }
-  '<=' { TokenLe   }
-  '>'  { TokenGt   }
-  '>=' { TokenGe   }
-  '+'  { TokenAdd  }
-  '-'  { TokenSub  }
-  '/'  { TokenDiv  }
-  '*'  { TokenMul  }
-  '('  { TokenLPar }
-  ')'  { TokenRPar }
-  ';;' { TokenEOL  }
+  let    { TokenLet  }
+  rec    { TokenRec  }
+  in     { TokenIn   }
+  VAR    { TokenVar $$ }
+  TVAR   { TokenTVar $$}
+  NUM    { TokenNum $$ }
+  true   { TokenTrue }
+  false  { TokenFalse }
+  type   { TokenType }
+  int    { TokenInt }
+  bool   { TokenBool }
+  unit   { TokenUnit }
+  and    { TokenAnd  }
+  fun    { TokenFun  }
+  '->'   { TokenArr  }
+  ';'    { TokenSemi }
+  ':'    { TokenColon}
+  ','    { TokenComma}
+  if     { TokenIf   }
+  then   { TokenThen }
+  else   { TokenElse }
+  assert { TokenAssert }
+  '||'   { TokenOr   }
+  '&&'   { TokenLAnd }
+  '='    { TokenEq   }
+  '_'    { TokenHole }
+  '<>'   { TokenNEq  }
+  '<'    { TokenLt   }
+  '<='   { TokenLe   }
+  '>'    { TokenGt   }
+  '>='   { TokenGe   }
+  '+'    { TokenAdd  }
+  '-'    { TokenSub  }
+  '/'    { TokenDiv  }
+  '*'    { TokenMul  }
+  '('    { TokenLPar }
+  ')'    { TokenRPar }
+  ';;'   { TokenEOL  }
 
 
 %monad { Alex } { (>>=) } { return }
@@ -120,7 +123,9 @@ RecDef : FunDef             { [$1] }
        | FunDef and RecDef  { $1 : $3 }
 
 Arg : VAR                   { V $1 Nothing }
+    | '_'                   { unusedVar    }
     | '(' VAR ':' Type ')'  { V $2 (Just $4) }
+    | '(' '_' ':' Type ')'  { annotVar unusedVar $4 }
 
 Args : Arg Args { $1 : $2 }
      | Arg      { [$1] }
@@ -133,6 +138,7 @@ Expr : let Arg ':' Type '=' Expr in Expr { mkLet $2 (annot $6 $4) $8 }
      | Expr ';' Expr                     { mkLet unusedVar $1 $3 }
      | if Expr then Expr else Expr       { mkIf $2 $4 $6 }
      | if Expr then Expr                 { mkIf $2 $4 (mkLiteral CUnit) }
+     | assert Atom                       { mkAssert $2 }
      | Expr ',' Expr                     { mkPair $1 $3 }
      | Expr '&&' Expr                    { mkBinary SAnd $1 $3 }
      | Expr '||' Expr                    { mkBinary SOr  $1 $3 }
@@ -168,8 +174,36 @@ data Def = DLet (AnnotVar String) Exp
          | DSyn SynonymDef
          | DRec [(AnnotVar String, Exp)]
 
-parseExpr :: String -> Either String [Def]
-parseExpr input = runAlex input prog
+primFuncs :: [(AnnotVar String, TypeScheme, Exp)]
+primFuncs = 
+    [ build "read_int" (TFun [TUnit] TInt) readIntDef
+    , build "assume"   (TFun [TBool] TUnit) assumeDef
+    , build "fst"      (TFun [TPair (TVar "a") (TVar "b")] (TVar "a")) fstDef
+    , build "snd"      (TFun [TPair (TVar "a") (TVar "b")] (TVar "b")) sndDef
+    ]
+    where
+    build fname ty def = (V fname Nothing, toTypeScheme ty, def)
+    readIntDef = mkLambda [unusedVar] mkRand
+    assumeDef  = mkLambda [x] (mkAssume (mkVar x) (mkLiteral CUnit))
+    x = V "x" Nothing
+    fstDef = mkLambda [x] (mkUnary SFst (mkVar x))
+    sndDef = mkLambda [x] (mkUnary SSnd (mkVar x))
+
+toProg :: [Def] -> Program
+toProg defs = foldr f (Program primFuncs [] (mkLiteral CUnit)) defs
+    where
+    f (DLet x e) (Program fs syns main) = Program fs syns (mkLet x e main)
+    f (DSyn syn) (Program fs syns main) = Program fs (syn:syns) main
+    f (DRec funs) (Program fs syns main) = Program fs syns (mkLetRec funs main)
+
+mkAssert :: Exp -> Exp
+mkAssert e = mkIf e (mkLiteral CUnit) mkFail
+
+parseProg :: String -> Either String Program
+parseProg input = toProg <$> runAlex input prog
+
+parseProgramFromFile :: FilePath -> IO (Either String Program)
+parseProgramFromFile f = parseProg <$> readFile f
 
 lexer :: (Token -> Alex a) -> Alex a
 lexer cont = scanToken >>= cont
