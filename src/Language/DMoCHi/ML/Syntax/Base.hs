@@ -12,6 +12,7 @@ module Language.DMoCHi.ML.Syntax.Base(Label(..),
                                       UniArg(..),
                                       BinArg(..),
                                       Assoc(..),
+                                      AnnotVar(..),
                                       Elem, Supported,
                                       unaryPrec,
                                       binaryPrec,
@@ -398,3 +399,15 @@ genericPPrint pp pLevel prec op arg =
 
 comment :: Pretty a => a -> Doc
 comment a = text "(*" <+> pPrint a <+> text "*)"
+
+data AnnotVar a b = 
+    V { varName :: a 
+      , varType :: b }
+      deriving(Eq,Show, Functor)
+
+instance Foldable (AnnotVar a) where
+    foldMap f (V _ b) = f b
+
+instance Traversable (AnnotVar a) where
+    traverse f (V a b) = V a <$> f b
+

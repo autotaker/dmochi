@@ -22,7 +22,7 @@ instance Show SynonymError where
 
 -- desugar type synonyms
 -- assumption: synEnv is already desugared
-desugarType :: Monad m => M.Map SynName SynonymDef -> Type -> ExceptT SynonymError m Type
+desugarType :: M.Map SynName SynonymDef -> Type -> Except SynonymError Type
 desugarType _synEnv TInt = return TInt
 desugarType _synEnv TBool = return TBool
 desugarType _synEnv TUnit = return TUnit
@@ -40,7 +40,7 @@ desugarType synEnv (TSyn tys syn) =
         Nothing -> throwError (UndefinedSynonym syn)
 desugarType _synEnv (TVar x) = return $ TVar x
 
-substType :: Monad m => M.Map String Type -> Type -> ExceptT SynonymError m Type
+substType :: M.Map String Type -> Type -> Except SynonymError Type
 substType _env TInt = return TInt
 substType _env TBool = return TBool
 substType _env TUnit = return TUnit
@@ -51,7 +51,7 @@ substType env (TVar x) = case M.lookup x env of
     Just ty -> return ty
     Nothing -> throwError (UndefinedTypeVariable x)
 
-desugarEnv :: Monad m => [SynonymDef] -> ExceptT SynonymError m (M.Map SynName SynonymDef)
+desugarEnv :: [SynonymDef] -> Except SynonymError (M.Map SynName SynonymDef)
 desugarEnv syns = doit where
     n = length syns
     tbl :: Array Int SynonymDef

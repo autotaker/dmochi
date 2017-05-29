@@ -170,11 +170,11 @@ Atom : VAR                    { mkVar (V $1 Nothing) }
      | '(' Expr ':' Type ')'  { annot $2 $4 }
 
 {
-data Def = DLet (AnnotVar String) Exp
+data Def = DLet (AnnotVar String (Maybe Type)) Exp
          | DSyn SynonymDef
-         | DRec [(AnnotVar String, Exp)]
+         | DRec [(AnnotVar String (Maybe Type), Exp)]
 
-primFuncs :: [(AnnotVar String, TypeScheme, Exp)]
+primFuncs :: [(AnnotVar String (Maybe Type), TypeScheme, Exp)]
 primFuncs = 
     [ build "read_int" (TFun [TUnit] TInt) readIntDef
     , build "assume"   (TFun [TBool] TUnit) assumeDef

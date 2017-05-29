@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs, TypeFamilies, LambdaCase #-}
 module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..)
                                         , Type(..), TypeScheme(..), SynName, annot, annotVar, toTypeScheme
-                                        , SynonymDef(..), Program(..), unusedVar
+                                        , SynonymDef(..), Program(..), unusedVar, matchTypeScheme, matchType
                                         , mkLiteral, mkVar, mkUnary, mkBinary
                                         , mkPair, mkLambda, mkApp, mkLet, mkLetRec
                                         , mkAssume, mkIf
@@ -10,15 +10,14 @@ module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..)
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.Common.Id
 import Text.PrettyPrint.HughesPJClass
+import Control.Monad
 import qualified Data.Set as S
+import qualified Data.Map as M
 
 data Exp where
     Exp :: (WellFormed l Exp arg, Supported l (Labels Exp)) => !(SLabel l) -> arg -> Maybe Type -> Exp
 
-data AnnotVar a = V { varName :: a 
-                  , varType :: Maybe Type }
-                  deriving(Eq,Show)
-type Var = AnnotVar String
+type Var = AnnotVar String (Maybe Type)
 
 type instance Ident Exp  = Var
 type instance Labels Exp = AllLabels
@@ -55,6 +54,74 @@ toTypeScheme ty = TypeScheme fvs ty
     go acc (TFun tys ty) = foldl go (go acc ty) tys
     go acc (TSyn tys _) = foldl go acc tys
     go acc (TVar x) = S.insert x acc
+
+-- matchType:
+--  input: ty1 ty2 (probably ty1 :> ty2)
+--  output: rho s.t. subst rho ty1 == ty2 if exists
+matchType :: Type -> Type -> Maybe (M.Map String Type)
+matchType = go M.empty
+    where
+    go !acc TInt TInt = pure acc
+    go !acc TBool TBool = pure acc
+    go !acc TUnit TUnit = pure acc
+    go !acc (TPair ty1 ty2) (TPair ty3 ty4) = do
+        acc' <- go acc ty1 ty3
+        go acc' ty2 ty4
+    go !acc (TFun [] ty1) (TFun [] ty2) = go acc ty1 ty2
+    go !acc (TFun [] ty1) ty2 = go acc ty1 ty2
+    go !acc ty1 (TFun [] ty2) = go acc ty1 ty2
+    go !acc (TFun (ty1:tys1) ty2) (TFun (ty3:tys3) ty4) = do
+        acc' <- go acc ty1 ty3
+        go acc' (TFun tys1 ty2) (TFun tys3 ty4)
+    go !acc (TSyn tys1 _) (TSyn tys2 _) = do
+        if length tys1 /= length tys2
+        then Nothing
+        else foldM (\acc (ty1, ty2) -> go acc ty1 ty2) acc (zip tys1 tys2)
+    go !acc (TVar x) ty2 = case M.lookup x acc of
+        Just ty1 | ty1 == ty2 -> pure acc
+        Nothing -> pure $ M.insert x ty2 acc
+        _ -> Nothing
+    go _ TInt _ = Nothing
+    go _ TBool _ = Nothing
+    go _ TUnit _ = Nothing
+    go _ (TPair _ _) _ = Nothing
+    go _ (TFun _ _) _ = Nothing
+    go _ (TSyn _ _) _ = Nothing
+
+matchTypeScheme :: TypeScheme -> TypeScheme -> Maybe [String]
+matchTypeScheme (TypeScheme fvs1 ty1) (TypeScheme _ ty2) = doit
+    where
+    doit = do
+        acc <- go M.empty ty1 ty2
+        pure $ map (acc M.!) fvs1
+    go !acc TInt TInt = pure acc
+    go !acc TBool TBool = pure acc
+    go !acc TUnit TUnit = pure acc
+    go !acc (TPair ty1 ty2) (TPair ty3 ty4) = do
+        acc' <- go acc ty1 ty3
+        go acc' ty2 ty4
+    go !acc (TFun [] ty1) (TFun [] ty2) = go acc ty1 ty2
+    go !acc (TFun [] ty1) ty2 = go acc ty1 ty2
+    go !acc ty1 (TFun [] ty2) = go acc ty1 ty2
+    go !acc (TFun (ty1:tys1) ty2) (TFun (ty3:tys3) ty4) = do
+        acc' <- go acc ty1 ty3
+        go acc' (TFun tys1 ty2) (TFun tys3 ty4)
+    go !acc (TSyn tys1 _) (TSyn tys2 _) = do
+        if length tys1 /= length tys2
+        then Nothing
+        else foldM (\acc (ty1, ty2) -> go acc ty1 ty2) acc (zip tys1 tys2)
+    go !acc (TVar x) (TVar y) = case M.lookup x acc of
+        Just z | y == z -> pure acc
+        Nothing -> pure $ M.insert x y acc
+        _ -> Nothing
+    go _ TInt _ = Nothing
+    go _ TBool _ = Nothing
+    go _ TUnit _ = Nothing
+    go _ (TPair _ _) _ = Nothing
+    go _ (TFun _ _) _ = Nothing
+    go _ (TSyn _ _) _ = Nothing
+    go _ (TVar _) _ = Nothing
+
 
 {-
 instance HasUniqueKey Exp where
@@ -139,7 +206,7 @@ instance Pretty TypeScheme where
             text "forall" <+> hsep (map (text.('\'':)) xs) <> text 
                       "." <+> pPrintPrec plevel 0 ty
 
-instance Pretty a => Pretty (AnnotVar a) where
+instance Pretty a => Pretty (AnnotVar a (Maybe Type)) where
     pPrintPrec plevel prec (V x Nothing) = pPrintPrec plevel prec x
     pPrintPrec plevel _ (V x (Just ty)) = 
         parens $ pPrintPrec plevel 0 x <+> text ":" <+> pPrintPrec plevel 0 ty
