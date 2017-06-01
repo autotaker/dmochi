@@ -367,11 +367,11 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                     (ML.SLambda, (xs,e),_,_) -> sv <$ checkFunDef env cs callSite (key, xs, e) rty
                 
             clause cs fml = do
-                liftIO $ printf "Clause: %s ==> %s\n" (showCs cs) (show fml)
+                -- liftIO $ printf "Clause: %s ==> %s\n" (showCs cs) (show fml)
                 let Formula _ _ path _ = fml
                 addClause (path,genClause (Just fml) cs)
             subType cs ty1 ty2 = do
-                liftIO $ printf "SubType: %s |- %s <: %s\n" (showCs cs) (show ty1) (show ty2)
+                -- liftIO $ printf "SubType: %s |- %s <: %s\n" (showCs cs) (show ty1) (show ty2)
                 case (ty1,ty2) of
                     (RInt,RInt) -> return ()
                     (RBool,RBool) -> return ()
@@ -394,7 +394,7 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
             subTypePost _ RPostTypeFailure RPostTypeFailure = return ()
             subTypePost cs ty1 ty2 = error $ "subTypePost: unexpected subtyping:" ++ show (cs,ty1,ty2) 
             failClause cs = do
-                liftIO $ printf "Clause: %s ==> _|_\n" (showCs cs) 
+                -- liftIO $ printf "Clause: %s ==> _|_\n" (showCs cs) 
                 addClause ([10],genClause Nothing cs)
         
         genv' <- fmap M.fromList $ forM (M.toList genv) $ \(f,_) -> do
