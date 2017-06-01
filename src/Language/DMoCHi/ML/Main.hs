@@ -43,6 +43,7 @@ data MainError = NoInputSpecified
                | IllTyped Typed.TypeError 
                | CEGARLimitExceeded
                | Debugging
+               | OtherError String
                | BooleanError String
                deriving(Eq)
 
@@ -53,6 +54,7 @@ instance Show MainError where
     show (IllTyped err)    = "IllTyped: " ++ show err
     show (RefinementFailed err)    = "RefinementFailed: " ++ show err
     show (BooleanError s) = "Boolean: " ++ s
+    show (OtherError s) = "Other: " ++ s
     show CEGARLimitExceeded = "CEGARLimitExceeded"
     show Debugging = "Debugging"
 
@@ -233,7 +235,7 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
                 r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
                 return r
         cegar _ k _  | k >= cegarLimit conf = return ()
-        cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs) = do
+        cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs,traces) = do
             res <- measure (printf "CEGAR-%d" k) $ do
 
                 liftIO $ putStrLn "Predicate Abstracion"
@@ -247,6 +249,7 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
                 mc k curTypeMap castFreeProgram >>= \case
                     Nothing -> return Safe
                     Just trace -> measure "Refinement" $ do
+                        when (elem trace traces) $ throwError $ OtherError "No progress"
                         let traceFile = printf "%s_%d.trace.dot" path k
                         (trace,isFoolI) <- case interactive conf of
                             True -> Refine.interactiveCEGen normalizedProgram traceFile trace
@@ -265,8 +268,8 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
                                     liftIO $ putStrLn "Fool counterexample refinement"
                                     let hcs' = clauses
                                     liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
-                                    let cmd = printf "%s -hccs it -print-hccs-solution %s %s" 
-                                                     hccsSolver (file_hcs ++ ".ans") file_hcs
+                                    let cmd = printf "%s -hccs it -print-hccs-solution %s %s > %s" 
+                                                     hccsSolver (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
                                     liftIO $ callCommand cmd
                                     parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
                                     liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
@@ -275,7 +278,7 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
                                         Left err -> throwError $ RefinementFailed err
                                         Right p  -> return p
                                     let typeMapFool' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMapFool
-                                    return $ Refine (typeMap, typeMapFool', hcs, rtyAssoc0, rpostAssoc0)
+                                    return $ Refine (typeMap, typeMapFool', hcs, rtyAssoc0, rpostAssoc0, trace)
                                 else do
                                     let hcs' = if accErrTraces conf then clauses ++ hcs else clauses
                                     let (rtyAssoc,rpostAssoc) = 
@@ -283,8 +286,8 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
                                                                  else assoc
                                     liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
                                     let opts = hornOption conf
-                                    let cmd = printf "%s %s -print-hccs-solution %s %s" 
-                                                     hccsSolver opts (file_hcs ++ ".ans") file_hcs
+                                    let cmd = printf "%s %s -print-hccs-solution %s %s > %s" 
+                                                     hccsSolver opts (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
                                     liftIO $ callCommand cmd
                                     parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
                                     liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
@@ -293,13 +296,13 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
                                         Right p  -> return p
                                     let typeMap' | accErrTraces conf = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
                                                  | otherwise         = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
-                                    return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc)
+                                    return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc, trace)
             case res of
                 Safe -> liftIO $ putStrLn "Safe!"
                 Unsafe -> liftIO $ putStrLn "Unsafe!"
-                Refine (typeMap',typeMapFool', hcs', rtyAssoc, rpostAssoc) ->
-                    cegar (typeMap',typeMapFool') (k+1) (rtyAssoc,rpostAssoc,hcs')
-    cegar (typeMap0,typeMap0) 0 ([],[],[])
+                Refine (typeMap',typeMapFool', hcs', rtyAssoc, rpostAssoc, trace) ->
+                    cegar (typeMap',typeMapFool') (k+1) (rtyAssoc,rpostAssoc,hcs', trace:traces)
+    cegar (typeMap0,typeMap0) 0 ([],[],[],[])
 
                 {-
     let t_input          = f $ diffUTCTime t_input_end t_input_begin
