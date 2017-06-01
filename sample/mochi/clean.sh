@@ -1,2 +1,1 @@
-#!/bin/bash
-rm *.hcs *.bool *.bool.* *.ans
+rm *.{dot,bool,hcs,ans}

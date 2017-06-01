@@ -15,4 +15,6 @@ let rec gib a b n =
 
 let main n a b =
 if a >= 0 && b >= 0 then
-  assert (gib 0 1 n >= 0)
+    assert (gib 0 1 n >= 0);;
+ 
+main (read_int ()) (read_int ()) (read_int ())
