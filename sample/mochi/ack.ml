@@ -10,4 +10,5 @@ let rec ack m n =
 
 let main m n =
   if (m>=0 && n>=0)
-  then assert (ack m n >= n)
+  then assert (ack m n >= n);;
+main (read_int()) (read_int ())
