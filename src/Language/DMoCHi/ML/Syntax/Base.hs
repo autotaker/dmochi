@@ -367,32 +367,32 @@ genericPPrint pp pLevel prec op arg =
                 AssocNone  -> g e1 <+> text opName <+> g e2
         (SPair, (e1, e2)) -> parens $ pPrintExp pp pLevel 0 e1 <+> comma <+> pPrintExp pp pLevel 0 e2
         (SLambda, (xs, e)) -> maybeParens (prec > 0) $
-            text "fun" <+> hsep (map (pPrintIdent pp prettyBind 0) xs) <+> text "->" $+$
-            nest 4 (pPrintExp pp pLevel 0 e)
+            hang (text "fun" <+> hsep (map (pPrintIdent pp prettyBind 0) xs) <+> text "->" ) 4 (pPrintExp pp pLevel 0 e)
         (SApp, (e, [])) -> maybeParens (prec > 8) $ pPrintExp pp pLevel 9 e <+> text "()"
         (SApp, (e, es)) -> maybeParens (prec > 8) $ pPrintExp pp pLevel 9 e <+> hsep (map (pPrintExp pp pLevel 9) es)
         (SLet, (x, e1, e2)) -> maybeParens (prec > 0) $ 
-            text "let" <+> pPrintIdent pp prettyBind 0 x <+> text "=" 
-                       <+> pPrintExp pp pLevel 0 e1 <+> text "in" $+$
+            let d1 = hang (text "let" <+> pPrintIdent pp prettyBind 0 x <+> text "=") 4 (pPrintExp pp pLevel 0 e1) in
+            d1 <+> text "in" $+$
             pPrintExp pp pLevel 0 e2
         (SLetRec, (fs,e)) -> maybeParens (prec > 0) $
-            text "let rec" <+> 
-                vcat (punctuate (text "and") 
-                        [ nest 8 $ pPrintIdent pp prettyBind 0 x <+> text "=" 
-                          <+> pPrintExp pp pLevel 0 e1 | (x,e1) <- fs ])
-                <+> text "in" $+$
+            let drec = vcat $ 
+                    zipWith (\d1 d2 -> d1 $$ d2) 
+                        (text "let rec" : repeat (text "and"))
+                        [ nest 8 $ hang (pPrintIdent pp prettyBind 0 x <+> text "=") 4 (pPrintExp pp pLevel 0 e1) | (x,e1) <- fs ]
+                in
+            drec <+> text "in" $+$ 
             pPrintExp pp pLevel 0 e
         (SAssume, (cond, e)) -> maybeParens (prec > 0) $
             text "assume" <+> pPrintExp pp pLevel 9 cond <> semi $+$
             pPrintExp pp pLevel 0 e
         (SIf, (cond, e1, e2)) -> maybeParens (prec > 0) $
             text "if" <+> pPrintExp pp pLevel 0 cond $+$
-            nest 2 (text "then" <+> pPrintExp pp pLevel 0 e1) $+$
-            nest 2 (text "else" <+> pPrintExp pp pLevel 0 e2)
+            (hang (text "then") 2 (pPrintExp pp pLevel 0 e1)) $+$
+            (hang (text "else") 2 (pPrintExp pp pLevel 0 e2))
         (SBranch, (e1, e2)) -> maybeParens (prec > 0) $
             text "if" <+> text "_" $+$
-            nest 2 (text "then" <+> pPrintExp pp pLevel 0 e1) $+$
-            nest 2 (text "else" <+> pPrintExp pp pLevel 0 e2)
+            (hang (text "then") 2 (pPrintExp pp pLevel 0 e1)) $+$
+            (hang (text "else") 2 (pPrintExp pp pLevel 0 e2))
         (SFail, _) -> text "assert(false)"
         (SOmega, _) -> text "assume(false)"
         (SRand, _) -> text "random()"

@@ -6,4 +6,4 @@ assume (x > 0);
 assume (y > 0);
 let x = fst (x, true) in
 let r = f (x, y) in
-assert (snd r <= 0);;
+assert (snd r > 0);;
