@@ -387,12 +387,12 @@ genericPPrint pp pLevel prec op arg =
             pPrintExp pp pLevel 0 e
         (SIf, (cond, e1, e2)) -> maybeParens (prec > 0) $
             text "if" <+> pPrintExp pp pLevel 0 cond $+$
-            (hang (text "then") 2 (pPrintExp pp pLevel 0 e1)) $+$
-            (hang (text "else") 2 (pPrintExp pp pLevel 0 e2))
+            (hang (text "then") 4 (pPrintExp pp pLevel 0 e1)) $+$
+            (hang (text "else") 4 (pPrintExp pp pLevel 0 e2))
         (SBranch, (e1, e2)) -> maybeParens (prec > 0) $
             text "if" <+> text "_" $+$
-            (hang (text "then") 2 (pPrintExp pp pLevel 0 e1)) $+$
-            (hang (text "else") 2 (pPrintExp pp pLevel 0 e2))
+            (hang (text "then") 4 (pPrintExp pp pLevel 0 e1)) $+$
+            (hang (text "else") 4 (pPrintExp pp pLevel 0 e2))
         (SFail, _) -> text "assert(false)"
         (SOmega, _) -> text "assume(false)"
         (SRand, _) -> text "random()"

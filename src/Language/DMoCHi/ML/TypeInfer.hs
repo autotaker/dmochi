@@ -5,13 +5,13 @@ import qualified Data.Map as M
 import           Control.Monad.Except
 import           Control.Monad.State.Strict
 import           Language.DMoCHi.ML.Syntax.Base
-import Text.PrettyPrint.HughesPJClass
+--import Text.PrettyPrint.HughesPJClass
 import           Language.DMoCHi.ML.Alpha
 import           Language.DMoCHi.ML.Syntax.UnTyped(AnnotVar(..),SynName, SynonymDef(..), Type(..), TypeScheme(..), Lit(..), toTypeScheme, matchTypeScheme)
 import qualified Language.DMoCHi.Common.Id as Id
 import           Language.DMoCHi.Common.Id(MonadId(..), FreshIO)
 import           Language.DMoCHi.ML.DesugarSynonym
-import Debug.Trace
+-- import Debug.Trace
 
 type UExp = Exp (Maybe Type)
 
