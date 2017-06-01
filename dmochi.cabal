@@ -69,6 +69,7 @@ library
                        Language.DMoCHi.ML.Syntax.HFormula,
                        Language.DMoCHi.ML.SMT,
                        Language.DMoCHi.ML.DesugarSynonym,
+                       Language.DMoCHi.ML.TypeInfer,
                        Language.DMoCHi.ML.Alpha,
                        Language.DMoCHi.ML.Parser,
                        Language.DMoCHi.ML.MLParser,
