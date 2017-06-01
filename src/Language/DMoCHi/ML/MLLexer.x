@@ -53,7 +53,7 @@ tokens :-
 <0>            \)      { lexeme $ \_ -> TokenRPar}
 <0>            "*"     { lexeme $ \_ -> TokenMul }
 <0>            true    { lexeme $ \_ -> TokenTrue }
-<0>            false   { lexeme $ \_ -> TokenTrue }
+<0>            false   { lexeme $ \_ -> TokenFalse }
 <0>            assert  { lexeme $ \_ -> TokenAssert }
 <0>            @ident  { lexeme $ \s -> if s == "_" then TokenHole else TokenVar s }
 <0>            \'@ident{ lexeme $ \s -> TokenTVar s }
