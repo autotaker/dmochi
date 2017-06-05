@@ -18,7 +18,7 @@ test testCase =
 
 spec :: Spec
 spec = do
-    let cases = [ "sum.ml", "mc91.ml" ] ++ [ "example" ++ show i ++ ".ml" | i <- [1..10] ]
+    let cases = [ "sum.ml", "mc91.ml" ] ++ [ "example" ++ show i ++ ".ml" | i <- [1..11] ]
     let pathes = ["sample" </> s | s <- cases ]
     forM_ pathes test
     
