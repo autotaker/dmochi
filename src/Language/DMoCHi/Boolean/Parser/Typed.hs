@@ -102,7 +102,9 @@ termP = expr where
     varP  = do
         x <- identifier
         env <- ask
-        return $ V $ env M.! x
+        return $ V $ (case M.lookup x env of 
+            Just v -> v 
+            Nothing -> error $ "Undefined variable: " ++ x)
     failP = (\t -> Fail (Symbol t "")) <$> (reserved "fail" *> parens sortP)
     omegaP = (\t -> Fail (Symbol t "")) <$> (reserved "omega" *> parens sortP)
     projP = dot *> parens (f_proj <$> natural <*> (reservedOp "/" *> natural))

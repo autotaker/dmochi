@@ -8,9 +8,12 @@ import Control.Monad
 
 test :: FilePath -> Spec
 test testCase = 
-    describe ("Test: " ++ testCase) $ 
-        it "successfully ends" $ do
+    describe ("Test: " ++ testCase) $ do
+        it "fusion successfully ends" $ do
             let conf = (defaultConfig testCase){ fusion = True, incremental = True }
+            verify conf `shouldReturn` (Right ())
+        it "default successfully ends" $ do
+            let conf = defaultConfig testCase
             verify conf `shouldReturn` (Right ())
 
 spec :: Spec

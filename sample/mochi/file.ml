@@ -10,11 +10,11 @@ let opened = 1
 let closed = 2
 let ignore = 3
 let readit st =
-    if st = opened then opened else (if st = ignore then st else assert false; 0)
+    if st = opened then opened else (if st = ignore then st else (assert false; 0))
 let read_ x st =
   if x then readit st else st
 let closeit st =
-  if st = opened then closed else (if st = ignore then st else (assert false; 0))
+  if st = opened then closed else (if st = ignore then st else (loop (); 0))
 let close_ x st =
   if x then closeit st else st
 let rec f x y st : unit =

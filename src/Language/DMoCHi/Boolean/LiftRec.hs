@@ -20,7 +20,7 @@ liftRec (Program ds t0) =
     rename env f = case M.lookup f env of
         Just t -> t
         Nothing -> V f
-    go _ (C b) = pure (C b)
+    go _   (C b) = pure (C b)
     go env (V f) = pure (rename env f)
     go env (T ts) = T <$> mapM (go env) ts
     go env (Lam x t) = Lam x <$> go env t
@@ -33,9 +33,11 @@ liftRec (Program ds t0) =
             as  = [ (f, f_app (V (modifySort g f)) (T (map (rename env) fvs))) | f <- names ]
         let env' = foldr (uncurry M.insert) env as 
         forM_ fs $ \(f,t_f) -> do
-            xs <- mapM (\x -> freshSym (name x) (getSort x)) fvs
-            t_f' <- go env' t_f
             arg <- freshSym "arg" (Tuple (map getSort fvs))
+            xs <- mapM (\x -> freshSym (name x) (getSort x)) fvs
+            let env' = M.fromList $ [ (f, f_app (V (modifySort g f)) (V arg)) | f <- names ]
+                                 ++ zip fvs (map V xs)
+            t_f' <- go env' t_f
             let n = length fvs
             let t = Lam arg (foldr (\(x,i) t -> 
                         f_let x (f_proj i n (V arg)) t) t_f' (zip xs [0..]))
