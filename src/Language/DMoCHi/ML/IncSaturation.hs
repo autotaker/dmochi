@@ -690,6 +690,9 @@ saturate typeMap prog = do
             then do
                 tfail <- mkIFail
                 bs <- execWriterT (extractor n M.empty tfail)
+                printStatistics
                 return (True, (tys, Just bs))
-            else return (False, (tys, Nothing))
+            else do
+                printStatistics
+                return (False, (tys, Nothing))
     evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)

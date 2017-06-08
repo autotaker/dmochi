@@ -7,7 +7,7 @@ module Language.DMoCHi.ML.Syntax.IType(
     genIType, genITermType, genBFormula,
     mkIBase, mkIPair, mkIFun,
     mkIFail, mkITerm,
-    mkBLeaf, mkBNode,
+    mkBLeaf, mkBNode, concatMerge, merge,
     subTypeOf, subTermTypeOf, mkIntersection, appType
     )
     where
@@ -235,6 +235,11 @@ merge (x:xs) (y:ys) = case compare x y of
     EQ -> x : merge xs ys
     LT -> x : merge xs (y:ys)
     GT -> y : merge (x:xs) ys
+
+concatMerge :: Ord a => [[a]] -> [a]
+concatMerge [] = []
+concatMerge [x] = x
+concatMerge (x:y:xs) = concatMerge (merge x y:xs)
 
 {-# INLINE mkIntersection #-}
 mkIntersection :: ITypeFactory m => IType -> IType -> m IType

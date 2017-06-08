@@ -25,31 +25,35 @@ import           Data.Hashable
 import qualified Language.DMoCHi.ML.SMT as SMT
 import qualified Data.Sequence as Q
 import           Text.PrettyPrint.HughesPJClass
+import           Text.Printf
 
 type HFormulaTbl = HashTable HFormula HFormula
 
-data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
-                       , ctxFlowReg :: HashTable UniqueKey [SomeNode]
-                       , ctxTypeMap :: TypeMap
-                       , ctxFlowMap :: FlowMap
-                       , ctxNodeCounter :: IORef Int
-                       , ctxRtnTypeTbl :: HashTable UniqueKey (PType, [HFormula]) 
-                       , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [HFormula]) 
-                       , ctxHFormulaTbl :: HFormulaTbl
-                       , ctxHFormulaSize :: IORef Int
-                       , ctxBFormulaTbl  :: HashTable BFormulaBody BFormula
-                       , ctxBFormulaSize :: IORef Int
-                       , ctxITypeTbl     :: HashTable ITypeBody IType
-                       , ctxITypeSize    :: IORef Int
-                       , ctxITermTbl     :: HashTable ITermTypeBody ITermType
-                       , ctxITermSize    :: IORef Int
-                       , ctxCheckSatCache :: HashTable (Int, Int) Bool
-                       , ctxUpdated :: IORef Bool
-                       , ctxSMTCount :: IORef Int
-                       , ctxSMTCountHit :: IORef Int
-                       , ctxTimer :: HashTable MeasureKey NominalDiffTime
-                       , ctxSMTSolver :: Z3.Solver
-                       , ctxSMTContext :: Z3.Context }
+data Context = 
+  Context { 
+    ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
+  , ctxFlowReg :: HashTable UniqueKey [SomeNode]
+  , ctxTypeMap :: TypeMap
+  , ctxFlowMap :: FlowMap
+  , ctxNodeCounter :: IORef Int
+  , ctxRtnTypeTbl :: HashTable UniqueKey (PType, [HFormula]) 
+  , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [HFormula]) 
+  , ctxHFormulaTbl :: HFormulaTbl
+  , ctxHFormulaSize :: IORef Int
+  , ctxBFormulaTbl  :: HashTable BFormulaBody BFormula
+  , ctxBFormulaSize :: IORef Int
+  , ctxITypeTbl     :: HashTable ITypeBody IType
+  , ctxITypeSize    :: IORef Int
+  , ctxITermTbl     :: HashTable ITermTypeBody ITermType
+  , ctxITermSize    :: IORef Int
+  , ctxCheckSatCache :: HashTable (Int, Int) Bool
+  , ctxUpdated :: IORef Bool
+  , ctxSMTCount :: IORef Int
+  , ctxSMTCountHit :: IORef Int
+  , ctxTimer :: HashTable MeasureKey NominalDiffTime
+  , ctxSMTSolver :: Z3.Solver
+  , ctxSMTContext :: Z3.Context 
+  }
 
 data MeasureKey = CheckSat | CalcCondition | Total | MSaturation | MExtraction
     deriving (Eq, Ord, Show, Generic)
@@ -338,18 +342,6 @@ fromBFormula ps fml =
             v2 <- mkBin SAnd nx v2
             mkBin SOr v1 v2
 
-merge :: Ord a => [a] -> [a] -> [a]
-merge xs [] = xs
-merge [] ys = ys
-merge (x:xs) (y:ys) = case compare x y of
-    EQ -> x : merge xs ys
-    LT -> x : merge xs (y:ys)
-    GT -> y : merge (x:xs) ys
-
-concatMerge :: Ord a => [[a]] -> [a]
-concatMerge [] = []
-concatMerge [x] = x
-concatMerge (x:y:xs) = concatMerge (merge x y:xs)
 
 measureTime :: MeasureKey -> R a -> R a
 measureTime key action = do
@@ -363,6 +355,27 @@ measureTime key action = do
             Nothing -> H.insert (ctxTimer ctx) key $! dt
             Just t  -> H.insert (ctxTimer ctx) key $! dt + t
     return res
+
+printStatistics :: R ()
+printStatistics = do
+    ctx <- ask
+    liftIO $ do
+        nodeSize <- readIORef (ctxNodeCounter ctx)
+        hfmlSize <- readIORef (ctxHFormulaSize ctx)
+        bfmlSize <- readIORef (ctxBFormulaSize ctx)
+        itypSize <- readIORef (ctxITypeSize ctx)
+        itrmSize <- readIORef (ctxITermSize ctx)
+        smtCalls <- readIORef (ctxSMTCount ctx)
+        smtHits  <- readIORef (ctxSMTCountHit ctx)
+        printf "Graph size: %7d\n" nodeSize
+        printf "#HFormula:  %7d\n" hfmlSize
+        printf "#BFormula:  %7d\n" bfmlSize
+        printf "#IType:     %7d\n" itypSize
+        printf "#ITerm:     %7d\n" itrmSize
+        printf "#SMT Calls: %7d\n" smtCalls
+        printf "#SMT Hits:  %7d\n" smtHits
+        H.mapM_ (\(key, t) ->
+            printf "Time %s: %s\n" (show key) (show t)) (ctxTimer ctx)
 
 checkSat :: HFormula -> HFormula -> R Bool
 checkSat p1 p2 = measureTime CheckSat $ do
