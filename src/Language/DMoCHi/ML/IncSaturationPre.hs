@@ -5,6 +5,7 @@ import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.ML.Flow
+import           Language.DMoCHi.ML.Syntax.IType
 -- import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 
 import           GHC.Generics (Generic)
@@ -25,6 +26,8 @@ import qualified Language.DMoCHi.ML.SMT as SMT
 import qualified Data.Sequence as Q
 import           Text.PrettyPrint.HughesPJClass
 
+type HFormulaTbl = HashTable HFormula HFormula
+
 data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
                        , ctxFlowReg :: HashTable UniqueKey [SomeNode]
                        , ctxTypeMap :: TypeMap
@@ -34,6 +37,12 @@ data Context = Context { ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFor
                        , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [HFormula]) 
                        , ctxHFormulaTbl :: HFormulaTbl
                        , ctxHFormulaSize :: IORef Int
+                       , ctxBFormulaTbl  :: HashTable BFormulaBody BFormula
+                       , ctxBFormulaSize :: IORef Int
+                       , ctxITypeTbl     :: HashTable ITypeBody IType
+                       , ctxITypeSize    :: IORef Int
+                       , ctxITermTbl     :: HashTable ITermTypeBody ITermType
+                       , ctxITermSize    :: IORef Int
                        , ctxCheckSatCache :: HashTable (Int, Int) Bool
                        , ctxUpdated :: IORef Bool
                        , ctxSMTCount :: IORef Int
@@ -78,6 +87,14 @@ instance HFormulaFactory R where
                     iv' <- m_iv
                     return (ident', iv',key)
         key `seq` iv `seq` return v
+
+instance ITypeFactory R where
+    getITypeTable   = ctxITypeTbl <$> ask
+    getITypeCounter = ctxITypeSize <$> ask
+    getITermTable   = ctxITermTbl <$> ask
+    getITermCounter = ctxITermSize <$> ask
+    getBFormulaTable   = ctxBFormulaTbl <$> ask
+    getBFormulaCounter = ctxBFormulaSize <$> ask
 
 type PEnv = M.Map TId PType
 type IEnv = M.Map TId IType
@@ -297,33 +314,29 @@ calcCondition _fml _ps = measureTime CalcCondition $ do
             -}
     return phi
     where
-    go _ _ [] = return $ BConst True
+    go _ _ [] = mkBLeaf True
     go i fml (p:ps) = do
         np <- mkUni SNot p
         b1 <- checkSat fml p
         b2 <- checkSat fml np
         v1 <- if b1 then mkBin SAnd fml p >>= \fml' -> go (i + 1) fml' ps 
-                    else return $ BConst False
+                    else mkBLeaf False
         v2 <- if b2 then mkBin SAnd fml np >>= \fml' -> go (i + 1) fml' ps 
-                    else return $ BConst False
-        if v1 == v2 then
-            return v1
-        else 
-            return $ mkBOr (mkBAnd (BVar i) v1) (mkBAnd (BVar (-i)) v2)
+                    else mkBLeaf False
+        mkBNode i v1 v2
 
 fromBFormula :: [HFormula] -> BFormula -> R HFormula
-fromBFormula ps (BVar i) 
-    | i < 0     = mkUni SNot (ps !! ((-i) - 1))
-    | otherwise = return $ ps !! (i - 1)
-fromBFormula _  (BConst b)   = mkLiteral (CBool b)
-fromBFormula ps (BOr p1 p2)  = do
-    v1 <- fromBFormula ps p1
-    v2 <- fromBFormula ps p2
-    mkBin SOr  v1 v2
-fromBFormula ps (BAnd p1 p2) = do
-    v1 <- fromBFormula ps p1
-    v2 <- fromBFormula ps p2
-    mkBin SAnd v1 v2
+fromBFormula ps fml = 
+    case bfmlBody fml of
+        BLeaf b -> mkLiteral (CBool b)
+        BNode i p1 p2 -> do
+            v1 <- fromBFormula ps p1
+            v2 <- fromBFormula ps p2
+            let x = ps !! (i - 1)
+            nx <- mkUni SNot x
+            v1 <- mkBin SAnd x  v1
+            v2 <- mkBin SAnd nx v2
+            mkBin SOr v1 v2
 
 merge :: Ord a => [a] -> [a] -> [a]
 merge xs [] = xs

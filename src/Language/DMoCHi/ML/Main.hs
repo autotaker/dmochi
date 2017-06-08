@@ -26,7 +26,6 @@ import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.ElimCast as PAbst
 import qualified Language.DMoCHi.ML.IncSaturation as IncSat
 import qualified Language.DMoCHi.ML.UnliftRec as IncSat
-import qualified Language.DMoCHi.ML.Saturate as Saturate
 import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
@@ -211,10 +210,12 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
                 (_,res) <- liftIO $ IncSat.saturate curTypeMap unliftedProgram
                 liftIO $ print res
                 return (snd res)
+                {-
             | fusion conf = measure "Fusion" $ do
                 (_,res) <- liftIO $ Saturate.saturate curTypeMap castFreeProgram
                 liftIO $ print res
                 return (snd res)
+                -}
             | otherwise = do
                 boolProgram <- measure "Predicate Abstraction" $ lift $ PAbst.abstProg curTypeMap castFreeProgram
                 liftIO $ putStrLn "Converted program"

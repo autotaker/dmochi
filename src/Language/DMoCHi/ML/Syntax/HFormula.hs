@@ -5,7 +5,6 @@ import qualified Data.HashTable.IO as H
 import           Data.Hashable
 import           Text.PrettyPrint.HughesPJClass
 import           Data.Type.Equality
-import           GHC.Generics (Generic)
 import qualified Z3.Monad as Z3
 
 -- import           Language.DMoCHi.Common.Id
@@ -33,7 +32,6 @@ type instance Labels HFormula  = '[ 'Literal, 'Var, 'Unary, 'Binary ]
 type instance BinOps HFormula = '[ 'Add, 'Sub, 'Div, 'Mul, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
 type instance UniOps HFormula = '[ 'Fst, 'Snd, 'Not, 'Neg ]
 
-type HFormulaTbl = HashTable HFormula HFormula
 
 instance Hashable (BinArg HFormula) where
     hashWithSalt salt (BinArg l v1 v2) = 
@@ -159,6 +157,7 @@ fromHFormula (HFormula l arg sty _ _) =
 instance Pretty HFormula where
     pPrintPrec plevel prec v = pPrintPrec plevel prec (fromHFormula v)
 
+{-
 data IType = IInt | IBool | IPair IType IType | IFun [([IType], BFormula, ITermType)]
     deriving (Eq,Ord,Show, Generic)
 data ITermType = IFail | ITerm IType BFormula
@@ -235,3 +234,4 @@ mkBOr (BConst True) _ = BConst True
 mkBOr b (BConst False) = b
 mkBOr _ (BConst True) = BConst True
 mkBOr b1 b2 = BOr b1 b2
+-}

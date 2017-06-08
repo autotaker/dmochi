@@ -2,6 +2,7 @@
 module Language.DMoCHi.ML.IncSaturation(saturate) where
 import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.HFormula
+import           Language.DMoCHi.ML.Syntax.IType
 import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.ML.Flow
@@ -154,24 +155,18 @@ addFlow i v = do
         Nothing -> cont (S.singleton v)
     -- liftIO $ print ("addFlow", i, v)
 
-calcAtom :: IEnv -> Atom -> IType
+calcAtom :: IEnv -> Atom -> ITypeBody
 calcAtom env (Atom l arg _) = case (l, arg) of
-    (SLiteral, CInt _)  -> IInt
-    (SLiteral, CBool _) -> IInt
-    (SVar, x) -> env ! x
-    (SBinary, BinArg op _ _) -> case op of
-        SAdd -> IInt
-        SSub -> IInt
-        SEq  -> IBool
-        SLt  -> IBool
-        SLte -> IBool
-        SAnd -> IBool
-        SOr  -> IBool
+    (SLiteral, CInt _)  -> IBase
+    (SLiteral, CBool _) -> IBase
+    (SLiteral, CUnit) -> IBase
+    (SVar, x) -> ityBody $ env ! x
+    (SBinary, BinArg _ _ _) -> IBase
     (SUnary, UniArg op v) -> case op of
-        SFst -> (\(IPair i1 _) -> i1) $ calcAtom env v
-        SSnd -> (\(IPair _ i2) -> i2) $ calcAtom env v
-        SNeg -> IInt
-        SNot -> IBool
+        SFst -> (\(IPair i1 _) -> ityBody i1) $ calcAtom env v
+        SSnd -> (\(IPair _ i2) -> ityBody i2) $ calcAtom env v
+        SNeg -> IBase
+        SNot -> IBase
 
 evalAtom :: CEnv -> Atom -> CValue
 evalAtom cenv (Atom l arg _) =
@@ -195,12 +190,13 @@ calcFromValue :: HFormula -> UniqueKey -> (IType, R IType, ValueExtractor, R ())
 calcFromValue fml key (theta, recalc, extract, destruct) = do
     Just (_,ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
     phi <- calcCondition fml ps
-    let recalc' = (\theta -> [ITerm theta phi]) <$> recalc
-        extract' env (ITerm _ phi') 
+    let recalc' = recalc >>= (\theta -> (:[]) <$> mkITerm theta phi)
+        extract' env (itermBody -> ITerm _ phi') 
             | phi == phi' = return $ Just (extract env)
             | otherwise = error "extract@calcFromValue: condition mismatch"
         extract' _ _ = error "values never fail"
-    return ([ITerm theta phi], recalc', extract', destruct)
+    tau <- mkITerm theta phi
+    return ([tau], recalc', extract', destruct)
 
 calcPair :: IEnv -> HFormula -> Node e -> (Value,Value) -> R (IType, R IType, ValueExtractor, R ())
 calcPair env fml _node (v1,v2) = do
@@ -209,10 +205,11 @@ calcPair env fml _node (v1,v2) = do
     let recalc = do
             ty1 <- liftIO $ readIORef $ types $ node1
             ty2 <- liftIO $ readIORef $ types $ node2
-            return $ IPair ty1 ty2
+            mkIPair ty1 ty2
         extract env = CPair (extractor node1 env) (extractor node2 env)
         destruct = destructor node1 >> destructor node2
-    return (IPair ty1 ty2, recalc, extract, destruct)
+    ity <- mkIPair ty1 ty2
+    return (ity, recalc, extract, destruct)
     
 calcLambda :: NonRoot e => IEnv -> HFormula -> Node e -> UniqueKey -> ([TId], Exp) -> R (IType, R IType, ValueExtractor, R ())
 calcLambda env fml _node key (xs, e) = do
@@ -239,7 +236,7 @@ calcLambda env fml _node key (xs, e) = do
                                 (node_body,tys) <- calcExp env' fml' _node  e
                                 liftIO $ H.insert tbl (thetas,phi) node_body
                                 return $ map ((,,) thetas phi) tys
-            return $ IFun ty_assocs
+            mkIFun ty_assocs
         extract env = CCls env xs tbl
     ty <- recalc 
     let destruct = do
@@ -271,7 +268,7 @@ calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) =
         SUnary   -> atomCase (Atom l1 arg1 sty1)
         SBinary  -> atomCase (Atom l1 arg1 sty1)
         SRand    -> do
-            let env' = M.insert x IInt env
+            env' <- (\ty -> M.insert x ty env) <$> mkIBase
             (node2, tys) <- calcExp env' fml _node e2 
             let recalc :: R [ITermType]
                 recalc = liftIO $ readIORef $ types node2
@@ -284,8 +281,8 @@ calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) =
         atomCase atom = do
             vx <- mkVar x
             fml' <- toHFormula atom >>= mkBin SEq vx >>= mkBin SAnd fml
-            let ity = calcAtom env atom 
-                env' = M.insert x ity env
+            ity <- genIType (calcAtom env atom)
+            let env' = M.insert x ity env
             (node2, tys) <- calcExp env' fml' _node e2
             let recalc :: R [ITermType]
                 recalc = liftIO $ readIORef $ types node2
@@ -297,8 +294,8 @@ calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) =
             tbl <- liftIO H.new :: R (HashTable (IType, BFormula) ExpNode)
             let genericCalc :: [ITermType] -> R [ITermType]
                 genericCalc tys1 =  -- TODO: あるケースが参照されなくなったらdestructする
-                    fmap concatMerge $ forM tys1 $ \case
-                        IFail -> return [IFail]
+                    fmap concatMerge $ forM tys1 $ \tau -> case itermBody tau of
+                        IFail -> (:[]) <$> mkIFail
                         ITerm ity phi -> do
                             liftIO (H.lookup tbl (ity,phi)) >>= \case
                                 Just node2 -> liftIO $ readIORef $ types node2
@@ -316,26 +313,26 @@ calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) =
             tys <- genericCalc tys1
             let recalc = (liftIO $ readIORef $ types node1) >>= genericCalc
                 extract, extractCont :: TermExtractor
-                extract cenv IFail = do
+                extract cenv iota@(itermBody -> IFail) = do
                     tys1 <- liftIO $ readIORef $ types node1
-                    if IFail `elem` tys1
-                    then extractor node1 cenv IFail
-                    else extractCont cenv IFail
+                    if any (\tau -> IFail == itermBody tau) tys1
+                    then extractor node1 cenv iota
+                    else extractCont cenv iota
                 extract cenv iota = extractCont cenv iota
                 extractCont cenv iota = go =<< (liftIO $ readIORef $ types node1)
                     where
-                    go (IFail: tys1) = go tys1
-                    go (ITerm ity phi: tys1) = 
-                        liftIO (H.lookup tbl (ity, phi)) >>= \case
+                    go (iota1: tys1) = case itermBody iota1 of
+                        ITerm ity phi -> liftIO (H.lookup tbl (ity, phi)) >>= \case
                             Nothing -> go tys1 
                             Just node2 -> do
                                 tys2 <- liftIO $ readIORef $ types node2
                                 if any (flip subTermTypeOf iota) tys2
                                 then do
-                                    Just cv1 <- extractor node1 cenv (ITerm ity phi)
+                                    Just cv1 <- extractor node1 cenv iota1
                                     let cenv' = M.insert x cv1 cenv
                                     extractor node2 cenv' iota
                                 else go tys1
+                        IFail -> go tys1
                     go [] = error "unexpected pattern"
                 destruct = do
                     destructor node1
@@ -345,7 +342,8 @@ calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) =
 
 calcLetRec :: IEnv -> HFormula -> ExpNode -> ([(TId, Value)], Exp) -> R ([ITermType], R [ITermType],TermExtractor, R ())
 calcLetRec env fml _node (fs, e) = do
-    let env0 = M.fromList [ (f, IFun []) | (f,_) <- fs ]
+    top <- mkIFun []
+    let env0 = M.fromList [ (f, top) | (f,_) <- fs ]
         env' = M.union env env0
     node_fs <- forM fs $ \(_,v_f) -> do
         (node_f@Node { parent = edge_f } , _) <- calcValue env' fml _node v_f
@@ -368,15 +366,19 @@ calcLetRec env fml _node (fs, e) = do
             nodes <- liftIO $ readIORef letRChildren
             updated <- liftIO $ newIORef False
             env1 <- fmap M.fromList $ zipWithM (\node (f,_) -> do
-                    IFun assocs <- liftIO $ readIORef (types node)
+                    ity_cur <- liftIO $ readIORef (types node)
+                    let assocs = case ityBody ity_cur of
+                            IFun v -> v
+                            _ -> error $ "expect function type: " ++ show ity_cur
                     forM_ assocs $ \(thetas, phi, iota) -> 
                         liftIO $ H.lookup letRHistory (f, (thetas,phi), iota) >>= \case 
                             Just _ -> return ()
                             Nothing -> do
                                H.insert letRHistory (f, (thetas,phi), iota) node
                                writeIORef updated True
-                    let IFun assocs' = env0 ! f
-                    return (f, IFun (merge assocs assocs'))
+                    let ity_old = env0 ! f
+                    ity_new <- mkIntersection ity_cur ity_old
+                    return (f, ity_new)
                 ) nodes fs
             liftIO (readIORef updated) >>= \case
                 True -> do
@@ -420,20 +422,17 @@ calcAssume env fml _node (a, e) = do
 
 calcApp :: IEnv -> HFormula -> LExpNode -> UniqueKey -> (TId, [Value]) -> R ([ITermType], R [ITermType], TermExtractor, R ())
 calcApp env fml _node key (f, vs) = do
-    let IFun assoc = env ! f
+    let ity_f = env ! f
     Just (_, ps) <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key)
     phi <- calcCondition fml ps
     (nodes,thetas) <- fmap unzip $ forM vs $ calcValue env fml _node
     flowMap <- ctxFlowMap <$> ask
     forM_ (flowMap ! f) $ \ident -> addFlow ident (thetas,phi)
     
-    let appType thetas = 
-            [ iota | (thetas', phi', iota) <- assoc,
-                     thetas == thetas' && phi == phi' ]
-        recalc = do
+    let recalc = do
             thetas <- forM nodes $ liftIO . readIORef . types
             forM_ (flowMap ! f) $ \ident -> addFlow ident (thetas,phi)
-            return $ appType thetas
+            return $ appType ity_f thetas phi
         destruct = do
             forM_ nodes $ destructor
         extract cenv iota = do
@@ -465,22 +464,23 @@ calcApp env fml _node key (f, vs) = do
                             else return acc) (error "no match") hist
                     closureCase (extractor node cenv_f)
                 cv_f -> closureCase cv_f
-    return (appType thetas, recalc, extract, destruct)
+    return (appType ity_f thetas phi, recalc, extract, destruct)
 
 calcValue :: IEnv -> HFormula -> Node e -> Value -> R (ValueNode, IType)
 calcValue env fml parent value@(Value l arg sty key) = 
-    let fromAtom :: Atom -> (IType, R IType, ValueExtractor, R ())
-        fromAtom atom = (ity, return ity, extract, return ())
-            where ity = calcAtom env atom
-                  extract cenv = evalAtom cenv atom
+    let fromAtom :: Atom -> R (IType, R IType, ValueExtractor, R ())
+        fromAtom atom = do
+            ity <- genIType (calcAtom env atom)
+            let extract cenv = evalAtom cenv atom
+            return (ity, return ity, extract, return ())
     in mfix $ \ ~(_node, _ity) -> do
         (ity,recalc, extract, destruct) <- case l of
-            SLiteral -> (return $ fromAtom (Atom l arg sty))
-            SVar    -> (return $ fromAtom (Atom l arg sty))
-            SBinary -> (return $ fromAtom (Atom l arg sty))
-            SUnary  -> (return $ fromAtom (Atom l arg sty))
-            SPair   -> calcPair env fml _node arg
-            SLambda -> calcLambda env fml _node key arg
+            SLiteral -> fromAtom (Atom l arg sty)
+            SVar     -> fromAtom (Atom l arg sty)
+            SBinary  -> fromAtom (Atom l arg sty)
+            SUnary   -> fromAtom (Atom l arg sty)
+            SPair    -> calcPair env fml _node arg
+            SLambda  -> calcLambda env fml _node key arg
         itypeRef <- liftIO $ newIORef ity
         nodeIdent <- incrNodeCounter
         let pp = genericPrint env fml value itypeRef nodeIdent pPrint pPrint
@@ -508,7 +508,7 @@ calcExp env fml parent exp@(Exp l arg sty key) =
     let fromValue :: (IType, R IType, ValueExtractor, R ()) -> R ([ITermType], R [ITermType], TermExtractor, R ())
         fromValue = calcFromValue fml key
         fromAtom atom = do
-            let ity = calcAtom env atom
+            ity <- genIType (calcAtom env atom)
             calcFromValue fml key (ity, return ity, flip evalAtom atom, return ())
     in mfix $ \ ~(_node, _tys) -> do
         (itys,recalc, extract, destruct) <- case l of
@@ -522,10 +522,11 @@ calcExp env fml parent exp@(Exp l arg sty key) =
             SLetRec  -> calcLetRec env fml _node arg
             SAssume  -> calcAssume env fml _node arg
             SBranch  -> calcBranch env fml _node arg
-            SFail    -> 
-                let extract _ IFail = return Nothing
+            SFail    -> do
+                let extract _ (itermBody -> IFail) = return Nothing
                     extract _ _ = error "extract@SFail_calcExp: fail never returns values"
-                in return ([IFail], return [IFail], extract, return ())
+                tfail <- mkIFail
+                return ([tfail], return [tfail], extract, return ())
             SOmega   -> 
                 let extract _ _ = error "extract@SOmega_calcExp: omega never returns value nor fails"
                 in return ([], return [], extract, return ())
@@ -564,7 +565,7 @@ calcLExp env fml parent lexp@(LExp l arg sty key) =
     let fromValue :: (IType, R IType, ValueExtractor, R ()) -> R ([ITermType], R [ITermType], TermExtractor, R ())
         fromValue = calcFromValue fml key
         fromAtom atom = do
-            let ity = calcAtom env atom
+            ity <- genIType $ calcAtom env atom
             calcFromValue fml key (ity, return ity, flip evalAtom atom, return ())
     in mfix $ \ ~(_node, _tys) -> do
         (itys,recalc, extract, destruct) <- case l of
@@ -576,16 +577,20 @@ calcLExp env fml parent lexp@(LExp l arg sty key) =
             SLambda  -> fromValue =<< calcLambda env fml _node key arg
             SBranch  -> calcBranch env fml _node arg
             SApp     -> calcApp env fml _node key arg
-            SFail    -> 
-                let extract _ IFail = return Nothing
+            SFail    -> do
+                let extract _ (itermBody -> IFail) = return Nothing
                     extract _ _ = error "extract@SFail_calcExp: fail never returns values"
-                in return ([IFail], return [IFail], extract, return ())
+                tfail <- mkIFail
+                return ([tfail], return [tfail], extract, return ())
             SOmega   -> 
                 let extract _ _ = error "extract@SOmega_calcExp: omega never returns value nor fails"
                 in return ([], return [], extract, return ())
-            SRand    -> 
-                let extract _ _ = error "extract@SRand_calcExp: should never be called" in
-                return ([ITerm IInt (BConst True)], return [ITerm IInt (BConst True)], extract, return ())
+            SRand    -> do
+                let extract _ _ = error "extract@SRand_calcExp: should never be called"
+                ity <- mkIBase
+                btrue <- mkBLeaf True
+                ty <- mkITerm ity btrue
+                return ([ty], return [ty], extract, return ())
         itypeRef <- liftIO $ newIORef itys
         alive <- liftIO $ newIORef True
         let destruct' = (destruct :: R ()) >> liftIO (writeIORef alive False)
@@ -595,7 +600,7 @@ calcLExp env fml parent lexp@(LExp l arg sty key) =
                     putStrLn $ "extracting: " ++ show (pPrint iota)
                     putStrLn $ "cenv: " ++ show (M.keys cenv)
                     printNode _node
-                    -}
+                -}
                 extract cenv iota
         nodeIdent <- incrNodeCounter
         let pp = genericPrint env fml lexp itypeRef nodeIdent pPrint pPrint
@@ -657,6 +662,12 @@ saturate typeMap prog = do
                    <*> H.new               -- ctxArgTypeTbl
                    <*> H.new               -- ctxHFormulaTbl
                    <*> newIORef 0          -- ctxHFormulaSize
+                   <*> H.new               -- ctxITypeTbl
+                   <*> newIORef 0          -- ctxITypeSize
+                   <*> H.new               -- ctxITermTbl
+                   <*> newIORef 0          -- ctxITermSize
+                   <*> H.new               -- ctxBFormulaTbl
+                   <*> newIORef 0          -- ctxBFormulaSize
                    <*> H.new               -- ctxCheckSatCache
                    <*> newIORef False      -- ctxUpdated
                    <*> newIORef 0          -- ctxSMTCount
@@ -675,9 +686,10 @@ saturate typeMap prog = do
                 return (RootNode node)
             updateLoop
             tys <- liftIO $ readIORef (types n)
-            if IFail `elem` tys
+            if any (\iota -> itermBody iota == IFail) tys
             then do
-                bs <- execWriterT (extractor n M.empty IFail)
+                tfail <- mkIFail
+                bs <- execWriterT (extractor n M.empty tfail)
                 return (True, (tys, Just bs))
             else return (False, (tys, Nothing))
     evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)
