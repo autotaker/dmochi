@@ -11,10 +11,13 @@ test testCase =
     describe ("Test: " ++ testCase) $ do
         it "fusion successfully ends" $ do
             let conf = (defaultConfig testCase){ fusion = True, incremental = True }
-            verify conf `shouldReturn` (Right ())
-        it "default successfully ends" $ do
-            let conf = defaultConfig testCase
-            verify conf `shouldReturn` (Right ())
+            v1 <- verify conf
+            let right (Left _) = False
+                right (Right _) = True
+            v1 `shouldSatisfy` right
+            v2 <- verify (defaultConfig testCase)
+            v2 `shouldSatisfy` right
+            v1 `shouldBe` v2
 
 spec :: Spec
 spec = do

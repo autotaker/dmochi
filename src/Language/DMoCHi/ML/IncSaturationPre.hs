@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances #-}
+{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances, RecordWildCards #-}
 module Language.DMoCHi.ML.IncSaturationPre where
 import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.HFormula
@@ -9,15 +9,16 @@ import           Language.DMoCHi.ML.Syntax.IType
 -- import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 
 import           GHC.Generics (Generic)
-import           Data.Kind(Constraint)
+-- import           Data.Kind(Constraint)
 import           Control.Monad.Fix
 import           Control.Monad.Reader
 import           Control.Monad.Writer hiding((<>))
 import           Control.Monad.State.Strict
 import qualified Z3.Monad as Z3
+import qualified Z3.Base as Z3Base
 import           Data.IORef
 import           Data.Time
-import           Data.Type.Equality
+--import           Data.Type.Equality
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
@@ -35,21 +36,24 @@ data Context =
   , ctxFlowReg :: HashTable UniqueKey [SomeNode]
   , ctxTypeMap :: TypeMap
   , ctxFlowMap :: FlowMap
-  , ctxNodeCounter :: IORef Int
-  , ctxRtnTypeTbl :: HashTable UniqueKey (PType, [HFormula]) 
-  , ctxArgTypeTbl  :: HashTable UniqueKey ([PType], [HFormula]) 
-  , ctxHFormulaTbl :: HFormulaTbl
-  , ctxHFormulaSize :: IORef Int
-  , ctxBFormulaTbl  :: HashTable BFormulaBody BFormula
-  , ctxBFormulaSize :: IORef Int
-  , ctxITypeTbl     :: HashTable ITypeBody IType
-  , ctxITypeSize    :: IORef Int
-  , ctxITermTbl     :: HashTable ITermTypeBody ITermType
-  , ctxITermSize    :: IORef Int
+  , ctxNodeCounter   :: IORef Int
+  , ctxNodeTbl       :: HashTable Int SomeNode
+  , ctxNodeDepG      :: HashTable Int [SomeNode]
+  , ctxRtnTypeTbl    :: HashTable UniqueKey (PType, [HFormula]) 
+  , ctxArgTypeTbl    :: HashTable UniqueKey ([PType], [HFormula]) 
+  , ctxFreeVarTbl    :: HashTable UniqueKey (S.Set TId)
+  , ctxHFormulaTbl   :: HFormulaTbl
+  , ctxHFormulaSize  :: IORef Int
+  , ctxBFormulaTbl   :: HashTable BFormulaBody BFormula
+  , ctxBFormulaSize  :: IORef Int
+  , ctxITypeTbl      :: HashTable ITypeBody IType
+  , ctxITypeSize     :: IORef Int
+  , ctxITermTbl      :: HashTable ITermTypeBody ITermType
+  , ctxITermSize     :: IORef Int
   , ctxCheckSatCache :: HashTable (Int, Int) Bool
-  , ctxUpdated :: IORef Bool
-  , ctxSMTCount :: IORef Int
-  , ctxSMTCountHit :: IORef Int
+  , ctxUpdated       :: IORef Bool
+  , ctxSMTCount      :: IORef Int
+  , ctxSMTCountHit   :: IORef Int
   , ctxTimer :: HashTable MeasureKey NominalDiffTime
   , ctxSMTSolver :: Z3.Solver
   , ctxSMTContext :: Z3.Context 
@@ -107,6 +111,39 @@ type IEnv = M.Map TId IType
 (!) f a = case M.lookup a f of
     Just v -> v
     Nothing -> error $ "no assoc found for key: " ++ show a
+
+initContext ::TypeMap -> Program -> IO Context
+initContext typeMap prog = do
+    (ctxSMTSolver, ctxSMTContext) <- Z3Base.withConfig $ \cfg -> do
+        Z3.setOpts cfg Z3.stdOpts
+        ctx <- Z3Base.mkContext cfg
+        solver <- Z3Base.mkSolver ctx
+        return (solver, ctx)
+    ctxFlowTbl     <- H.new
+    ctxFlowReg     <- H.new
+    ctxTypeMap     <- pure typeMap
+    ctxFlowMap     <- flowAnalysis prog
+    ctxNodeCounter <- newIORef 1
+    ctxNodeTbl     <- H.new
+    ctxNodeDepG    <- H.new
+    ctxRtnTypeTbl  <- H.new
+    ctxArgTypeTbl  <- H.new
+    ctxFreeVarTbl  <- H.new
+    ctxHFormulaTbl    <- H.new
+    ctxHFormulaSize   <- newIORef 0
+    ctxBFormulaTbl    <- H.new
+    ctxBFormulaSize   <- newIORef 0
+    ctxITypeTbl       <- H.new
+    ctxITypeSize      <- newIORef 0
+    ctxITermTbl       <- H.new
+    ctxITermSize      <- newIORef 0
+    ctxCheckSatCache  <- H.new
+    ctxUpdated        <- newIORef False
+    ctxSMTCount       <- newIORef 0
+    ctxSMTCountHit    <- newIORef 0
+    ctxTimer          <- H.new
+    return (Context {..})
+
 
 pprintContext :: Program -> R Doc
 pprintContext prog = do
@@ -238,17 +275,14 @@ pushQueue :: a -> Queue a -> Queue a
 pushQueue a queue = queue Q.|> a
 
 data SomeNode where
-    SomeNode :: NonRoot e => Node e -> SomeNode
-
-data Root 
+    SomeNode :: Node e -> SomeNode
 
 data Node e where
-    Node :: (NonRoot e, Eq (SatType e)) => 
+    Node :: (Eq (SatType e)) => 
             { typeEnv    :: IEnv
             , constraint :: HFormula
             , ident      :: !Int
             , types      :: IORef (SatType e)
-            , parent     :: Node e'
             , recalcator :: R (SatType e)
             , extractor  :: Extractor e
             , destructor :: R ()
@@ -256,20 +290,15 @@ data Node e where
             , alive      :: IORef Bool
             , term       :: e
             } -> Node e
-    RootNode :: { main :: Node Exp } -> Node Root
 
 nodeId :: Node e -> Int
 nodeId (Node { ident = ident }) = ident
-nodeId (RootNode _) = 0
 
 instance Eq SomeNode where
     (SomeNode n1) == (SomeNode n2) = nodeId n1 == nodeId n2
 
 instance Ord SomeNode where
     compare (SomeNode n1) (SomeNode n2) = compare (nodeId n1) (nodeId n2)
-
-type family NonRoot e :: Constraint where
-    NonRoot e = (e == Root) ~ 'False
 
 type family SatType e where
     SatType Exp = [ITermType]
@@ -415,7 +444,6 @@ genericPrint env fml e tys_ref ident termPrinter typePrinter = do
     return doc
     
 printNode :: Node e -> IO ()
-printNode (RootNode _) = putStrLn "ROOT"
 printNode (Node { pprinter = pp }) = pp >>= print
 
 popQuery :: R (Maybe UpdateQuery)

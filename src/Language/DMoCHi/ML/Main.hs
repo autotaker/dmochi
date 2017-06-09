@@ -160,8 +160,9 @@ parseArgs = doit
         (_,_,errs) -> die errs
 
 data CEGARResult a = Safe | Unsafe | Refine a
+    deriving(Eq,Show)
 
-verify :: Config -> IO (Either MainError ())
+verify :: Config -> IO (Either MainError (CEGARResult ()))
 verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
     hccsSolver <- liftIO getHCCSSolver
     
@@ -235,7 +236,7 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
                 liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
                 r <- measure "Model Checking" $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
                 return r
-        cegar _ k _  | k >= cegarLimit conf = return ()
+        cegar _ k _  | k >= cegarLimit conf = throwError CEGARLimitExceeded
         cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs,traces) = do
             res <- measure (printf "CEGAR-%d" k) $ do
 
@@ -299,36 +300,10 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
                                                  | otherwise         = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
                                     return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc, trace)
             case res of
-                Safe -> liftIO $ putStrLn "Safe!"
-                Unsafe -> liftIO $ putStrLn "Unsafe!"
+                Safe -> liftIO $ putStrLn "Safe!" >> return Safe
+                Unsafe -> liftIO $ putStrLn "Unsafe!" >> return Unsafe
                 Refine (typeMap',typeMapFool', hcs', rtyAssoc, rpostAssoc, trace) ->
                     cegar (typeMap',typeMapFool') (k+1) (rtyAssoc,rpostAssoc,hcs', trace:traces)
     cegar (typeMap0,typeMap0) 0 ([],[],[],[])
-
-                {-
-    let t_input          = f $ diffUTCTime t_input_end t_input_begin
-        t_parsing        = f $ diffUTCTime t_parsing_end t_parsing_begin
-        t_type_checking  = f $ diffUTCTime t_type_checking_end t_type_checking_begin
-        t_predicate_abst = f $ diffUTCTime t_predicate_abst_end t_predicate_abst_begin
-        t_model_checking = f $ diffUTCTime t_model_checking_end t_model_checking_begin
-        f t = fromRational (toRational t) :: Double
-        s_typed_program = Typed.size typedProgram
-        types = Typed.gatherPTypes typedProgram
-        o_typed_program = maximum $ 0:map (Typed.orderT . Typed.getType) types
-        p_typed_program = maximum $ 0:map Typed.sizeP types
-        s_boolean_program = B.size boolProgram
-    liftIO $ do
-        printf "-- statistics --\n"
-        printf "time stamp: %s\n" $ show t_begin
-        printf "\tInput Program Size    : %5d\n" s_typed_program
-        printf "\tInput Program Order   : %5d\n" o_typed_program
-        printf "\tMax Number of Predicates : %5d\n" p_typed_program
-        printf "\tBoolean Program Size  : %5d\n" s_boolean_program
-        printf "\tHandle Input Args : %7.3f sec\n" t_input
-        printf "\tParsing           : %7.3f sec\n" t_parsing
-        printf "\tType Checking     : %7.3f sec\n" t_type_checking
-        printf "\tPredicate Abst    : %7.3f sec\n" t_predicate_abst
-        printf "\tModel Checking    : %7.3f sec\n" t_model_checking
-        -}
 
 
