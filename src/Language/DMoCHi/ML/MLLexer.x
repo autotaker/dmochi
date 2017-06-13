@@ -30,6 +30,8 @@ tokens :-
 <0>            and     { lexeme $ \_ -> TokenAnd }
 <0>            type    { lexeme $ \_ -> TokenType}
 <0>            fun     { lexeme $ \_ -> TokenFun }
+<0>            begin   { lexeme $ \_ -> TokenBegin}
+<0>            end     { lexeme $ \_ -> TokenEnd }
 <0>            "->"    { lexeme $ \_ -> TokenArr }
 <0>            ";;"    { lexeme $ \_ -> TokenEOL }
 <0>            ";"     { lexeme $ \_ -> TokenSemi}
@@ -71,6 +73,8 @@ data Token
  | TokenAssert
  | TokenAnd
  | TokenType
+ | TokenBegin
+ | TokenEnd
  | TokenInt
  | TokenBool
  | TokenUnit

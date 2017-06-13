@@ -6,6 +6,7 @@ import System.Exit
 import System.Console.GetOpt
 import Control.Monad.Except
 import Data.Monoid
+import Data.List(isSuffixOf)
 import Data.Maybe(fromMaybe)
 import Text.Parsec(ParseError)
 import Text.PrettyPrint.HughesPJClass hiding((<>))
@@ -172,7 +173,9 @@ verify conf = measure "Verify" $ runFreshT $ runExceptT $ do
         prettyPrint | verbose conf = liftIO . putStrLn . render . pPrintPrec (PrettyLevel 1) 0
                     | otherwise    = liftIO . putStrLn . render . pPrint
     parsedProgram <- measure "Parse" $ do
-        program <- withExceptT ParseFailed $ ExceptT $ liftIO $ MLParser.parseProgramFromFile path
+        program <- if ".ml" `isSuffixOf` path
+            then withExceptT ParseFailed $ ExceptT $ liftIO $ MLParser.parseProgramFromFile path
+            else withExceptT (ParseFailed. show) $ ExceptT $ liftIO $ Parser.parseProgramFromFile path
         liftIO $ putStrLn "Parsed Program"
         prettyPrint program
         return program

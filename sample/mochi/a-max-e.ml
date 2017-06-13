@@ -13,4 +13,5 @@ let rec array_max (n:int) i (a:int->int) m =
 let main n i =
   if n>0 && i>=0 && i<=0 then
     let m = array_max n i (make_array n) (-1) in
-    assert (m >= n)
+    assert (m >= n);;
+main (read_int ()) (read_int ())

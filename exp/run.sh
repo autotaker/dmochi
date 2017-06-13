@@ -18,7 +18,7 @@ TOHORS=tohors
 HORSAT=../../horsat-1.01/horsat
 HORSAT2=../../horsat2-0.92/horsat2
 
-TIMEOUT=100
+TIMEOUT=50
 TIMEOUT_CMD=timeout
 
 
@@ -42,7 +42,11 @@ do
     rm -f work/$testcase*
     basename=$(basename $testcase)
     cp ../sample/$testcase work/$basename
+    DMOCHI_FLAG="--hccs gch --context-sensitive"
     $TIMEOUT_CMD $TIMEOUT $DMOCHI $DMOCHI_FLAG work/$basename > log/$basename.log
+    DMOCHI_FLAG="--hccs gch --context-sensitive --incremental"
+    $TIMEOUT_CMD $TIMEOUT $DMOCHI $DMOCHI_FLAG work/$basename > log/$basename.fusion.log
+
     if [ $BENCHMARK_BOOL ]; then
         for bool in `find work -name "$basename*.bool"`
         do

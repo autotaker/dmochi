@@ -22,6 +22,8 @@ import Language.DMoCHi.ML.MLLexer
   unit   { TokenUnit }
   and    { TokenAnd  }
   fun    { TokenFun  }
+  begin  { TokenBegin }
+  end    { TokenEnd }
   '->'   { TokenArr  }
   ';'    { TokenSemi }
   ':'    { TokenColon}
@@ -167,6 +169,7 @@ Atom : VAR                    { mkVar (V $1 Nothing) }
      | false                  { mkLiteral (CBool False) }
      | '(' ')'                { mkLiteral CUnit }
      | '(' Expr ')'           { $2 }
+     | begin Expr end         { $2 }
      | '(' Expr ':' Type ')'  { annot $2 $4 }
 
 {
