@@ -1,8 +1,0 @@
-hcsolver
-myLexer.ml
-myParser.ml
-myParser.mli
-*.cmi
-*.cmo
-*.cmx
-*.o
