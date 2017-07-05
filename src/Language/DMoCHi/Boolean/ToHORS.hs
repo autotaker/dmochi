@@ -34,7 +34,7 @@ run = do
     args <- getArgs
     case args of
         [path] -> do
-            res <- runFreshT $ runExceptT $ doit path
+            res <- runFreshIO noLogger $ runExceptT $ doit path
 
             case res of
                 Left err -> putStrLn err

@@ -59,7 +59,7 @@ tokens :-
 <0>            assert  { lexeme $ \_ -> TokenAssert }
 <0>            @ident  { lexeme $ \s -> if s == "_" then TokenHole else TokenVar s }
 <0>            \'@ident{ lexeme $ \s -> TokenTVar s }
-<0>            $digit+ { lexeme $ \s -> TokenNum (read $s) }
+<0>            $digit+ { lexeme $ \s -> TokenNum (read s) }
 {
 data Token
  = TokenLet

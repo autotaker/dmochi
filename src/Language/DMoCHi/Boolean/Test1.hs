@@ -3,6 +3,7 @@ import Language.DMoCHi.Boolean.Parser.Typed hiding(Parser)
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as Typed
 import Language.DMoCHi.Boolean.PrettyPrint.Typed
 import Language.DMoCHi.Common.Util
+import Language.DMoCHi.Common.Id
 import Text.PrettyPrint(render)
 import Control.Monad.Except
 import Language.DMoCHi.Boolean.Test(test,testTyped)
@@ -28,9 +29,9 @@ main = do
     conf <- liftIO $ execParser opts
     let path = arg conf
 
-    measure "Elapsed Time" $ do
+    runFreshIO defaultLogger $ measure $(logKey "Elapsed Time") $ do
         res <- runExceptT $ do
-            p <- withExceptT show $ ExceptT $ parseFile path
+            p <- withExceptT show $ ExceptT $ liftIO $ parseFile path
             liftIO $ putStrLn $ render $ pprintProgram p
             let s_boolean_program = Typed.size p
             case runExcept (Typed.tCheck p) of
@@ -46,5 +47,5 @@ main = do
                 UnTyped -> test path (Typed.toUnTyped p)
             liftIO $ printf "\tBoolean Program Size  : %5d\n" s_boolean_program
         case res of
-            Left err -> putStrLn err
-            Right r -> print r
+            Left err -> liftIO $ putStrLn err
+            Right r -> liftIO $ print r
