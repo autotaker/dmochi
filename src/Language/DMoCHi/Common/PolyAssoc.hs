@@ -5,15 +5,23 @@ module Language.DMoCHi.Common.PolyAssoc where
 import GHC.TypeLits
 import Data.Proxy
 import Data.Type.Equality
+import Data.Aeson
+import Data.Text(pack)
+import Data.Kind(Constraint)
 
 -- name represents namespace
 type family Assoc (name :: *) (k :: Symbol) :: *
+type family EntryParam n k v :: Constraint where
+    EntryParam n k v = (KnownSymbol k, v ~ Assoc n k, ToJSON v, Show v)
 
 data Entry n where
-    Entry :: (KnownSymbol k, Show (Assoc n k)) => Proxy k -> Assoc n k -> Entry n
+    Entry :: (EntryParam n k v) => Proxy k -> Assoc n k -> Entry n
 
 instance Show (Entry n) where
     show (Entry proxy v) = "(" ++ symbolVal proxy ++ "," ++ show v ++ ")"
+
+instance ToJSON (AssocList n) where
+    toJSON l = object [ pack (symbolVal k) .= toJSON v | Entry k v <- l ]
 
 -- current implementation is naive assoc list
 type AssocList n = [Entry n]
@@ -25,7 +33,7 @@ assoc key (Entry k v : l) =
         Just Refl -> Just v
         Nothing -> assoc key l
 
-update :: (KnownSymbol k,Assoc n k ~ v, Show v) => Proxy k -> v -> (v -> v) -> AssocList n -> AssocList n
+update :: (EntryParam n k v) => Proxy k -> v -> (v -> v) -> AssocList n -> AssocList n
 update key defVal updateFun es = case es of
     [] -> [Entry key defVal]
     (Entry k v : es') -> 

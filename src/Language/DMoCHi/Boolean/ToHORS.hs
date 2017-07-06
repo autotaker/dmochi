@@ -9,6 +9,7 @@ import Control.Monad.Except
 import qualified Language.DMoCHi.Boolean.HORS   as HORS
 import qualified Language.DMoCHi.Boolean.HORS2  as HORS2
 import Language.DMoCHi.Common.Id
+import System.IO
 
 doit :: (MonadId m, MonadIO m, Functor m) => FilePath -> ExceptT String m ()
 doit path = do
@@ -34,7 +35,8 @@ run = do
     args <- getArgs
     case args of
         [path] -> do
-            res <- runFreshIO noLogger $ runExceptT $ doit path
+            h <- openFile "/dev/null" WriteMode
+            res <- runFreshIO noLogger h $ runExceptT $ doit path
 
             case res of
                 Left err -> putStrLn err

@@ -163,8 +163,18 @@ parseArgs = doit
 data CEGARResult a = Safe | Unsafe | Refine a
     deriving(Eq,Show)
 
+type instance Assoc Logging "ML.Verify" = Double
+type instance Assoc Logging "ML.Parse"  = Double
+type instance Assoc Logging "ML.Preprocess" = Double
+type instance Assoc Logging "ML.Fusion" = Double
+type instance Assoc Logging "ML.Abst"   = Double
+type instance Assoc Logging "ML.ModelChecking" = Double
+type instance Assoc Logging "ML.Refine" = Double
+type instance Assoc Logging "ML.CEGAR" = Double
+type instance Assoc Logging "ML.Cycle" = Int
+
 verify :: Config -> IO (Either MainError (CEGARResult ()))
-verify conf = runFreshIO defaultLogger $ measure $(logKey "ML.Verify") $ runExceptT $ do
+verify conf = runFreshIO defaultLogger stdout $ measure $(logKey "ML.Verify") $ runExceptT $ do
     hccsSolver <- liftIO getHCCSSolver
     
     -- parsing
@@ -209,7 +219,7 @@ verify conf = runFreshIO defaultLogger $ measure $(logKey "ML.Verify") $ runExce
 
     (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
     let mc k curTypeMap castFreeProgram 
-            | incremental conf = measure $(logKey "Fusion(Inc)") $ do
+            | incremental conf = measure $(logKey "ML.Fusion") $ do
                 unliftedProgram <- IncSat.unliftRec castFreeProgram
                 (_,res) <- liftIO $ IncSat.saturate curTypeMap unliftedProgram
                 liftIO $ print res
@@ -221,7 +231,7 @@ verify conf = runFreshIO defaultLogger $ measure $(logKey "ML.Verify") $ runExce
                 return (snd res)
                 -}
             | otherwise = do
-                boolProgram <- measure $(logKey "Predicate Abstraction") $ lift $ PAbst.abstProg curTypeMap castFreeProgram
+                boolProgram <- measure $(logKey "ML.Abst") $ lift $ PAbst.abstProg curTypeMap castFreeProgram
                 liftIO $ putStrLn "Converted program"
                 liftIO $ putStrLn $ render $ B.pprintProgram boolProgram
                 case runExcept (B.tCheck boolProgram) of
@@ -237,12 +247,12 @@ verify conf = runFreshIO defaultLogger $ measure $(logKey "ML.Verify") $ runExce
                 liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
                 let file_boolean = printf "%s_%d.bool" path k
                 liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
-                r <- measure $(logKey "Model Checking") $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
+                r <- measure $(logKey "ML.ModelChecking") $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
                 return r
         cegar _ k _  | k >= cegarLimit conf = throwError CEGARLimitExceeded
         cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs,traces) = do
+            updateKey $(logKey "ML.CEGAR") 1 succ
             res <- measure $(logKey "ML.CEGAR") $ do
-
                 liftIO $ putStrLn "Predicate Abstracion"
                 liftIO $ PAbst.printTypeMap typeMap
                 let curTypeMap = PAbst.mergeTypeMap typeMap typeMapFool
@@ -253,7 +263,7 @@ verify conf = runFreshIO defaultLogger $ measure $(logKey "ML.Verify") $ runExce
 
                 mc k curTypeMap castFreeProgram >>= \case
                     Nothing -> return Safe
-                    Just trace -> measure $(logKey "ML.Refinement") $ do
+                    Just trace -> measure $(logKey "ML.Refine") $ do
                         when (elem trace traces) $ throwError $ OtherError "No progress"
                         let traceFile = printf "%s_%d.trace.dot" path k
                         (trace,isFoolI) <- case interactive conf of

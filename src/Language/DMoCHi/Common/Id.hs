@@ -2,7 +2,7 @@
 module Language.DMoCHi.Common.Id(UniqueKey, runFreshIO, FreshIO, Id, HasUniqueKey(..)
                                 , MonadId(..), freshId, reserved, reservedKey, maybeReserved, fromReserved
                                 , MonadLogger(..), logMsg, defaultLogger, filterLogger, noLogger, fileLogger
-                                , logInfo, logDebug, LogKey
+                                , logInfo, logDebug, LogKey, Logging, updateKey, Assoc
                                 , getName
                                 , refresh, identify) where
 
@@ -15,10 +15,13 @@ import Control.Monad.Writer hiding((<>))
 import Control.Monad.Except
 import Control.Monad.Cont
 -- import Data.Functor.Identity
+import Data.Proxy
 import Text.Parsec(ParsecT)
 import Text.PrettyPrint.HughesPJClass
 import Data.Hashable
 import Data.Time
+import Data.Aeson(encode)
+import qualified Data.ByteString.Lazy as B
 import Text.Printf
 import GHC.TypeLits
 import Data.IORef
@@ -44,6 +47,7 @@ class Monad m => MonadId m where
 
 class MonadIO m => MonadLogger m where
     getLogger :: m Logger
+    updateSummary :: (AssocList Logging -> AssocList Logging) -> m ()
 
 data Logging
 
@@ -51,6 +55,7 @@ data LogContext = LogContext {
     logger  :: Logger,
     summary :: IORef (AssocList Logging)
 }
+
 type Logger = LogKey -> Severity -> LogText -> IO ()
     
 type LogKey = SomeSymbol
@@ -74,11 +79,13 @@ logMsg (SomeSymbol key) severity s = do
     logger <- getLogger
     liftIO $ logger (SomeSymbol key) severity logStr
 
+updateKey :: (MonadLogger m, EntryParam Logging k v) => Proxy k -> v -> (v -> v) -> m ()
+updateKey key defVal updateFun = updateSummary (update key defVal updateFun)
+
 logInfo, logDebug :: MonadLogger m => LogKey -> String -> m ()
 logInfo key s = logMsg key Info s
 
 logDebug key s = logMsg key Debug s
-
 
 newtype FreshIO a = FreshIO { unFreshIO :: LogContext -> Int -> IO (a, Int) }
 
@@ -152,11 +159,14 @@ refresh (Id _ v) = do
     return $! Id key v
 
 {-# INLINE runFreshIO #-}
-runFreshIO :: Logger -> FreshIO a -> IO a
-runFreshIO logger m = do
+runFreshIO :: Logger -> Handle -> FreshIO a -> IO a
+runFreshIO logger handle m = do
     ref <- newIORef emptyAssoc
     let ctx = LogContext logger ref
-    fmap fst $ (unFreshIO m) ctx 1
+    (v, _) <- unFreshIO m ctx 1
+    stat <- readIORef ref
+    B.hPut handle $ encode stat
+    return v
 
 noLogger :: Logger 
 noLogger = \_ _ _ -> return ()
@@ -213,6 +223,11 @@ instance MonadFix FreshIO where
 
 instance MonadLogger FreshIO where
     getLogger = FreshIO $ \ctx s -> return (logger ctx,s)
+    {-# INLINE getLogger #-}
+    updateSummary f = FreshIO $ \ctx s -> do
+        modifyIORef' (summary ctx) f
+        return ((), s)
+    {-# INLINE updateSummary #-}
 
 instance MonadId FreshIO where
     freshInt = FreshIO $ \_ s -> return (s, s+1)
@@ -225,6 +240,8 @@ instance MonadId m => MonadId (ReaderT r m) where
 instance MonadLogger m => MonadLogger (ReaderT r m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
+    updateSummary = lift . updateSummary
+    {-# INLINE updateSummary #-}
 
 instance MonadId m => MonadId (ParsecT s u m) where
     freshInt = lift freshInt
@@ -233,6 +250,8 @@ instance MonadId m => MonadId (ParsecT s u m) where
 instance MonadLogger m => MonadLogger (ParsecT s u m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
+    updateSummary = lift . updateSummary
+    {-# INLINE updateSummary #-}
 
 instance (Monoid w,MonadId m) => MonadId (WriterT w m) where
     freshInt = lift freshInt
@@ -241,6 +260,8 @@ instance (Monoid w,MonadId m) => MonadId (WriterT w m) where
 instance (Monoid w, MonadLogger m) => MonadLogger (WriterT w m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
+    updateSummary = lift . updateSummary
+    {-# INLINE updateSummary #-}
 
 instance MonadId m => MonadId (ExceptT e m) where
     freshInt = lift freshInt
@@ -249,6 +270,8 @@ instance MonadId m => MonadId (ExceptT e m) where
 instance MonadLogger m => MonadLogger (ExceptT e m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
+    updateSummary = lift . updateSummary
+    {-# INLINE updateSummary #-}
 
 instance MonadId m => MonadId (StateT s m) where
     freshInt = lift freshInt
@@ -257,6 +280,8 @@ instance MonadId m => MonadId (StateT s m) where
 instance MonadLogger m => MonadLogger (StateT s m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
+    updateSummary = lift . updateSummary
+    {-# INLINE updateSummary #-}
 
 instance MonadId m => MonadId (Strict.StateT s m) where
     freshInt = lift freshInt
@@ -265,6 +290,8 @@ instance MonadId m => MonadId (Strict.StateT s m) where
 instance MonadLogger m => MonadLogger (Strict.StateT s m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
+    updateSummary = lift . updateSummary
+    {-# INLINE updateSummary #-}
 
 instance (MonadId m, Monoid w) => MonadId (Strict.RWST r w s m) where
     freshInt = lift freshInt
@@ -273,6 +300,8 @@ instance (MonadId m, Monoid w) => MonadId (Strict.RWST r w s m) where
 instance (MonadLogger m, Monoid w) => MonadLogger (Strict.RWST r w s m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
+    updateSummary = lift . updateSummary
+    {-# INLINE updateSummary #-}
 
 instance (MonadId m) => MonadId (ContT r m) where
     freshInt = lift freshInt
@@ -281,3 +310,5 @@ instance (MonadId m) => MonadId (ContT r m) where
 instance MonadLogger m => MonadLogger (ContT r m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
+    updateSummary = lift . updateSummary
+    {-# INLINE updateSummary #-}

@@ -30,14 +30,17 @@ test path input = do
     (b,_ctx) <- liftIO $ saturate p g
     return b
 
+type instance Assoc Logging "Bool.Saturation" = Double
+type instance Assoc Logging "Bool.0CFA" = Double
+
 testTyped :: (MonadIO m,MonadLogger m) => FilePath -> Typed.Program -> ExceptT String m (Maybe [Bool])
 testTyped path p = do
     let graph_path = path ++ ".typed.dot"
-    p_flow <- measure (Proxy :: Proxy "Boolean.0CFA") $ do
+    p_flow <- measure $(logKey "Bool.0CFA") $ do
         let p_flow = Flow2.buildGraph p
         liftIO $ writeFile graph_path $ Flow2.ppGraph (Flow2.termTable p_flow) (Flow2.cfg p_flow)
         return p_flow
-    measure (Proxy :: Proxy "Saturation") $ do
+    measure $(logKey "Bool.Saturation") $ do
         b <- liftIO $ Sat.saturate p_flow
         liftIO $ printf "Typed saturation result %s\n" (show b)
         return b

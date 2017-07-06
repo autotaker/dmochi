@@ -9,6 +9,7 @@ import Control.Monad.Except
 import Language.DMoCHi.Boolean.Test(test,testTyped)
 import Text.Printf
 import Options.Applicative
+import System.IO
 
 data Mode = Typed | UnTyped
 data Config = Config { mode :: Mode
@@ -20,6 +21,7 @@ config = Config <$> (flag UnTyped Typed ( long "typed"
                                         <> help "enable typed model checking"))
                 <*> (argument str (metavar "FILE"))
 
+type instance Assoc Logging "Bool.Total" = Double
 
 main :: IO ()
 main = do
@@ -29,7 +31,7 @@ main = do
     conf <- liftIO $ execParser opts
     let path = arg conf
 
-    runFreshIO defaultLogger $ measure $(logKey "Elapsed Time") $ do
+    runFreshIO defaultLogger stdout $ measure $(logKey "Bool.Total") $ do
         res <- runExceptT $ do
             p <- withExceptT show $ ExceptT $ liftIO $ parseFile path
             liftIO $ putStrLn $ render $ pprintProgram p

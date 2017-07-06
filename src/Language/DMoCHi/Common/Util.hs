@@ -3,7 +3,7 @@ module Language.DMoCHi.Common.Util( rec
                                   , module Data.Proxy
                                   , module GHC.TypeLits
                                   , logKey
-                                  , measure, measureError ) where
+                                  , measure) where
 
 import Data.Function
 import Data.Proxy
@@ -13,6 +13,7 @@ import Text.Printf
 import Control.Monad.Except
 import Language.DMoCHi.Common.Id
 import Language.Haskell.TH
+import Language.DMoCHi.Common.PolyAssoc
 
 rec :: a -> ((a -> b) -> a -> b) -> b
 rec = flip fix
@@ -20,7 +21,7 @@ rec = flip fix
 logKey :: String -> ExpQ
 logKey s = sigE (conE 'Data.Proxy.Proxy) (appT (conT ''Data.Proxy.Proxy) (litT (strTyLit s)))
 
-measure :: (MonadLogger m, KnownSymbol k) => Proxy k -> m a -> m a
+measure :: (MonadLogger m, EntryParam Logging k Double) => Proxy k -> m a -> m a
 measure header doit = do
     let f t = fromRational (toRational t) :: Double
     t_start <- liftIO $ getCurrentTime
@@ -29,8 +30,10 @@ measure header doit = do
     t_end <- liftIO $ getCurrentTime
     let time = f $ diffUTCTime t_end t_start
     logInfo (SomeSymbol header) (printf "END %.5f sec" time)
+    updateSummary (update header time (+time))
     return v
 
+{-
 measureError :: (MonadIO m, MonadError e m) => String -> m a -> m a
 measureError header doit = do
     let f t = fromRational (toRational t) :: Double
@@ -44,3 +47,4 @@ measureError header doit = do
             m
     v <- catchError doit (cont . throwError) 
     cont (return v)
+    -}
