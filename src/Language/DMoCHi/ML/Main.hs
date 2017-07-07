@@ -11,6 +11,8 @@ import Data.Maybe(fromMaybe)
 import Text.Parsec(ParseError)
 import Text.PrettyPrint.HughesPJClass hiding((<>))
 import Text.Printf
+import Lens.Micro.GHC()
+import qualified Data.IntMap as IM
 
 import           Language.DMoCHi.Boolean.Syntax.Typed as B(tCheck)
 import           Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
@@ -163,15 +165,18 @@ parseArgs = doit
 data CEGARResult a = Safe | Unsafe | Refine a
     deriving(Eq,Show)
 
+data CEGAR
+
 type instance Assoc Logging "ML.Verify" = Double
 type instance Assoc Logging "ML.Parse"  = Double
 type instance Assoc Logging "ML.Preprocess" = Double
-type instance Assoc Logging "ML.Fusion" = Double
-type instance Assoc Logging "ML.Abst"   = Double
-type instance Assoc Logging "ML.ModelChecking" = Double
-type instance Assoc Logging "ML.Refine" = Double
-type instance Assoc Logging "ML.CEGAR" = Double
+type instance Assoc Logging "ML.CEGAR" = IM.IntMap (AssocList CEGAR)
 type instance Assoc Logging "ML.Cycle" = Int
+
+type instance Assoc CEGAR "ML.Refine" = Double
+type instance Assoc CEGAR "ML.Abst" = Double
+type instance Assoc CEGAR "ML.Fusion" = Double
+type instance Assoc CEGAR "ML.ModelChecking" = Double
 
 verify :: Config -> IO (Either MainError (CEGARResult ()))
 verify conf = runFreshIO defaultLogger stdout $ measure $(logKey "ML.Verify") $ runExceptT $ do
@@ -218,8 +223,11 @@ verify conf = runFreshIO defaultLogger stdout $ measure $(logKey "ML.Verify") $ 
         return _normalizedProgram
 
     (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
+    let mkLens :: Int -> Lens' (AssocList Logging) (AssocList CEGAR)
+        mkLens k = access $(logKey "ML.CEGAR") . non IM.empty . at k . non emptyAssoc
     let mc k curTypeMap castFreeProgram 
-            | incremental conf = measure $(logKey "ML.Fusion") $ do
+            | incremental conf = 
+                measureWithLens $(logKey "ML.Fusion") (mkLens k) $ do
                 unliftedProgram <- IncSat.unliftRec castFreeProgram
                 (_,res) <- liftIO $ IncSat.saturate curTypeMap unliftedProgram
                 liftIO $ print res
@@ -231,7 +239,7 @@ verify conf = runFreshIO defaultLogger stdout $ measure $(logKey "ML.Verify") $ 
                 return (snd res)
                 -}
             | otherwise = do
-                boolProgram <- measure $(logKey "ML.Abst") $ lift $ PAbst.abstProg curTypeMap castFreeProgram
+                boolProgram <- measureWithLens $(logKey "ML.Abst") (mkLens k) $ lift $ PAbst.abstProg curTypeMap castFreeProgram
                 liftIO $ putStrLn "Converted program"
                 liftIO $ putStrLn $ render $ B.pprintProgram boolProgram
                 case runExcept (B.tCheck boolProgram) of
@@ -247,12 +255,12 @@ verify conf = runFreshIO defaultLogger stdout $ measure $(logKey "ML.Verify") $ 
                 liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
                 let file_boolean = printf "%s_%d.bool" path k
                 liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
-                r <- measure $(logKey "ML.ModelChecking") $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
+                r <- measureWithLens $(logKey "ML.ModelChecking") (mkLens k) $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
                 return r
         cegar _ k _  | k >= cegarLimit conf = throwError CEGARLimitExceeded
         cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs,traces) = do
-            updateKey $(logKey "ML.CEGAR") 1 succ
-            res <- measure $(logKey "ML.CEGAR") $ do
+            updateKey $(logKey "ML.Cycle") 1 succ
+            res <- do
                 liftIO $ putStrLn "Predicate Abstracion"
                 liftIO $ PAbst.printTypeMap typeMap
                 let curTypeMap = PAbst.mergeTypeMap typeMap typeMapFool
@@ -263,7 +271,7 @@ verify conf = runFreshIO defaultLogger stdout $ measure $(logKey "ML.Verify") $ 
 
                 mc k curTypeMap castFreeProgram >>= \case
                     Nothing -> return Safe
-                    Just trace -> measure $(logKey "ML.Refine") $ do
+                    Just trace -> measureWithLens $(logKey "ML.Refine") (mkLens k) $ do
                         when (elem trace traces) $ throwError $ OtherError "No progress"
                         let traceFile = printf "%s_%d.trace.dot" path k
                         (trace,isFoolI) <- case interactive conf of
@@ -313,7 +321,7 @@ verify conf = runFreshIO defaultLogger stdout $ measure $(logKey "ML.Verify") $ 
                                                  | otherwise         = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
                                     return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc, trace)
             case res of
-                Safe -> liftIO $ putStrLn "Safe!" >> return Safe
+                Safe   -> liftIO $ putStrLn "Safe!" >> return Safe
                 Unsafe -> liftIO $ putStrLn "Unsafe!" >> return Unsafe
                 Refine (typeMap',typeMapFool', hcs', rtyAssoc, rpostAssoc, trace) ->
                     cegar (typeMap',typeMapFool') (k+1) (rtyAssoc,rpostAssoc,hcs', trace:traces)

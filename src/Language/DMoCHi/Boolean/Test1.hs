@@ -7,6 +7,7 @@ import Language.DMoCHi.Common.Id
 import Text.PrettyPrint(render)
 import Control.Monad.Except
 import Language.DMoCHi.Boolean.Test(test,testTyped)
+import Data.Monoid((<>))
 import Text.Printf
 import Options.Applicative
 import System.IO

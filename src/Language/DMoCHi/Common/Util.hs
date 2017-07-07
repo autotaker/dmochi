@@ -3,13 +3,16 @@ module Language.DMoCHi.Common.Util( rec
                                   , module Data.Proxy
                                   , module GHC.TypeLits
                                   , logKey
-                                  , measure) where
+                                  , access, emptyAssoc, AssocList
+                                  , module Lens.Micro
+                                  , measure, measureWithLens) where
 
 import Data.Function
 import Data.Proxy
 import GHC.TypeLits
 import Data.Time
 import Text.Printf
+import Lens.Micro
 import Control.Monad.Except
 import Language.DMoCHi.Common.Id
 import Language.Haskell.TH
@@ -22,7 +25,10 @@ logKey :: String -> ExpQ
 logKey s = sigE (conE 'Data.Proxy.Proxy) (appT (conT ''Data.Proxy.Proxy) (litT (strTyLit s)))
 
 measure :: (MonadLogger m, EntryParam Logging k Double) => Proxy k -> m a -> m a
-measure header doit = do
+measure header doit = measureWithLens header id doit
+
+measureWithLens :: (MonadLogger m, EntryParam n k Double) => Proxy k -> Lens' (AssocList Logging) (AssocList n) -> m a -> m a
+measureWithLens header lens doit = do
     let f t = fromRational (toRational t) :: Double
     t_start <- liftIO $ getCurrentTime
     logInfo (SomeSymbol header) "BEGIN"
@@ -30,7 +36,7 @@ measure header doit = do
     t_end <- liftIO $ getCurrentTime
     let time = f $ diffUTCTime t_end t_start
     logInfo (SomeSymbol header) (printf "END %.5f sec" time)
-    updateSummary (update header time (+time))
+    updateSummary (lens . access header . non 0 %~ (+time))
     return v
 
 {-
