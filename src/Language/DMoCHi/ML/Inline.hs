@@ -2,7 +2,7 @@ module Language.DMoCHi.ML.Inline where
 
 import Language.DMoCHi.ML.Syntax.PNormal
 import Language.DMoCHi.Common.Id
---import Language.DMoCHi.Common.Util
+import Language.DMoCHi.Common.Util
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.Graph
@@ -94,7 +94,7 @@ alphaL renv (LExp l arg sty key) =
             mkApp f' vs' <$> freshKey
 
         
-inlineA :: Env -> Atom -> FreshIO Value
+inlineA :: Env -> Atom -> FreshIO c Value
 inlineA env (Atom l arg sty) =
     case (l, arg) of
         (SLiteral, _) -> Value l arg sty <$> freshKey
@@ -114,7 +114,7 @@ inlineA env (Atom l arg sty) =
                     let Just a1' = atomOfValue v'
                     castWith <$> freshKey <*> pure (mkUni op a1')
 
-inlineV :: Env -> Value -> FreshIO Value
+inlineV :: Env -> Value -> FreshIO c Value
 inlineV env (Value l arg sty key) = 
     case (l, arg) of
         (SLiteral, _) -> inlineA env (Atom l arg sty)
@@ -124,7 +124,7 @@ inlineV env (Value l arg sty key) =
         (SPair, (v1, v2)) -> mkPair <$> inlineV env v1 <*> inlineV env v2 <*> pure key
         (SLambda, (xs, e)) -> mkLambda xs <$> inlineE env e <*> pure key
 
-inlineE :: Env -> Exp -> FreshIO Exp
+inlineE :: Env -> Exp -> FreshIO c Exp
 inlineE env (Exp l arg sty key) =
     case (l, arg) of
         (SLiteral, _) -> cast <$> inlineV env (Value l arg sty key)
@@ -134,10 +134,11 @@ inlineE env (Exp l arg sty key) =
         (SPair, _)     -> cast <$> inlineV env (Value l arg sty key)
         (SLambda, _)     -> cast <$> inlineV env (Value l arg sty key)
         (SLet, (x, e1@(LExp l1 arg1 sty1 key1), e2)) ->
-            let defaultCase e1' = do
+            let defaultCase :: LExp -> FreshIO c Exp
+                defaultCase e1' = do
                     e2' <- inlineE env e2 
                     return $ mkLet x e1' e2' key
-                valueCase :: Value -> FreshIO Exp
+                valueCase :: Value -> FreshIO c Exp
                 valueCase v1 = do
                     v1'@(Value l1' _ _ _) <- inlineV env v1
                     case l1' of
@@ -188,7 +189,7 @@ inlineE env (Exp l arg sty key) =
         (SOmega, _) -> return $ Exp l arg sty key
                             
         
-straightE :: Exp -> Type -> (LExp -> FreshIO Exp) -> FreshIO Exp
+straightE :: Exp -> Type -> (LExp -> FreshIO c Exp) -> FreshIO c Exp
 straightE (Exp l arg sty key) ty_cont cont =  -- ty_cont is the type of answer expression
     case (l, arg) of
         (SLiteral, _) -> cont (LExp l arg sty key)
@@ -204,7 +205,7 @@ straightE (Exp l arg sty key) ty_cont cont =  -- ty_cont is the type of answer e
         (SFail, _) -> pure $ mkFail ty_cont key
         (SOmega, _) -> pure $ mkOmega ty_cont key
 
-inline :: InlineLimit -> Program -> FreshIO Program
+inline :: InlineLimit -> Program -> FreshIO c Program
 inline _limit prog = doit
     where
     edges :: [(Int,Int)]
@@ -258,7 +259,7 @@ inline _limit prog = doit
                 -}
         return $ Program fs' e0'
 
-    go :: [(TId,UniqueKey, [TId], Exp)] -> Env -> FreshIO ([(TId,UniqueKey, [TId], Exp)], Env)
+    go :: [(TId,UniqueKey, [TId], Exp)] -> Env -> FreshIO c ([(TId,UniqueKey, [TId], Exp)], Env)
     go ((f,key,xs,e):fs) !inlineEnv = do
         e' <- inlineE inlineEnv e
         inlineEnv1 <- 

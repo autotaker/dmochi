@@ -4,6 +4,7 @@ import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
 import Language.DMoCHi.ML.Syntax.UnTyped(Type(..), TypeScheme, SynonymDef(..))
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.Common.Id hiding(identify, refresh)
+import Language.DMoCHi.Common.Util
 import qualified Language.DMoCHi.Common.Id as Id(identify, refresh)
 import Control.Monad.Except
 import Control.Monad.Reader
@@ -163,10 +164,10 @@ instance Traversable Exp where
                 <*> traverse f e1 
                 <*> traverse f e2
 
-type M a = ReaderT (M.Map String (Var (Maybe Type))) (ExceptT AlphaError FreshIO) a
+type M a = ReaderT (M.Map String (Var (Maybe Type))) (ExceptT AlphaError (FreshIO ())) a
 
-alpha :: U.Program -> FreshIO (Either AlphaError (Program (Maybe Type)))
-alpha (U.Program fs syns t0) = runExceptT $ do
+alpha :: U.Program -> ExceptT AlphaError (FreshIO ()) (Program (Maybe Type))
+alpha (U.Program fs syns t0) = do
     env <- M.fromList <$> mapM (\(x,_,_) -> fmap (U.varName x,) (identify x)) fs
     when (M.size env /= length fs) $ do
         let fs' = map head $ filter ((>1).length) $ group $ sort $ map (\(x,_,_) -> U.varName x) fs
@@ -191,13 +192,13 @@ identify :: MonadId m => U.AnnotVar String a -> m (U.AnnotVar (Id String) a)
 identify (U.V "" ty) = U.V <$> Id.identify "tmp" <*> pure ty
 identify (U.V x ty) = U.V <$> Id.identify x <*> pure ty
 
-renameS :: U.TypeScheme -> ExceptT AlphaError FreshIO  U.TypeScheme
+renameS :: U.TypeScheme -> ExceptT AlphaError (FreshIO c)  U.TypeScheme
 renameS (U.TypeScheme tvars ty) = do
     tvars' <- mapM freshId tvars
     ty' <- subst (M.fromList $ zip tvars tvars') ty
     return $ U.TypeScheme tvars' ty'
 
-subst :: M.Map String String -> U.Type -> ExceptT AlphaError FreshIO U.Type
+subst :: M.Map String String -> U.Type -> ExceptT AlphaError (FreshIO c) U.Type
 subst rho = go
     where
     go U.TInt  = pure U.TInt

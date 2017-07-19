@@ -9,7 +9,8 @@ import           Language.DMoCHi.ML.Syntax.Base
 import           Language.DMoCHi.ML.Alpha
 import           Language.DMoCHi.ML.Syntax.UnTyped(AnnotVar(..),SynName, SynonymDef(..), Type(..), TypeScheme(..), Lit(..), toTypeScheme, matchTypeScheme)
 import qualified Language.DMoCHi.Common.Id as Id
-import           Language.DMoCHi.Common.Id(MonadId(..), FreshIO)
+import           Language.DMoCHi.Common.Id(MonadId(..))
+import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.DesugarSynonym
 -- import Debug.Trace
 
@@ -124,7 +125,7 @@ freshType = do
     tname <- Id.freshId "ty"
     return (TVar tname)
 
-infer :: Program (Maybe Type)-> ExceptT InferError FreshIO (Program Type)
+infer :: Program (Maybe Type)-> ExceptT InferError (FreshIO c) (Program Type)
 infer prog = do
     let synEnv = M.fromList [ (synName syn, syn) | syn <- synonyms prog ]
     prog <- evalStateT (do

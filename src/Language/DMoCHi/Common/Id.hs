@@ -1,33 +1,21 @@
 {-# Language FlexibleContexts, FlexibleInstances, UndecidableInstances, MultiParamTypeClasses #-}
-module Language.DMoCHi.Common.Id(UniqueKey, runFreshIO, FreshIO, Id, HasUniqueKey(..)
+module Language.DMoCHi.Common.Id(UniqueKey, runFreshT, FreshT, Id, HasUniqueKey(..)
                                 , MonadId(..), freshId, reserved, reservedKey, maybeReserved, fromReserved
-                                , MonadLogger(..), logMsg, defaultLogger, filterLogger, noLogger, fileLogger
-                                , logInfo, logDebug, LogKey, Logging, updateKey, Assoc
                                 , getName
                                 , refresh, identify) where
 
 import Control.Monad.State
 import qualified Control.Monad.State.Strict as Strict
 import qualified Control.Monad.RWS.Strict as Strict
--- import Control.Applicative
 import Control.Monad.Reader
 import Control.Monad.Writer hiding((<>))
 import Control.Monad.Except
 import Control.Monad.Cont
--- import Data.Functor.Identity
-import Data.Proxy
+import Control.Monad.CTrace
+import Control.Monad.Logger
 import Text.Parsec(ParsecT)
 import Text.PrettyPrint.HughesPJClass
 import Data.Hashable
-import Data.Time
-import Data.Aeson(encode)
-import qualified Data.ByteString.Lazy as B
-import Text.Printf
-import GHC.TypeLits
-import Data.IORef
-import System.IO
-
-import Language.DMoCHi.Common.PolyAssoc
 
 newtype UniqueKey = UniqueKey { unUniqueKey :: Int }
     deriving(Eq,Ord)
@@ -38,56 +26,6 @@ instance Show UniqueKey where
     show (UniqueKey i) = show i
 instance Hashable UniqueKey where
     hashWithSalt salt (UniqueKey i) = hashWithSalt salt i
-
-class Monad m => MonadId m where
-    freshInt :: m Int
-    freshInt = unUniqueKey <$> freshKey 
-    freshKey :: m UniqueKey
-    freshKey = UniqueKey <$> freshInt
-
-class MonadIO m => MonadLogger m where
-    getLogger :: m Logger
-    updateSummary :: (AssocList Logging -> AssocList Logging) -> m ()
-
-data Logging
-
-data LogContext = LogContext { 
-    logger  :: Logger,
-    summary :: IORef (AssocList Logging)
-}
-
-type Logger = LogKey -> Severity -> LogText -> IO ()
-    
-type LogKey = SomeSymbol
-type LogText = String
-
-data Severity 
-  = Debug
-  | Info
-  | Warning
-  | Error
-  deriving(Eq,Ord, Show)
- 
-logMsg :: MonadLogger m => LogKey -> Severity -> String -> m ()
-logMsg (SomeSymbol key) severity s = do
-    timeStamp <- liftIO $ getCurrentTime
-    let logStr = printf "[%-32s],[%s],[%s] %s" 
-                        (show timeStamp) 
-                        (symbolVal key) 
-                        (show severity)
-                        s
-    logger <- getLogger
-    liftIO $ logger (SomeSymbol key) severity logStr
-
-updateKey :: (MonadLogger m, EntryParam Logging k v) => Proxy k -> v -> (v -> v) -> m ()
-updateKey key defVal updateFun = updateSummary (update key defVal updateFun)
-
-logInfo, logDebug :: MonadLogger m => LogKey -> String -> m ()
-logInfo key s = logMsg key Info s
-
-logDebug key s = logMsg key Debug s
-
-newtype FreshIO a = FreshIO { unFreshIO :: LogContext -> Int -> IO (a, Int) }
 
 {- Ident -}
 data Id a = Id !UniqueKey a
@@ -146,6 +84,16 @@ fromReserved _ = error "fromReserved: this is unreserved value"
 getName :: Id a -> a
 getName (Id _ v) = v
 
+class Monad m => MonadId m where
+    freshInt :: m Int
+    freshInt = unUniqueKey <$> freshKey 
+    {-# INLINE freshInt #-}
+    freshKey :: m UniqueKey
+    freshKey = UniqueKey <$> freshInt
+    {-# INLINE freshKey #-}
+
+newtype FreshT m a = FreshT { unFreshT :: Int -> m (Id a) }
+
 {-# INLINE identify #-}
 identify :: MonadId m => a -> m (Id a)
 identify v = do
@@ -158,45 +106,26 @@ refresh (Id _ v) = do
     key <- freshKey
     return $! Id key v
 
-{-# INLINE runFreshIO #-}
-runFreshIO :: Logger -> Handle -> FreshIO a -> IO a
-runFreshIO logger handle m = do
-    ref <- newIORef emptyAssoc
-    let ctx = LogContext logger ref
-    (v, _) <- unFreshIO m ctx 1
-    stat <- readIORef ref
-    B.hPut handle $ encode stat
+{-# INLINE runFreshT #-}
+runFreshT :: Monad m => FreshT m a -> m a
+runFreshT m = do
+    Id _ v <- unFreshT m 1
     return v
 
-noLogger :: Logger 
-noLogger = \_ _ _ -> return ()
-
-defaultLogger :: Logger
-defaultLogger = \_ _ s -> putStrLn s
-
-fileLogger :: Handle -> Logger
-fileLogger h = \_ _ msg -> hPutStrLn h msg
-
-filterLogger :: (LogKey -> Severity -> Bool) -> Logger -> Logger
-filterLogger pred logger = \key s msg ->
-    if pred key s
-    then logger key s msg
-    else return ()
-
-instance Monad FreshIO where
-    return a = FreshIO $ \_ !s -> return (a, s)
+instance Monad m => Monad (FreshT m) where
+    return a = FreshT $ \ !s -> return (Id (UniqueKey s) a)
     {-# INLINE return #-}
-    FreshIO f >>= m = FreshIO $ \ctx s -> 
-        f ctx s >>= \(a, s') -> 
-        unFreshIO (m a) ctx s'
+    FreshT f >>= m = FreshT $ \ !s -> 
+        f s >>= \ (Id s' a) -> 
+        unFreshT (m a) (unUniqueKey s')
     {-# INLINE (>>=) #-}
 
-instance Functor FreshIO where
-    fmap f (FreshIO m) = FreshIO $ \ctx s -> 
-        fmap (\(a, s') -> (f a, s')) (m ctx s)
+instance Functor m => Functor (FreshT m) where
+    fmap f (FreshT m) = FreshT $ \s -> 
+        fmap (\(Id s' a) -> Id s' (f a)) (m s)
     {-# INLINE fmap #-}
 
-instance Applicative FreshIO where
+instance Monad m => Applicative (FreshT m) where
     pure = return
     {-# INLINE pure #-}
     (<*>) = ap
@@ -212,15 +141,78 @@ instance (MonadPlus m) => MonadPlus (FreshT m) where
     mplus m n = FreshT $ unFreshT m `mplus` unFreshT n
 -}
 
+mapFreshT :: (m (Id a) -> m' (Id b)) -> FreshT m a -> FreshT m' b
+mapFreshT f m = FreshT $ f . unFreshT m
 
-instance MonadIO FreshIO where
-    liftIO m = FreshIO $ \_ s -> m >>= \a -> pure (a,s)
+instance MonadIO m => MonadIO (FreshT m) where
+    liftIO m = FreshT $ \s -> fmap (Id (UniqueKey s)) (liftIO m)
     {-# INLINE liftIO #-}
 
-instance MonadFix FreshIO where
-    mfix f = FreshIO $ \ctx s -> mfix $ \ ~(a, _) -> unFreshIO (f a) ctx s
+instance MonadFix m => MonadFix (FreshT m) where
+    -- mfix :: (a -> m a) -> m a
+    mfix f = FreshT $ \s -> mfix $ \v -> unFreshT (f (getName v)) s
     {-# INLINE mfix #-}
 
+instance Monad m => MonadId (FreshT m) where
+    freshInt = FreshT $ \s -> return (Id (UniqueKey $ s+1) s)
+    {-# INLINE freshInt #-}
+
+instance MonadTrans FreshT where
+    lift m = FreshT $ \s -> (Id (UniqueKey s)) <$> m
+    {-# INLINE lift #-}
+
+instance MonadTrace c m => MonadTrace c (FreshT m) where
+    update = lift . update
+    {-# INLINE update #-}
+    zoom' = mapFreshT . zoom'
+    {-# INLINE zoom' #-}
+
+instance MonadLogger m => MonadLogger (FreshT m) where
+    monadLoggerLog l s v msg = lift (monadLoggerLog l s v msg)
+    {-# INLINE monadLoggerLog #-}
+ 
+instance MonadId m => MonadId (ReaderT r m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+instance MonadId m => MonadId (ParsecT s u m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+instance (Monoid w,MonadId m) => MonadId (WriterT w m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+instance MonadId m => MonadId (ExceptT e m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+instance MonadId m => MonadId (StateT s m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+instance MonadId m => MonadId (Strict.StateT s m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+instance (MonadId m, Monoid w) => MonadId (Strict.RWST r w s m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+instance (MonadId m) => MonadId (ContT r m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+instance (MonadId m) => MonadId (LoggingT m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+instance (MonadId m) => MonadId (TracerT c m) where
+    freshInt = lift freshInt
+    {-# INLINE freshInt #-}
+
+
+{-
 instance MonadLogger FreshIO where
     getLogger = FreshIO $ \ctx s -> return (logger ctx,s)
     {-# INLINE getLogger #-}
@@ -228,87 +220,46 @@ instance MonadLogger FreshIO where
         modifyIORef' (summary ctx) f
         return ((), s)
     {-# INLINE updateSummary #-}
-
-instance MonadId FreshIO where
-    freshInt = FreshIO $ \_ s -> return (s, s+1)
-    {-# INLINE freshInt #-}
-
-instance MonadId m => MonadId (ReaderT r m) where
-    freshInt = lift freshInt
-    {-# INLINE freshInt #-}
-
 instance MonadLogger m => MonadLogger (ReaderT r m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
     updateSummary = lift . updateSummary
     {-# INLINE updateSummary #-}
 
-instance MonadId m => MonadId (ParsecT s u m) where
-    freshInt = lift freshInt
-    {-# INLINE freshInt #-}
-
 instance MonadLogger m => MonadLogger (ParsecT s u m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
     updateSummary = lift . updateSummary
     {-# INLINE updateSummary #-}
-
-instance (Monoid w,MonadId m) => MonadId (WriterT w m) where
-    freshInt = lift freshInt
-    {-# INLINE freshInt #-}
-
 instance (Monoid w, MonadLogger m) => MonadLogger (WriterT w m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
     updateSummary = lift . updateSummary
     {-# INLINE updateSummary #-}
-
-instance MonadId m => MonadId (ExceptT e m) where
-    freshInt = lift freshInt
-    {-# INLINE freshInt #-}
-
 instance MonadLogger m => MonadLogger (ExceptT e m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
     updateSummary = lift . updateSummary
     {-# INLINE updateSummary #-}
-
-instance MonadId m => MonadId (StateT s m) where
-    freshInt = lift freshInt
-    {-# INLINE freshInt #-}
-
 instance MonadLogger m => MonadLogger (StateT s m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
     updateSummary = lift . updateSummary
     {-# INLINE updateSummary #-}
-
-instance MonadId m => MonadId (Strict.StateT s m) where
-    freshInt = lift freshInt
-    {-# INLINE freshInt #-}
-
 instance MonadLogger m => MonadLogger (Strict.StateT s m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
     updateSummary = lift . updateSummary
     {-# INLINE updateSummary #-}
-
-instance (MonadId m, Monoid w) => MonadId (Strict.RWST r w s m) where
-    freshInt = lift freshInt
-    {-# INLINE freshInt #-}
-
 instance (MonadLogger m, Monoid w) => MonadLogger (Strict.RWST r w s m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
     updateSummary = lift . updateSummary
     {-# INLINE updateSummary #-}
-
-instance (MonadId m) => MonadId (ContT r m) where
-    freshInt = lift freshInt
-    {-# INLINE freshInt #-}
-
 instance MonadLogger m => MonadLogger (ContT r m) where
     getLogger = lift getLogger
     {-# INLINE getLogger #-}
     updateSummary = lift . updateSummary
     {-# INLINE updateSummary #-}
+    -}
+

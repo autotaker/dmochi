@@ -13,6 +13,12 @@ import qualified Language.DMoCHi.Boolean.PrettyPrint.Typed as B
 import qualified Language.DMoCHi.ML.SMT as SMT
 import Language.DMoCHi.ML.Syntax.PType
 import Language.DMoCHi.Common.Id
+import Language.DMoCHi.Common.Util
+import Data.PolyDict(Assoc,Dict)
+import Data.Time(NominalDiffTime)
+
+data Abst
+type instance Assoc Abst "elapsed_time" = NominalDiffTime
 
 type PVar = [(B.Term, Formula)]
 -- getSort (abstFormulae cs pv fmls) == TBool^(length fmls)
@@ -315,8 +321,8 @@ printTypeMap tbl = forM_ (M.assocs tbl) $ \(i,pty') ->
         Left pty -> putStrLn $ render $ pPrint i <+> colon <+> pprintPType 0 pty
         Right termType -> putStrLn $ render $ pPrint i <+> colon <+> pprintTermType termType
 
-abstProg :: TypeMap -> ML.Program -> FreshIO B.Program
-abstProg tbl (ML.Program fs t0) = do
+abstProg :: TypeMap -> ML.Program -> FreshIO (Dict Abst) B.Program
+abstProg tbl (ML.Program fs t0) = measure #elapsed_time $ do
     liftIO $ putStrLn "current abstraction type environment {"
     liftIO $ printTypeMap tbl 
     liftIO $ putStrLn "}"

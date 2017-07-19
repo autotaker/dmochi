@@ -7,11 +7,16 @@ import qualified Language.DMoCHi.Boolean.Flow2 as Flow2
 import qualified Language.DMoCHi.Boolean.Type3 as Sat
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as Typed
 import           Language.DMoCHi.Common.Util
-import           Language.DMoCHi.Common.Id
 import Language.DMoCHi.Boolean.Syntax
 import Control.Monad.Except
 import qualified Data.Map as M
 import Text.Printf
+import Data.PolyDict
+import Data.Time(NominalDiffTime)
+
+data Boolean
+type instance Assoc Boolean "cfa" = NominalDiffTime
+type instance Assoc Boolean "saturation" = NominalDiffTime
 
 test :: MonadIO m => FilePath -> Program -> ExceptT String m (Maybe [Bool])
 test path input = do
@@ -30,17 +35,14 @@ test path input = do
     (b,_ctx) <- liftIO $ saturate p g
     return b
 
-type instance Assoc Logging "Bool.Saturation" = Double
-type instance Assoc Logging "Bool.0CFA" = Double
-
-testTyped :: (MonadIO m,MonadLogger m) => FilePath -> Typed.Program -> ExceptT String m (Maybe [Bool])
+testTyped :: (MonadIO m, MonadLogger m, MonadTrace (Dict Boolean) m) => FilePath -> Typed.Program -> ExceptT String m (Maybe [Bool])
 testTyped path p = do
     let graph_path = path ++ ".typed.dot"
-    p_flow <- measure $(logKey "Bool.0CFA") $ do
+    p_flow <- measure #cfa $ do
         let p_flow = Flow2.buildGraph p
         liftIO $ writeFile graph_path $ Flow2.ppGraph (Flow2.termTable p_flow) (Flow2.cfg p_flow)
         return p_flow
-    measure $(logKey "Bool.Saturation") $ do
+    measure #saturation $ do
         b <- liftIO $ Sat.saturate p_flow
         liftIO $ printf "Typed saturation result %s\n" (show b)
         return b

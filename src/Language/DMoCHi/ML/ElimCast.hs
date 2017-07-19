@@ -4,6 +4,7 @@ module Language.DMoCHi.ML.ElimCast(elimCast) where
 import Control.Monad
 import Language.DMoCHi.ML.Syntax.PNormal
 import Language.DMoCHi.Common.Id
+import Language.DMoCHi.Common.Util
 
 import Language.DMoCHi.ML.Syntax.PType
 import qualified Data.Map as M
@@ -15,7 +16,7 @@ import qualified Data.Map as M
  - This type casting is eliminated by replacing av with 
  - (fun x1 .. xn -> let f = av in ElimCast(f x1 .. xn)) :: Value
  -}
-elimCastFunDef :: TypeMap -> Env -> (UniqueKey, [TId], Exp) -> PType -> FreshIO (UniqueKey, [TId], Exp)
+elimCastFunDef :: TypeMap -> Env -> (UniqueKey, [TId], Exp) -> PType -> FreshIO c (UniqueKey, [TId], Exp)
 elimCastFunDef tbl env (ident,ys,e) sigma = 
     (,,) ident ys <$> elimCastTerm tbl env' e retTy'
         where
@@ -25,7 +26,7 @@ elimCastFunDef tbl env (ident,ys,e) sigma =
         env' = foldr (uncurry M.insert) env (zip ys ty_ys)
         retTy' = substTermType subst retTy
 
-elimCastValue :: TypeMap -> Env -> Value -> PType -> FreshIO Value
+elimCastValue :: TypeMap -> Env -> Value -> PType -> FreshIO c Value
 elimCastValue tbl env v@(Value l arg sty key) sigma = case (l,arg) of
     (SLambda, (xs, e)) -> do
         (_, _, e') <- elimCastFunDef tbl env (key,xs,e) sigma
@@ -65,15 +66,15 @@ elimCastValue tbl env v@(Value l arg sty key) sigma = case (l,arg) of
                     v2' <- elimCastValue tbl env v2 sigma2
                     return $ mkPair v1' v2' key
 
-elimCastLet :: TypeMap -> Env -> TId -> LExp -> Exp -> UniqueKey -> TermType -> FreshIO Exp
+elimCastLet :: TypeMap -> Env -> TId -> LExp -> Exp -> UniqueKey -> TermType -> FreshIO c Exp
 elimCastLet tbl env x e1@(LExp l arg sty key1) e2 key tau =
-    let atomCase :: Atom -> FreshIO Exp
+    let atomCase :: Atom -> FreshIO c Exp
         atomCase av = do
             let x_ty = typeOfAtom env av
                 env' = M.insert x x_ty env
             e2' <- elimCastTerm tbl env' e2 tau
             return $ mkLet x e1 e2' key
-        valueCase :: Value -> FreshIO Exp
+        valueCase :: Value -> FreshIO c Exp
         valueCase v = do
             let r_ty' = substVPType (M.singleton r v) r_ty
                 env' = M.insert x r_ty' env
@@ -83,7 +84,7 @@ elimCastLet tbl env x e1@(LExp l arg sty key1) e2 key tau =
         Right tau1@(r, r_ty, _) = case M.lookup key1 tbl of 
             Nothing -> error $ show key1
             Just v -> v
-        exprCase :: LExp -> FreshIO Exp
+        exprCase :: LExp -> FreshIO c Exp
         exprCase e1' = do
             let subst = M.singleton r x
                 r_ty' = substPType subst r_ty
@@ -118,9 +119,9 @@ elimCastLet tbl env x e1@(LExp l arg sty key1) e2 key tau =
         (SFail, _)    -> exprCase e1
         (SOmega, _)   -> exprCase e1
 
-elimCastTerm :: TypeMap -> Env -> Exp -> TermType -> FreshIO Exp
+elimCastTerm :: TypeMap -> Env -> Exp -> TermType -> FreshIO c Exp
 elimCastTerm tbl env (Exp l arg sty key) tau = 
-    let valueCase :: Value -> FreshIO Exp
+    let valueCase :: Value -> FreshIO c Exp
         valueCase v = cast <$> elimCastValue tbl env v r_ty'
             where
             (r, r_ty, _) = tau 
@@ -154,7 +155,7 @@ elimCastTerm tbl env (Exp l arg sty key) tau =
         e2' <- elimCastTerm tbl env e2 tau
         return $ mkBranch e1' e2' key
         
-elimCast :: TypeMap -> Program -> FreshIO Program
+elimCast :: TypeMap -> Program -> FreshIO c Program
 elimCast tbl prog = do
     let env = M.fromList [ (f, ty) | (f, key, _, _) <- functions prog, let Left ty = tbl M.! key ]
     fs <- forM (functions prog) $ \(f, key, xs, e) -> do

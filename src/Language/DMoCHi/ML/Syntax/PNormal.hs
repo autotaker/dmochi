@@ -15,10 +15,10 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , module Language.DMoCHi.ML.Syntax.Base )where
 -- import Control.Monad
 import Language.DMoCHi.Common.Id
+import Language.DMoCHi.Common.Util
 -- import qualified Data.Map as M
 import qualified Data.Set as S
 import GHC.Exts(Constraint)
-import Data.Proxy
 -- import Data.Char
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.Base
@@ -337,7 +337,7 @@ instance Show Atom where
 instance Show LExp where
     show = render . pPrint 
 
-normalize :: Typed.Program -> FreshIO Program
+normalize :: Typed.Program -> FreshIO c Program
 normalize prog = Program <$> mapM (\(f,i,xs,e) -> (,,,) f i xs <$> evalContT (convertE e)) (Typed.functions prog)
                          <*> evalContT (convertE (Typed.mainTerm prog))
 

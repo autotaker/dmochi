@@ -13,8 +13,9 @@ import qualified Language.DMoCHi.ML.Alpha as U
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U(AnnotVar(..),SynName, SynonymDef(..), Type(..), TypeScheme(..), Lit(..), matchType)
 import qualified Language.DMoCHi.Common.Id as Id
 import Language.DMoCHi.ML.TypeInfer
-import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey, FreshIO, getUniqueKey)
+import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey, getUniqueKey)
 import Language.DMoCHi.ML.DesugarSynonym
+import Language.DMoCHi.Common.Util
 import Debug.Trace
 
 instance Show TypeError where
@@ -37,7 +38,7 @@ data TypeError = UndefinedVariable String
                | OtherError String
                deriving(Eq)
 
-fromUnTyped :: U.Program (Maybe U.Type) -> ExceptT TypeError FreshIO Program
+fromUnTyped :: U.Program (Maybe U.Type) -> ExceptT TypeError (FreshIO c) Program
 fromUnTyped _prog = do
     prog <- withExceptT Infer (infer _prog)
     prog <- copyPoly prog
@@ -231,7 +232,7 @@ cast e ty = do
     return $ Exp SLet (x, e, e') ty key
 
 
-convertE :: SynEnv -> Env -> U.Exp U.Type -> ExceptT TypeError FreshIO Exp
+convertE :: SynEnv -> Env -> U.Exp U.Type -> ExceptT TypeError (FreshIO c) Exp
 convertE synEnv env (U.Exp l arg (ty,key)) = do
     let conv ty = case convertType synEnv ty of
             Left err -> throwError (Synonym err)
@@ -335,7 +336,7 @@ convertE synEnv env (U.Exp l arg (ty,key)) = do
         (SRand, ()) -> shouldBe (key,env) sty TInt >> return (Exp l () sty key)
     cast e sty
                 
-typeOfUniOp :: Env -> SUniOp op -> Type -> UniqueKey -> (Type -> ExceptT TypeError FreshIO b) -> ExceptT TypeError FreshIO b
+typeOfUniOp :: Env -> SUniOp op -> Type -> UniqueKey -> (Type -> ExceptT TypeError (FreshIO c) b) -> ExceptT TypeError (FreshIO c) b
 typeOfUniOp _ SFst sty1 _key1 k = do
     case sty1 of
         TPair sty' _ -> k sty'
@@ -352,7 +353,7 @@ typeOfUniOp env SNeg sty1 key1 k = do
     k TInt
         
 typeOfBinOp :: Env -> SBinOp op -> Type -> UniqueKey -> Type -> UniqueKey -> 
-               (Type -> ExceptT TypeError FreshIO b) -> ExceptT TypeError FreshIO b 
+               (Type -> ExceptT TypeError (FreshIO c) b) -> ExceptT TypeError (FreshIO c) b 
 typeOfBinOp env op sty1 key1 sty2 key2 k = (case op of
     SAdd -> intOp TInt
     SSub -> intOp TInt

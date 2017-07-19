@@ -6,11 +6,14 @@ import Language.DMoCHi.Common.Util
 import Language.DMoCHi.Common.Id
 import Text.PrettyPrint(render)
 import Control.Monad.Except
-import Language.DMoCHi.Boolean.Test(test,testTyped)
+import Language.DMoCHi.Boolean.Test(test,testTyped, Boolean)
 import Data.Monoid((<>))
 import Text.Printf
-import Options.Applicative
+import Options.Applicative hiding(empty)
 import System.IO
+import Data.PolyDict
+import Data.Aeson
+import Data.Time
 
 data Mode = Typed | UnTyped
 data Config = Config { mode :: Mode
@@ -22,33 +25,35 @@ config = Config <$> (flag UnTyped Typed ( long "typed"
                                         <> help "enable typed model checking"))
                 <*> (argument str (metavar "FILE"))
 
-type instance Assoc Logging "Bool.Total" = Double
+type instance Assoc Boolean "total" = NominalDiffTime
 
 main :: IO ()
 main = do
     let opts = info (helper <*> config)
-                    (fullDesc <> progDesc "Check the safety for boolena programs"
+                    (fullDesc <> progDesc "Check the safety for boolean programs"
                               <> header "hiboch - Higher-order Boolean Model Checker")
     conf <- liftIO $ execParser opts
     let path = arg conf
 
-    runFreshIO defaultLogger stdout $ measure $(logKey "Bool.Total") $ do
-        res <- runExceptT $ do
-            p <- withExceptT show $ ExceptT $ liftIO $ parseFile path
-            liftIO $ putStrLn $ render $ pprintProgram p
-            let s_boolean_program = Typed.size p
-            case runExcept (Typed.tCheck p) of
-                Left (s1,s2,str,ctx) -> do 
-                    liftIO $ do
-                        printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
-                        forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
-                            printf "Context %d: %s\n" i (show t)
-                    throwError "Input Program is ill-typed!"
-                Right _ -> return ()
-            case mode conf of
-                Typed   -> testTyped path p
-                UnTyped -> test path (Typed.toUnTyped p)
-            liftIO $ printf "\tBoolean Program Size  : %5d\n" s_boolean_program
-        case res of
-            Left err -> liftIO $ putStrLn err
-            Right r -> liftIO $ print r
+    ((), d) <- runStdoutLoggingT $ runFreshT $ ioTracerT empty $ 
+        measure #total $ do
+            res <- runExceptT $ do
+                p <- withExceptT show $ ExceptT $ liftIO $ parseFile path
+                liftIO $ putStrLn $ render $ pprintProgram p
+                let s_boolean_program = Typed.size p
+                case runExcept (Typed.tCheck p) of
+                    Left (s1,s2,str,ctx) -> do 
+                        liftIO $ do
+                            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+                            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                                printf "Context %d: %s\n" i (show t)
+                        throwError "Input Program is ill-typed!"
+                    Right _ -> return ()
+                case mode conf of
+                    Typed   -> testTyped path p
+                    UnTyped -> test path (Typed.toUnTyped p)
+                liftIO $ printf "\tBoolean Program Size  : %5d\n" s_boolean_program
+            case res of
+                Left err -> liftIO $ putStrLn err
+                Right r -> liftIO $ print r
+    print $ toJSON d

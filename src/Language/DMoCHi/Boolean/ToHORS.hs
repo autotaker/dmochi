@@ -36,7 +36,7 @@ run = do
     case args of
         [path] -> do
             h <- openFile "/dev/null" WriteMode
-            res <- runFreshIO noLogger h $ runExceptT $ doit path
+            res <- runFreshT $ runExceptT $ doit path
 
             case res of
                 Left err -> putStrLn err

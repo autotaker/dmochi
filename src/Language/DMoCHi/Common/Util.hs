@@ -1,11 +1,14 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Language.DMoCHi.Common.Util( rec
                                   , module Data.Function
                                   , module Data.Proxy
-                                  , module GHC.TypeLits
-                                  , logKey
-                                  , access, emptyAssoc, AssocList
                                   , module Lens.Micro
-                                  , measure, measureWithLens) where
+                                  , FreshIO
+                                  , measure
+                                  , KnownSymbol
+                                  , module Control.Monad.Logger
+                                  , module Control.Monad.CTrace
+                                  , measureWithLens) where
 
 import Data.Function
 import Data.Proxy
@@ -14,30 +17,47 @@ import Data.Time
 import Text.Printf
 import Lens.Micro
 import Control.Monad.Except
+import Control.Monad.CTrace
+import Control.Monad.Logger
 import Language.DMoCHi.Common.Id
-import Language.Haskell.TH
-import Language.DMoCHi.Common.PolyAssoc
+import Data.Text(pack)
+import Data.PolyDict
 
 rec :: a -> ((a -> b) -> a -> b) -> b
 rec = flip fix
 
-logKey :: String -> ExpQ
-logKey s = sigE (conE 'Data.Proxy.Proxy) (appT (conT ''Data.Proxy.Proxy) (litT (strTyLit s)))
+measure :: (MonadIO m, MonadLogger m
+           , MonadTrace (Dict n) m
+           , Assoc n k ~ NominalDiffTime
+           , KnownSymbol k) => Key k -> m a -> m a
+measure key doit = 
+    measureWithLens (pack (symbolVal key)) (access' key 0) doit
+{-# INLINE measure #-}    
 
-measure :: (MonadLogger m, EntryParam Logging k Double) => Proxy k -> m a -> m a
-measure header doit = measureWithLens header id doit
 
-measureWithLens :: (MonadLogger m, EntryParam n k Double) => Proxy k -> Lens' (AssocList Logging) (AssocList n) -> m a -> m a
+measureWithLens :: (MonadIO m, MonadLogger m, MonadTrace c m) => LogSource -> Lens' c NominalDiffTime -> m a -> m a
 measureWithLens header lens doit = do
     let f t = fromRational (toRational t) :: Double
     t_start <- liftIO $ getCurrentTime
-    logInfo (SomeSymbol header) "BEGIN"
+    $(logInfoS) header "BEGIN"
     v <- doit
     t_end <- liftIO $ getCurrentTime
-    let time = f $ diffUTCTime t_end t_start
-    logInfo (SomeSymbol header) (printf "END %.5f sec" time)
-    updateSummary (lens . access header . non 0 %~ (+time))
+    let time = diffUTCTime t_end t_start
+    $(logInfoS) header (pack $ printf "END %.5f sec" (f time))
+    update (lens %~ (+time))
     return v
+
+type FreshIO c = TracerT c (FreshT (LoggingT IO))
+
+-- Orphan Instances
+instance MonadLogger m => MonadLogger (TracerT c m) where
+    monadLoggerLog l s v msg = lift $ monadLoggerLog l s v msg
+    {-# INLINE monadLoggerLog #-}
+
+instance MonadFix m => MonadFix (LoggingT m) where
+    mfix f = LoggingT $ \s -> mfix $ \v -> runLoggingT (f v) s
+    {-# INLINE mfix #-}
+
 
 {-
 measureError :: (MonadIO m, MonadError e m) => String -> m a -> m a
