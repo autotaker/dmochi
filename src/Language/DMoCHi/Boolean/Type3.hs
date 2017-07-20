@@ -4,12 +4,13 @@ import Language.DMoCHi.Boolean.IType
 import Language.DMoCHi.Boolean.Flow2 hiding(getId,varId,Context)
 import Language.DMoCHi.Boolean.PrettyPrint.Typed
 import qualified Language.DMoCHi.Boolean.Flow2 as Flow
+import Language.DMoCHi.Common.Util
 import Control.Monad
 import Data.Array
 import Data.Array.IO
 import Data.IORef
 import Control.Monad.Reader
-import Control.Monad.Writer
+import Control.Monad.Writer hiding((<>))
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Prelude hiding(elem)
@@ -18,7 +19,7 @@ import Data.Function(on)
 import qualified Data.Graph as G
 import Control.Applicative
 import Text.Printf
-import Text.PrettyPrint hiding(empty)
+import Text.PrettyPrint.HughesPJClass hiding(empty)
 import qualified Data.Monoid
 
 
@@ -474,8 +475,8 @@ evalFail env fenv tenv _e = case _e of
     Dom _ _ _ -> error "evalFail: unexpected pattern"
     Cod _ _ _ -> error "evalFail: unexpected pattern"
 
-saturate :: Program -> IO (Maybe [Bool])
-saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where
+saturate :: Program -> LoggingT IO (Maybe [Bool])
+saturate prog = liftIO newFactory >>= runReaderT (mapReaderT lift (initContext prog) >>= doit)  where
     q0 = S.singleton (termId (mainTerm prog))
     termTbl = termTable prog
     termNameMap :: M.Map Id (Maybe VarId)
@@ -485,7 +486,7 @@ saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where
         nil <- buildTypeList lnil
         let curFlowEnv = fmap (const nil) (symbols ctx)
         loop 0 q0 curFlowEnv M.empty ctx
-    loop :: Int -> S.Set Int -> M.Map VarId TTypeList -> M.Map VarId VType -> Context -> M (Maybe [Bool])
+    loop :: Int -> S.Set Int -> M.Map VarId TTypeList -> M.Map VarId VType -> Context -> ReaderT Factory (LoggingT IO) (Maybe [Bool])
     loop round queue curFlowEnv env_acc ctx 
         | S.null queue = 
             if M.null env_acc then
@@ -503,31 +504,25 @@ saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where
         | otherwise = do
             let (v,queue') = S.deleteFindMin queue
             let t = termTbl ! v
-            liftIO $ printf "Current Round: %d\n" round
+            logPretty "saturation" LevelDebug "Current Round" round
             case termNameMap M.! v of
-                Just f -> liftIO $ do
-                    printf "Updating Function %s(%d)..." (show $ pprintSym $ name f) (Flow.getId f)
-                Nothing -> liftIO $ do
-                    printf "Updating the main term..."
-            (tau,updateNodes) <- saturateTerm (flowTbl ctx) curFlowEnv (symEnv ctx) t
+                Just f  -> logPretty "saturation" LevelDebug "Updating Function" (PPrinted (pprintSym (name f)), Flow.getId f)
+                Nothing -> logDebugNS "saturation" "Updating the main term..."
+            (tau,updateNodes) <- mapReaderT lift $ saturateTerm (flowTbl ctx) curFlowEnv (symEnv ctx) t
             let k env_acc' = do
-                    liftIO $ printf "Propagating flows for nodes ... %d\n" $ S.size updateNodes
-                    updateVars <- propagateFlow (cfg_inv ctx) termTbl (flowTbl ctx) updateNodes
-                    liftIO $ printf "done.\n"
-                    liftIO $ printf "Updated Variables are:\n" -- $ unwords $ map (show . pprintSym . name) updateVars
-                    curFlowEnv' <- liftIO $ foldM (\acc x -> do
-                        printf "%s(%d):\n" (show $ pprintSym $ name x) (Flow.getId x)
+                    logPretty "saturation" LevelDebug "Propagating flows for nodes ... " (S.size updateNodes)
+                    updateVars <- mapReaderT lift $ propagateFlow (cfg_inv ctx) termTbl (flowTbl ctx) updateNodes
+                    (curFlowEnv',doc) <- liftIO $ foldM (\(acc,acc_doc) x -> do
                         tau <- readArray (flowTbl ctx) (Flow.getId x)
-                        let doc = nest 4 $ vcat [ ppV 0 ty | ty <- unfoldV tau]
-                        print doc
-                        return $ M.insert x tau acc) curFlowEnv updateVars
+                        let doc = hang (pprintSym (name x) <+> pPrint (Flow.getId x) <> colon) 4 $ vcat [ ppV 0 ty | ty <- unfoldV tau]
+                        return $ (M.insert x tau acc, acc_doc $+$ doc)) (curFlowEnv,(mempty ::Doc)) updateVars
+                    logPretty "saturation" LevelDebug "Updated Variables are " (PPrinted doc)
                     let queue'' = foldl' (\acc x -> 
                                             let info = symbols ctx M.! x in
                                             case symType info of
                                                 Arg -> S.insert (termId $ depTerm info) acc
                                                 _   -> acc) queue' updateVars
                     loop round queue'' curFlowEnv' env_acc' ctx
-            liftIO $ putStrLn "done."
             case termNameMap M.! v of
                 Just f -> do -- global func
                     let LCons _ ty _ = tau
@@ -535,24 +530,26 @@ saturate prog = newFactory >>= runReaderT (initContext prog >>= doit)  where
                         VFun _ ty2 = symEnv ctx M.! f
                     ty' <- mergeFun ty1 ty2
                     if ty' === ty2 then do
-                        liftIO $ printf "No updates\n"
+                        logDebugNS "saturation" "No updates"
                         k env_acc
                     else do
-                        liftIO $ printf "New binding for %s(%d): \n" (show $ pprintSym $ name f) (Flow.getId f)
-                        liftIO $ print $ ppF 0 ty'
+                        let title = printf "New binding for %s(%d)" (show $ pprintSym $ name f) (Flow.getId f)
+                        logPretty "saturation" LevelDebug title (PPrinted $ ppF 0 ty')
                         buildType (func ty') >>= k . flip (M.insert f) env_acc
                 Nothing -> do -- main term
                     if isFail tau then do
-                        liftIO $ putStrLn "Unsafe! extracting a counterexample...\n"
-                        ws <- extractCE prog curFlowEnv (symEnv ctx) (envHist ctx)
+                        logInfoNS "saturation" "Unsafe! extracting a counterexample..."
+                        ws <- mapReaderT lift $ extractCE prog curFlowEnv (symEnv ctx) (envHist ctx)
+                        {-
                         let toi :: Bool -> Int
                             toi True  = 1
                             toi False = 0
-                        liftIO $ printf "counterexample is %s\n" (show (map toi ws))
+                        -- liftIO $ printf "counterexample is %s\n" (show (map toi ws))
+                        -}
                         return $ Just ws
                     else k env_acc
 
-mergeFun :: VFunType -> VFunType -> M VFunType
+mergeFun :: (MonadReader Factory m, MonadIO m) => VFunType -> VFunType -> m VFunType
 mergeFun (VNil _) t2 = return t2
 mergeFun t1 (VNil _) = return t1
 mergeFun t1@(VAnd _ vx1 vt1 t1') t2@(VAnd _ vx2 vt2 t2') 

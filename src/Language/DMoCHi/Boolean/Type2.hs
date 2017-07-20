@@ -6,18 +6,19 @@ import Control.Arrow(second)
 import Control.Applicative
 import Language.DMoCHi.Boolean.Syntax
 import Language.DMoCHi.Boolean.Flow(FlowGraph,Id)
+import Language.DMoCHi.Common.Util
 import Control.Monad
 import Data.Array
 import Data.Array.IO
 import Data.Maybe
 import Data.IORef
 import Control.Monad.Reader
-import Control.Monad.Writer
+import Control.Monad.Writer hiding((<>))
 import Control.Monad.State
 import Data.List hiding (elem)
 import Prelude hiding(elem)
 import Data.Function(on)
-import Text.PrettyPrint
+import Text.PrettyPrint.HughesPJClass
 import Text.Printf
 import Data.Time
 import Language.DMoCHi.Boolean.IType
@@ -76,13 +77,10 @@ assignId (If _ b t1 t2 t3) = do
 
 type M a = ReaderT Factory IO a
 
-
-
 data Context = Context { flowEnv :: M.Map Symbol TTypeList
                        , symEnv  :: M.Map Symbol  VType 
                        , flowTbl :: IOArray Id TTypeList
                        , symHist :: [(M.Map Symbol TTypeList, M.Map Symbol VType)]} deriving(Eq)
-
 
 saturateFlow ::  (Array Id [Id], M.Map Symbol Id, Array Id (Maybe (Term (Id,S.Set String)))) -> M.Map Symbol VType -> IOArray Id TTypeList -> M (M.Map Symbol TTypeList)
 saturateFlow (edgeTbl,symMap,leafTbl) env arr = do
@@ -253,7 +251,7 @@ saturateTerm _flowEnv _env _t = incr termCounter >> go 1 _env _t where
                         t0 <- {-# SCC buildTypeList463 #-} buildTypeList lnil
                         foldM (\acc _t -> {-# SCC buildTypeList464 #-} buildTypeList $ lcons _t acc) t0 sorted
 
-initContext :: Program -> FlowGraph -> M Context
+initContext :: (MonadReader Factory m, MonadIO m) => Program -> FlowGraph -> m Context
 initContext (Program defs _) (_,mapSym,leafTbl) = do
     nil <- buildTypeList lnil
     ty  <- buildFunType fnil >>= buildType . func
@@ -407,41 +405,39 @@ extractCE prog flowEnv genv hist =
     telem (TPrim v) ts = elem v ts
 
 
-saturate :: Program -> FlowGraph -> IO (Maybe [Bool],Context)
-saturate p flow = newFactory >>= runReaderT (loop (0::Int) =<< initContext p flow) where
+saturate :: Program -> FlowGraph -> LoggingT IO (Maybe [Bool],Context)
+saturate p flow = liftIO newFactory >>= runReaderT (loop (0::Int) =<< initContext p flow) where
     t0' = assignId' (mainTerm p)
     ds' = map (second assignId') (definitions p)
     flow' = let (a,b,c) = flow in (a,b,fmap (fmap assignId') c)
     loop i ctx = do
-        liftIO $ putStrLn "saturating flow...."
-        env1 <- saturateFlow flow' (symEnv ctx) (flowTbl ctx)
-        liftIO $ putStrLn "updating env..."
-        env2 <- saturateSym env1 (symEnv ctx) ds'
+        logInfoNS "saturate" "saturating flow..."
+        -- ReaderT IO ~ ReaderT (LoggingT IO)
+        env1 <- mapReaderT lift $ saturateFlow flow' (symEnv ctx) (flowTbl ctx)
+        logInfoNS "saturate" "updating env..."
+        env2 <- mapReaderT lift $ saturateSym env1 (symEnv ctx) ds'
         factory <- ask
-        liftIO $ do
-            putStrLn "----------ENV----------" 
-            forM_ (M.assocs env2) $ \ (x,l) -> do
-                putStrLn $ x ++ " " ++ show (getId l) ++ ":" 
-                putStrLn $ render $ nest 4 $ ppV 0 l
-                putStrLn ""
-            printf                                      "Round   :%8d\n" i
-            readIORef (counter      factory) >>= printf "Counter :%8d\n"
-            readIORef (queryCounter factory) >>= printf "Queries :%8d\n"
-            readIORef (mergeCounter factory) >>= printf "Merge   :%8d\n"
-            readIORef (applyCounter factory) >>= printf "Apply   :%8d\n"
-            readIORef (insertCounter factory)>>= printf "Insert  :%8d\n"
-            readIORef (singleCounter factory)>>= printf "Single  :%8d\n"
-            readIORef (termCounter factory)  >>= printf "Term    :%8d\n"
-            readIORef (costCounter factory)  >>= printf "Cost    :%8d\n"
-            readIORef (combCounter factory)  >>= printf "Comb    :%8d\n"
-            putStrLn ""
-        t0 <- saturateTerm env1 env2 t0'
+        do
+            logDebugNS "saturate" "----------ENV----------"
+            logPretty "saturate" LevelDebug "environment" $
+                PPrinted $ braces $ vcat $ punctuate comma $ 
+                    flip map (M.assocs env2) $ \(x,l) -> hang (text x <+> pPrint (getId l) <> colon) 4 (ppV 0 l)
+            logPretty "saturate" LevelDebug "Round" i
+            liftIO (readIORef (counter      factory)) >>= logPretty "saturate" LevelDebug "Counter"
+            liftIO (readIORef (queryCounter factory)) >>= logPretty "saturate" LevelDebug "Queries"
+            liftIO (readIORef (mergeCounter factory)) >>= logPretty "saturate" LevelDebug "Merge"
+            liftIO (readIORef (applyCounter factory)) >>= logPretty "saturate" LevelDebug "Apply"
+            liftIO (readIORef (insertCounter factory))>>= logPretty "saturate" LevelDebug "Insert"
+            liftIO (readIORef (singleCounter factory))>>= logPretty "saturate" LevelDebug "Single"
+            liftIO (readIORef (termCounter factory))  >>= logPretty "saturate" LevelDebug "Term"
+            liftIO (readIORef (costCounter factory))  >>= logPretty "saturate" LevelDebug "Cost"
+            liftIO (readIORef (combCounter factory))  >>= logPretty "saturate" LevelDebug "Comb"
+        t0 <- mapReaderT lift $ saturateTerm env1 env2 t0'
         let ctx' = Context env1 env2 (flowTbl ctx) ((env1, symEnv ctx):symHist ctx)
         case t0 of
             LFail _ -> do
-                liftIO $ putStrLn "extracting a counterexample"
-                ws <- extractCE p env1 env2 (symHist ctx')
-                liftIO $ print ws
+                logInfoNS "saturate" "extracting a counterexample"
+                ws <- mapReaderT lift $ extractCE p env1 env2 (symHist ctx')
                 return (Just ws,ctx')
             _ | env2 == symEnv ctx -> return (Nothing,ctx')
               | otherwise          -> loop (i+1) ctx'

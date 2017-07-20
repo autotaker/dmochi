@@ -1,4 +1,5 @@
-module Language.DMoCHi.ML.Inline where
+{-# LANGUAGE OverloadedStrings #-}
+module Language.DMoCHi.ML.Inline(inline) where
 
 import Language.DMoCHi.ML.Syntax.PNormal
 import Language.DMoCHi.Common.Id
@@ -8,9 +9,9 @@ import qualified Data.Map as M
 import Data.Graph
 import Data.Tree
 import Control.Monad
-import Control.Monad.IO.Class
 import Data.Array
 import Text.Printf
+import qualified Data.Text as Text
 
 type InlineLimit = Int
 type Env = M.Map TId Value
@@ -94,7 +95,7 @@ alphaL renv (LExp l arg sty key) =
             mkApp f' vs' <$> freshKey
 
         
-inlineA :: Env -> Atom -> FreshIO c Value
+inlineA :: MonadId m => Env -> Atom -> m Value
 inlineA env (Atom l arg sty) =
     case (l, arg) of
         (SLiteral, _) -> Value l arg sty <$> freshKey
@@ -114,7 +115,7 @@ inlineA env (Atom l arg sty) =
                     let Just a1' = atomOfValue v'
                     castWith <$> freshKey <*> pure (mkUni op a1')
 
-inlineV :: Env -> Value -> FreshIO c Value
+inlineV :: MonadId m => Env -> Value -> m Value
 inlineV env (Value l arg sty key) = 
     case (l, arg) of
         (SLiteral, _) -> inlineA env (Atom l arg sty)
@@ -124,7 +125,7 @@ inlineV env (Value l arg sty key) =
         (SPair, (v1, v2)) -> mkPair <$> inlineV env v1 <*> inlineV env v2 <*> pure key
         (SLambda, (xs, e)) -> mkLambda xs <$> inlineE env e <*> pure key
 
-inlineE :: Env -> Exp -> FreshIO c Exp
+inlineE :: forall m. MonadId m => Env -> Exp -> m Exp
 inlineE env (Exp l arg sty key) =
     case (l, arg) of
         (SLiteral, _) -> cast <$> inlineV env (Value l arg sty key)
@@ -134,11 +135,11 @@ inlineE env (Exp l arg sty key) =
         (SPair, _)     -> cast <$> inlineV env (Value l arg sty key)
         (SLambda, _)     -> cast <$> inlineV env (Value l arg sty key)
         (SLet, (x, e1@(LExp l1 arg1 sty1 key1), e2)) ->
-            let defaultCase :: LExp -> FreshIO c Exp
+            let defaultCase :: LExp -> m Exp
                 defaultCase e1' = do
                     e2' <- inlineE env e2 
                     return $ mkLet x e1' e2' key
-                valueCase :: Value -> FreshIO c Exp
+                valueCase :: Value -> m Exp
                 valueCase v1 = do
                     v1'@(Value l1' _ _ _) <- inlineV env v1
                     case l1' of
@@ -189,7 +190,7 @@ inlineE env (Exp l arg sty key) =
         (SOmega, _) -> return $ Exp l arg sty key
                             
         
-straightE :: Exp -> Type -> (LExp -> FreshIO c Exp) -> FreshIO c Exp
+straightE :: MonadId m => Exp -> Type -> (LExp -> m Exp) -> m Exp
 straightE (Exp l arg sty key) ty_cont cont =  -- ty_cont is the type of answer expression
     case (l, arg) of
         (SLiteral, _) -> cont (LExp l arg sty key)
@@ -205,7 +206,7 @@ straightE (Exp l arg sty key) ty_cont cont =  -- ty_cont is the type of answer e
         (SFail, _) -> pure $ mkFail ty_cont key
         (SOmega, _) -> pure $ mkOmega ty_cont key
 
-inline :: InlineLimit -> Program -> FreshIO c Program
+inline :: InlineLimit -> Program -> FreshLogging Program
 inline _limit prog = doit
     where
     edges :: [(Int,Int)]
@@ -259,12 +260,12 @@ inline _limit prog = doit
                 -}
         return $ Program fs' e0'
 
-    go :: [(TId,UniqueKey, [TId], Exp)] -> Env -> FreshIO c ([(TId,UniqueKey, [TId], Exp)], Env)
+    go :: [(TId,UniqueKey, [TId], Exp)] -> Env -> FreshLogging ([(TId,UniqueKey, [TId], Exp)], Env)
     go ((f,key,xs,e):fs) !inlineEnv = do
         e' <- inlineE inlineEnv e
         inlineEnv1 <- 
             if not (recursive f) && small e' then do
-                liftIO $ printf "Select %s as an inline function...\n" (show (name f))
+                logInfoNS "inline" $ Text.pack $ printf "Select %s as an inline function..." (show (name f))
                 return $ M.insert f (mkLambda xs e' key) inlineEnv
             else return $ inlineEnv
         (fs',inlineEnv') <- go fs inlineEnv1

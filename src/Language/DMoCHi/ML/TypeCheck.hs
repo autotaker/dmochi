@@ -8,7 +8,6 @@ import Data.IORef
 import Language.DMoCHi.ML.Syntax.Typed 
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.ML.Syntax.Type
-import Text.PrettyPrint.HughesPJClass
 import qualified Language.DMoCHi.ML.Alpha as U
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U(AnnotVar(..),SynName, SynonymDef(..), Type(..), TypeScheme(..), Lit(..), matchType)
 import qualified Language.DMoCHi.Common.Id as Id
@@ -16,7 +15,6 @@ import Language.DMoCHi.ML.TypeInfer
 import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey, getUniqueKey)
 import Language.DMoCHi.ML.DesugarSynonym
 import Language.DMoCHi.Common.Util
-import Debug.Trace
 
 instance Show TypeError where
     show (UndefinedVariable s)      = "UndefinedVariables: "++ s

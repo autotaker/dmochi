@@ -1,6 +1,6 @@
 module Language.DMoCHi.Boolean.PrettyPrint.Typed where
 
-import Text.PrettyPrint
+import Text.PrettyPrint.HughesPJClass
 import Language.DMoCHi.Boolean.Syntax.Typed
 
 parenPrec :: Int -> Int -> Doc -> Doc
@@ -26,6 +26,10 @@ pprintProgram (Program ds t0) = vcat ds' $+$ t0' where
                 text "let" <+> pprintSym x <+> text "=" $+$ 
                       indent (pprintTerm 0 t) <> text ";;") ds
     t0' = pprintTerm 0 t0
+
+instance Pretty Program where
+    pPrint = pprintProgram
+
 
 {-
  - Syntax 

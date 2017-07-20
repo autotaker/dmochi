@@ -236,8 +236,8 @@ abst constraints predicates = evalZ3 $ do
             incrCounter
             case res of
                 Unsat -> do
-                    liftIO $ print d
-                    getUnsatCore >>= mapM astToString >>= liftIO . print
+                    -- liftIO $ print d
+                    -- getUnsatCore >>= mapM astToString >>= liftIO . print
                     pop 1
                     -- the following assertion must be redundant
                     -- because Unsat(z3_v) means that NOT(z3_v) is valid
@@ -256,8 +256,8 @@ abst constraints predicates = evalZ3 $ do
                     incrCounter
                     case res_not of
                         Unsat -> do
-                            liftIO $ print d
-                            getUnsatCore >>= mapM astToString >>= liftIO . print
+                            -- liftIO $ print d
+                            -- getUnsatCore >>= mapM astToString >>= liftIO . print
                             pop 1
                             low <- liftIO $ bDDConst False
                             liftIO $ bDDNode d v hi low

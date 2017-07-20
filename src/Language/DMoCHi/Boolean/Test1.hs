@@ -10,7 +10,7 @@ import Language.DMoCHi.Boolean.Test(test,testTyped, Boolean)
 import Data.Monoid((<>))
 import Text.Printf
 import Options.Applicative hiding(empty)
-import System.IO
+-- import System.IO
 import Data.PolyDict
 import Data.Aeson
 import Data.Time

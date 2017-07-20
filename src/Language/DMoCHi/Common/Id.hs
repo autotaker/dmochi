@@ -170,6 +170,8 @@ instance MonadTrace c m => MonadTrace c (FreshT m) where
 instance MonadLogger m => MonadLogger (FreshT m) where
     monadLoggerLog l s v msg = lift (monadLoggerLog l s v msg)
     {-# INLINE monadLoggerLog #-}
+
+instance MonadLoggerIO m => MonadLoggerIO (FreshT m) 
  
 instance MonadId m => MonadId (ReaderT r m) where
     freshInt = lift freshInt

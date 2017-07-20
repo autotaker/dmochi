@@ -337,7 +337,7 @@ instance Show Atom where
 instance Show LExp where
     show = render . pPrint 
 
-normalize :: Typed.Program -> FreshIO c Program
+normalize :: Typed.Program -> FreshLogging Program
 normalize prog = Program <$> mapM (\(f,i,xs,e) -> (,,,) f i xs <$> evalContT (convertE e)) (Typed.functions prog)
                          <*> evalContT (convertE (Typed.mainTerm prog))
 

@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Language.DMoCHi.ML.Main(run, verify, Config(..), defaultConfig) where
 import System.Environment
 import System.IO
@@ -11,11 +12,12 @@ import Data.Maybe(fromMaybe)
 import Text.Parsec(ParseError)
 import Text.PrettyPrint.HughesPJClass hiding((<>))
 import Text.Printf
+import qualified Data.Text as Text
 import Lens.Micro.GHC()
 import Data.Time(NominalDiffTime)
 import qualified Data.IntMap as IM
 import qualified Data.PolyDict as Dict
-import Data.PolyDict(Dict, access',Assoc)
+import Data.PolyDict(Dict, access',Assoc,access)
 -- import Data.Aeson
 import qualified Data.ByteString.Lazy as ByteString
 import Data.Aeson.Encode.Pretty(encodePretty)
@@ -182,55 +184,53 @@ type instance Assoc Main "parse"      = NominalDiffTime
 type instance Assoc Main "preprocess" = NominalDiffTime
 type instance Assoc Main "cegar"      = IM.IntMap (Dict CEGAR)
 type instance Assoc Main "cycles"     = Int
+type instance Assoc Main "result"     = String
 
 type instance Assoc CEGAR "refine" = NominalDiffTime
 type instance Assoc CEGAR "abst" = Dict PAbst.Abst
 type instance Assoc CEGAR "fusion" = NominalDiffTime
 type instance Assoc CEGAR "modelchecking" = Dict Boolean
 
+
 verify :: Config -> IO (Either MainError (CEGARResult ()), Dict Main)
-verify conf = runStdoutLoggingT $ runFreshT $ ioTracerT Dict.empty $ measure #total $ runExceptT $ do
+verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_ level -> level >= LevelInfo)) $ runFreshT $ ioTracerT Dict.empty $ measure #total $ runExceptT $ do
     -- ExceptT MainError (FreshT (TracerT c (LoggingT IO))) a
     hccsSolver <- liftIO getHCCSSolver
     -- parsing
     let path = targetProgram conf
-    let prettyPrint :: Pretty a => a -> ExceptT MainError (FreshIO c) ()
+    let prettyPrint :: Pretty a => Text.Text -> String -> a -> ExceptT MainError (FreshIO c) ()
+        prettyPrint header title body = logPretty header LevelDebug title body
+            {-
         prettyPrint | verbose conf = liftIO . putStrLn . render . pPrintPrec (PrettyLevel 1) 0
                     | otherwise    = liftIO . putStrLn . render . pPrint
+                    -}
     parsedProgram <- measure #parse $ do
         program <- if ".ml" `isSuffixOf` path
             then withExceptT ParseFailed $ ExceptT $ liftIO $ MLParser.parseProgramFromFile path
             else withExceptT (ParseFailed. show) $ ExceptT $ liftIO $ Parser.parseProgramFromFile path
-        liftIO $ putStrLn "Parsed Program"
-        prettyPrint program
-        return program
+        program <$ prettyPrint "parse" "Parsed Program" program
 
 -- forall f. Functor f => (a -> f a) -> b -> f b
     normalizedProgram <- measure #preprocess $ (do
         -- alpha conversion
-        alphaProgram <- mapExceptT (zoom (\f v -> fmap (const v) (f ()))) $ withExceptT AlphaFailed $ alpha parsedProgram
-        liftIO $ putStrLn "Alpha Converted Program"
-        prettyPrint alphaProgram
+        alphaProgram <- mapExceptT lift $ withExceptT AlphaFailed $ alpha parsedProgram
+        prettyPrint "preprocess" "Alpha Converted alphaProgram" alphaProgram
 
         -- type checking
-        liftIO $ putStrLn "Typed Program"
         typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
-        prettyPrint typedProgram
+        prettyPrint "preprocess" "Typed Program" typedProgram
 
         -- normalizing
-        liftIO $ putStrLn "Normalizing"
-        _normalizedProgram <- lift $ PNormal.normalize typedProgram
-        prettyPrint _normalizedProgram
+        _normalizedProgram <- lift $ lift $ PNormal.normalize typedProgram
+        prettyPrint "preprocess" "Normalized Program" _normalizedProgram
         
         -- inlining
-        liftIO $ putStrLn "Inlined Program"
-        _normalizedProgram <- lift $ Inline.inline 1000 _normalizedProgram
-        prettyPrint _normalizedProgram
+        _normalizedProgram <- lift $ lift $ Inline.inline 1000 _normalizedProgram
+        prettyPrint "preprocess" "Inlined Program" _normalizedProgram
         
         -- unreachable code elimination
-        liftIO $ putStrLn "Unreachable Code Elimination"
         _normalizedProgram <- return $ Unreachable.elimUnreachable _normalizedProgram
-        prettyPrint _normalizedProgram
+        prettyPrint "preprocess" "Unreachable Code Elimination" _normalizedProgram
         return _normalizedProgram) :: ExceptT MainError (FreshIO (Dict Main)) PNormal.Program
 
     (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
@@ -243,19 +243,16 @@ verify conf = runStdoutLoggingT $ runFreshT $ ioTracerT Dict.empty $ measure #to
                 return (snd res)
             | otherwise = do
                 boolProgram <- lift $ zoom (access' #abst Dict.empty) $ PAbst.abstProg curTypeMap castFreeProgram
-                liftIO $ putStrLn "Converted program"
-                liftIO $ putStrLn $ render $ B.pprintProgram boolProgram
+                prettyPrint "modelchecking" "Converted Program" boolProgram
                 case runExcept (B.tCheck boolProgram) of
                     Left (s1,s2,str,ctx) -> do
-                        liftIO $ do
-                            printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
-                            forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
-                                printf "Context %d: %s\n" i (show t)
+                        logErrorNS "typecheck" $ Text.pack $ printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+                        forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                            logErrorNS "typecheck" $ Text.pack $ printf "Context %d: %s\n" i (show t)
                         throwError $ BooleanError "Abstracted Program is ill-typed"
                     Right _ -> return ()
                 boolProgram' <- lift $ B.liftRec boolProgram
-                liftIO $ putStrLn "Recursion lifted program"
-                liftIO $ putStrLn $ render $ B.pprintProgram boolProgram'
+                prettyPrint "modelchecking" "Recursion lifted program" boolProgram'
                 let file_boolean = printf "%s_%d.bool" path k
                 liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
                 r <- mapExceptT (zoom (access' #modelchecking Dict.empty)) $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
@@ -264,13 +261,12 @@ verify conf = runStdoutLoggingT $ runFreshT $ ioTracerT Dict.empty $ measure #to
         cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs,traces) = do
             update $ access' #cycles 1 %~ succ
             res <- mapExceptT (zoom (access' #cegar IM.empty . at k . non Dict.empty)) $ do
-                liftIO $ putStrLn "Predicate Abstracion"
-                liftIO $ PAbst.printTypeMap typeMap
+                -- liftIO $ putStrLn "Predicate Abstracion"
+                -- liftIO $ PAbst.printTypeMap typeMap
                 let curTypeMap = PAbst.mergeTypeMap typeMap typeMapFool
 
-                liftIO $ putStrLn "Elim cast"
                 castFreeProgram <- lift $ PAbst.elimCast curTypeMap normalizedProgram
-                prettyPrint castFreeProgram
+                prettyPrint "cegar" "Elim cast" castFreeProgram
 
                 mc k curTypeMap castFreeProgram >>= \case
                     Nothing -> return Safe
@@ -291,7 +287,7 @@ verify conf = runStdoutLoggingT $ runFreshT $ ioTracerT Dict.empty $ measure #to
                                         Just b -> b
                                         Nothing -> foolTraces conf && isFool
                                 if bf then do
-                                    liftIO $ putStrLn "Fool counterexample refinement"
+                                    logInfoNS "refinement" "Fool counterexample refinement"
                                     let hcs' = clauses
                                     liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
                                     let cmd = printf "%s -hccs it -print-hccs-solution %s %s > %s" 
@@ -324,8 +320,12 @@ verify conf = runStdoutLoggingT $ runFreshT $ ioTracerT Dict.empty $ measure #to
                                                  | otherwise         = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
                                     return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc, trace)
             case res of
-                Safe   -> liftIO $ putStrLn "Safe!" >> return Safe
-                Unsafe -> liftIO $ putStrLn "Unsafe!" >> return Unsafe
+                Safe   -> do
+                    update (access #result ?~ "Safe")
+                    Safe <$ logInfoNS "result" "Safe"
+                Unsafe -> do
+                    update (access #result ?~ "Unsafe")
+                    Unsafe <$ logInfoNS "result" "Unsafe" 
                 Refine (typeMap',typeMapFool', hcs', rtyAssoc, rpostAssoc, trace) ->
                     cegar (typeMap',typeMapFool') (k+1) (rtyAssoc,rpostAssoc,hcs', trace:traces)
     cegar (typeMap0,typeMap0) 0 ([],[],[],[])

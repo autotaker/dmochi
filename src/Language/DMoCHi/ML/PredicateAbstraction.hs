@@ -1,10 +1,8 @@
-{-# LANGUAGE FlexibleContexts, GADTs, ScopedTypeVariables #-}
 module Language.DMoCHi.ML.PredicateAbstraction where
 import Control.Monad
 import Control.Monad.Writer
 import qualified Data.Map as M
 import Text.PrettyPrint.HughesPJClass
-import Text.Printf
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
 -- import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
@@ -14,15 +12,16 @@ import qualified Language.DMoCHi.ML.SMT as SMT
 import Language.DMoCHi.ML.Syntax.PType
 import Language.DMoCHi.Common.Id
 import Language.DMoCHi.Common.Util
-import Data.PolyDict(Assoc,Dict)
+import Data.PolyDict(Assoc,Dict,access)
 import Data.Time(NominalDiffTime)
 
 data Abst
 type instance Assoc Abst "elapsed_time" = NominalDiffTime
+type instance Assoc Abst "number_smt_calls" = Int
 
 type PVar = [(B.Term, Formula)]
 -- getSort (abstFormulae cs pv fmls) == TBool^(length fmls)
-abstFormulae :: (MonadIO m, MonadId m) => Constraints -> PVar -> [Formula] -> m B.Term
+abstFormulae :: (MonadIO m, MonadLogger m, MonadId m) => Constraints -> PVar -> [Formula] -> m B.Term
 abstFormulae cs pvs fml = do
     let ps = map snd pvs ++ fml
     bdd <- liftIO $ SMT.abst cs ps
@@ -53,20 +52,21 @@ abstFormulae cs pvs fml = do
                                     (B.f_assume (B.Not term_p) term_lo)
 
     term <- go pvs bdd
-    liftIO $ putStrLn $ render (
-        let doc_cs = brackets $ hsep $ punctuate comma (map (pPrint) cs)
-            doc_pvar = brackets $ hsep $ punctuate comma (map (pPrint . snd) pvs)
-            doc_fml = brackets $ hsep $ punctuate comma (map (pPrint) fml)
-            doc_term = B.pprintTerm 0 term
-        in braces (
-           text "constraints:" <+> doc_cs $+$ 
-           text "predicates:" <+> doc_pvar $+$ 
-           text "formulae:" <+> doc_fml $+$ 
-           text "abst result:" <+> doc_term))
+    let doc = 
+            let doc_cs = brackets $ hsep $ punctuate comma (map (pPrint) cs)
+                doc_pvar = brackets $ hsep $ punctuate comma (map (pPrint . snd) pvs)
+                doc_fml = brackets $ hsep $ punctuate comma (map (pPrint) fml)
+                doc_term = B.pprintTerm 0 term
+            in braces $
+               text "constraints:" <+> doc_cs $+$ 
+               text "predicates:" <+> doc_pvar $+$ 
+               text "formulae:" <+> doc_fml $+$ 
+               text "abst result:" <+> doc_term
+    logPretty "abst" LevelDebug "abstFormulae" (PPrinted doc)
     return term
 
 -- getSort (abstFormulae cs pv fmls) == TBool
-abstFormula :: (MonadIO m, MonadId m) => Constraints -> PVar -> Formula -> m B.Term
+abstFormula :: (MonadIO m, MonadLogger m, MonadId m) => Constraints -> PVar -> Formula -> m B.Term
 abstFormula cs pvs fml = do
     term <- abstFormulae cs pvs [fml]
     tup <- B.Symbol (B.Tuple [B.Bool]) <$> freshId "tuple"
@@ -81,7 +81,7 @@ abstFormula cs pvs fml = do
 -- assertion:
 --      getSort e' == toSort newTy
 
-cast :: (MonadIO m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
+cast :: (MonadIO m, MonadLogger m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
 {-
 cast' cs pv e curTy newTy = case (curTy,newTy) of
     _ | curTy == newTy -> return e
@@ -123,13 +123,13 @@ cast cs pv e curTy newTy = do
         doc_newTy = pprintPType 0 newTy
     if curTy /= newTy 
       then do
-        liftIO $ putStrLn $ render $
-            braces (
+        let d = braces $
                text "constraints:" <+> doc_cs $+$ 
                text "predicates:" <+> doc_pvar $+$ 
                text "prev term:" <+> doc_e $+$ 
                text "prev type:" <+> doc_curTy $+$
-               text "new  type:" <+> doc_newTy)
+               text "new  type:" <+> doc_newTy
+        logPretty "cast" LevelError "unexpected cast" (PPrinted d)
         error "unexpected cast"
       else return e
       {-
@@ -160,7 +160,7 @@ toSortArg (_, tys, ps) = B.Tuple [B.Tuple $ map toSort tys, B.Tuple [B.Bool | _ 
 toSymbol :: ML.TId -> PType -> B.Symbol
 toSymbol (ML.TId _ x) ty = B.Symbol (toSort ty) (show x)
 
-abstAValue :: (MonadIO m, MonadId m) => Env -> Constraints -> PVar -> ML.Atom-> PType -> m B.Term
+abstAValue :: (MonadIO m, MonadLogger m, MonadId m) => Env -> Constraints -> PVar -> ML.Atom-> PType -> m B.Term
 abstAValue env cs pv = go 
     where 
     go v@(ML.Atom l arg _) ty = case (l,arg) of
@@ -187,7 +187,7 @@ abstAValue env cs pv = go
                 B.f_proj 1 2 <$> go v (mkPPair ty1 ty)
             ML.SNot -> B.Not <$> go v PBool
             ML.SNeg -> return $ B.T []
-abstValue :: (MonadIO m, MonadId m) => TypeMap -> Env -> Constraints -> PVar -> ML.Value -> PType -> m B.Term
+abstValue :: (MonadIO m, MonadLogger m, MonadId m) => TypeMap -> Env -> Constraints -> PVar -> ML.Value -> PType -> m B.Term
 abstValue tbl env cs pv v@(ML.Value l arg _ key) ty = case (l,arg) of
     (ML.SLambda, (xs,e)) -> fst <$> abstFunDef tbl env cs pv (key,xs,e) (Just ty)
     (ML.SPair, (v1,v2)) -> 
@@ -197,7 +197,7 @@ abstValue tbl env cs pv v@(ML.Value l arg _ key) ty = case (l,arg) of
         Just av -> abstAValue env cs pv av ty
         Nothing -> error "abstValue"
 
-abstTerm :: forall m. (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
+abstTerm :: forall m. (MonadId m, MonadLogger m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
 abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) = 
     let valueCase :: ML.Value -> m B.Term
         valueCase v = do
@@ -292,7 +292,7 @@ abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) =
 addEq :: ML.TId -> ML.Atom -> Constraints -> Constraints
 addEq y v cs = (ML.mkBin ML.SEq (ML.mkVar y) v) :cs
 
-abstFunDef :: (MonadId m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> (UniqueKey,[ML.TId],ML.Exp) -> Maybe PType -> m (B.Term, PType)
+abstFunDef :: (MonadId m, MonadLogger m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> (UniqueKey,[ML.TId],ML.Exp) -> Maybe PType -> m (B.Term, PType)
 abstFunDef tbl env cs pv (ident,xs,t1) mpty = do
     let ty_f@(PFun _ (ys,ty_ys,ps) rty) = 
             case mpty of
@@ -315,17 +315,16 @@ abstFunDef tbl env cs pv (ident,xs,t1) mpty = do
             B.f_let (toSymbol x ty_y) (B.f_proj i arity x_body)) e' (zip3 [0..] xs ty_ys')
     return (e,ty_f)
 
-printTypeMap :: TypeMap -> IO ()
-printTypeMap tbl = forM_ (M.assocs tbl) $ \(i,pty') -> 
-    case pty' of
-        Left pty -> putStrLn $ render $ pPrint i <+> colon <+> pprintPType 0 pty
-        Right termType -> putStrLn $ render $ pPrint i <+> colon <+> pprintTermType termType
+pprintTypeMap :: TypeMap -> Doc
+pprintTypeMap tbl = braces $ vcat $ punctuate comma ds
+    where
+    ds = flip map (M.assocs tbl) $ \case
+        (i,Left pty) -> pPrint i <+> colon <+> pprintPType 0 pty
+        (i,Right termType) -> pPrint i <+> colon <+> pprintTermType termType
 
 abstProg :: TypeMap -> ML.Program -> FreshIO (Dict Abst) B.Program
 abstProg tbl (ML.Program fs t0) = measure #elapsed_time $ do
-    liftIO $ putStrLn "current abstraction type environment {"
-    liftIO $ printTypeMap tbl 
-    liftIO $ putStrLn "}"
+    logPretty "abst" LevelInfo "current abstraction type environment" (PPrinted $ pprintTypeMap tbl)
     liftIO SMT.resetSMTCount
 
     let env = M.fromList [ (f,ty)  | (f,key,_,_) <- fs, let Left ty = tbl M.! key ]
@@ -336,6 +335,6 @@ abstProg tbl (ML.Program fs t0) = measure #elapsed_time $ do
     e0 <- do
         r <- ML.TId ML.TInt <$> identify "main"
         abstTerm tbl env [] [] t0 (r,PInt,[])
-    liftIO $ SMT.getSMTCount >>= printf "[Predicate Abstraction] Number of SMT Call = %d\n" 
+    liftIO SMT.getSMTCount >>= \count -> update (access #number_smt_calls ?~ count)
     return $ B.Program ds e0
 

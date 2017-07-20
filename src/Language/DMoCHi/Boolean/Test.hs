@@ -10,15 +10,15 @@ import           Language.DMoCHi.Common.Util
 import Language.DMoCHi.Boolean.Syntax
 import Control.Monad.Except
 import qualified Data.Map as M
-import Text.Printf
 import Data.PolyDict
 import Data.Time(NominalDiffTime)
 
 data Boolean
 type instance Assoc Boolean "cfa" = NominalDiffTime
 type instance Assoc Boolean "saturation" = NominalDiffTime
+type instance Assoc Boolean "counterexample" = Maybe [Bool]
 
-test :: MonadIO m => FilePath -> Program -> ExceptT String m (Maybe [Bool])
+test :: (MonadIO m, MonadLoggerIO m) => FilePath -> Program -> ExceptT String m (Maybe [Bool])
 test path input = do
     (p,syms) <- ExceptT $ return $ alphaConversion input
     liftIO $ mapM_ print (definitions p)
@@ -32,10 +32,11 @@ test path input = do
     liftIO $ writeFile graph_path $ ppGraph (fmap (\t -> case t of
         Just x -> x
         Nothing -> V () "") y) x
-    (b,_ctx) <- liftIO $ saturate p g
+    logger <- askLoggerIO
+    (b, _) <- liftIO $ runLoggingT (saturate p g) logger
     return b
 
-testTyped :: (MonadIO m, MonadLogger m, MonadTrace (Dict Boolean) m) => FilePath -> Typed.Program -> ExceptT String m (Maybe [Bool])
+testTyped :: (MonadIO m, MonadLoggerIO m, MonadTrace (Dict Boolean) m) => FilePath -> Typed.Program -> ExceptT String m (Maybe [Bool])
 testTyped path p = do
     let graph_path = path ++ ".typed.dot"
     p_flow <- measure #cfa $ do
@@ -43,8 +44,10 @@ testTyped path p = do
         liftIO $ writeFile graph_path $ Flow2.ppGraph (Flow2.termTable p_flow) (Flow2.cfg p_flow)
         return p_flow
     measure #saturation $ do
-        b <- liftIO $ Sat.saturate p_flow
-        liftIO $ printf "Typed saturation result %s\n" (show b)
+        logger <- askLoggerIO
+        b <- liftIO $ runLoggingT (Sat.saturate p_flow) logger
+        update (access #counterexample ?~ b)
+        logPretty "modelchecking" LevelInfo "counterexample" b
         return b
 {-
 main :: IO ()

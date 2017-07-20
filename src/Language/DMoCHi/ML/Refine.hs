@@ -177,7 +177,7 @@ decompose x = case ML.getType x of
 type W m a = WriterT ([(CompTreePath,Horn.Clause)],([(UniqueKey,RType)],[(UniqueKey,RPostType)])) m a
 
 
-refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m) => 
+refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m, MonadLogger m) => 
               ML.Program -> FilePath -> Bool -> Int -> Trace -> 
               m (Maybe (Bool,([Horn.Clause],([(UniqueKey,RType)],[(UniqueKey,RPostType)]))))
 refineCGen prog traceFile contextSensitive foolThreshold trace = do
@@ -188,15 +188,14 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
     isFeasible <- liftIO $ SMT.sat cs
     isFool <- if isFeasible then return False 
                             else fmap not $ liftIO $ SMT.sat (take (length cs - foolThreshold) cs)
-    when isFool $ liftIO $ putStrLn "this error trace is fool"
+    when isFool $ logInfoNS "refine" "this error trace is fool"
     let sortClauses :: [(CompTreePath,Horn.Clause)] -> [Horn.Clause]
         sortClauses = map snd . sortBy (compare `on` (reverse . fst))
     if isFeasible then
         return Nothing
     else fmap (Just . (,) isFool . first sortClauses) $ execWriterT $ do
-        let dump str l = liftIO $ do
-                putStrLn $ str ++ ":"
-                mapM_ (\v -> putStr "  " >> print v) l
+        let dump str l = logPretty "refine" LevelDebug str (PPrinted doc)
+                where doc = vcat $ map (text. show) l
         dump "Calls" calls
         dump "Closures" closures
         dump "Returns" returns

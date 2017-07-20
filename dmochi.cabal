@@ -36,6 +36,7 @@ library
                      , DeriveFunctor
                      , TemplateHaskell
                      , OverloadedLabels
+                     , OverloadedStrings
   build-depends:       base >=4.9 && <5.0,
                        mtl >=2.2 && <2.3, 
                        containers >=0.5 && <0.6, 

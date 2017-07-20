@@ -1,19 +1,5 @@
 {-# LANGUAGE FlexibleContexts, BangPatterns, GADTs, TypeFamilies, DataKinds #-}
-module Language.DMoCHi.ML.Syntax.Typed {- ( Program(..)
-                                      , Exp(..)
-                                      , Value(..)
-                                      , Op(..)
-                                      , LetValue(..)
-                                      , FunDef(..)
-                                      , substV
-                                      , evalV
-                                      , size
-                                      , sizeE
-                                      , sizeV
-                                      , sizeLV
-                                      , freeVariables
-                                      , module Language.DMoCHi.ML.Syntax.Type
-                                      ) -} where
+module Language.DMoCHi.ML.Syntax.Typed  where
 -- import qualified Data.Map as M
 -- import qualified Data.Set as S
 import Language.DMoCHi.Common.Id 
