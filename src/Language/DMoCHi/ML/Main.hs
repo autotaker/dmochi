@@ -238,7 +238,7 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
             | incremental conf = 
                 measure #fusion $ do
                 unliftedProgram <- IncSat.unliftRec castFreeProgram
-                (_,res) <- liftIO $ IncSat.saturate curTypeMap unliftedProgram
+                (_,res) <- lift $ lift $ lift $ IncSat.saturate curTypeMap unliftedProgram
                 liftIO $ print res
                 return (snd res)
             | otherwise = do

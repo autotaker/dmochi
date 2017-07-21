@@ -4,6 +4,7 @@ import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, m
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
 import           Language.DMoCHi.Common.Id
+import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.Flow
 import           Language.DMoCHi.ML.Syntax.IType
 -- import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
@@ -112,37 +113,39 @@ type IEnv = M.Map TId IType
     Just v -> v
     Nothing -> error $ "no assoc found for key: " ++ show a
 
-initContext ::TypeMap -> Program -> IO Context
+initContext ::TypeMap -> Program -> LoggingT IO Context
 initContext typeMap prog = do
-    (ctxSMTSolver, ctxSMTContext) <- Z3Base.withConfig $ \cfg -> do
-        Z3.setOpts cfg Z3.stdOpts
-        ctx <- Z3Base.mkContext cfg
-        solver <- Z3Base.mkSolver ctx
-        return (solver, ctx)
-    ctxFlowTbl     <- H.new
-    ctxFlowReg     <- H.new
-    ctxTypeMap     <- pure typeMap
-    ctxFlowMap     <- flowAnalysis prog
-    ctxNodeCounter <- newIORef 1
-    ctxNodeTbl     <- H.new
-    ctxNodeDepG    <- H.new
-    ctxRtnTypeTbl  <- H.new
-    ctxArgTypeTbl  <- H.new
-    ctxFreeVarTbl  <- H.new
-    ctxHFormulaTbl    <- H.new
-    ctxHFormulaSize   <- newIORef 0
-    ctxBFormulaTbl    <- H.new
-    ctxBFormulaSize   <- newIORef 0
-    ctxITypeTbl       <- H.new
-    ctxITypeSize      <- newIORef 0
-    ctxITermTbl       <- H.new
-    ctxITermSize      <- newIORef 0
-    ctxCheckSatCache  <- H.new
-    ctxUpdated        <- newIORef False
-    ctxSMTCount       <- newIORef 0
-    ctxSMTCountHit    <- newIORef 0
-    ctxTimer          <- H.new
-    return (Context {..})
+    flowMap <- flowAnalysis prog
+    liftIO $ do
+        (ctxSMTSolver, ctxSMTContext) <- Z3Base.withConfig $ \cfg -> do
+            Z3.setOpts cfg Z3.stdOpts
+            ctx <- Z3Base.mkContext cfg
+            solver <- Z3Base.mkSolver ctx
+            return (solver, ctx)
+        ctxFlowTbl     <- H.new
+        ctxFlowReg     <- H.new
+        ctxTypeMap     <- pure typeMap
+        ctxFlowMap     <- pure flowMap
+        ctxNodeCounter <- newIORef 1
+        ctxNodeTbl     <- H.new
+        ctxNodeDepG    <- H.new
+        ctxRtnTypeTbl  <- H.new
+        ctxArgTypeTbl  <- H.new
+        ctxFreeVarTbl  <- H.new
+        ctxHFormulaTbl    <- H.new
+        ctxHFormulaSize   <- newIORef 0
+        ctxBFormulaTbl    <- H.new
+        ctxBFormulaSize   <- newIORef 0
+        ctxITypeTbl       <- H.new
+        ctxITypeSize      <- newIORef 0
+        ctxITermTbl       <- H.new
+        ctxITermSize      <- newIORef 0
+        ctxCheckSatCache  <- H.new
+        ctxUpdated        <- newIORef False
+        ctxSMTCount       <- newIORef 0
+        ctxSMTCountHit    <- newIORef 0
+        ctxTimer          <- H.new
+        return (Context {..})
 
 
 pprintContext :: Program -> R Doc

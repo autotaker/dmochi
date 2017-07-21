@@ -1,6 +1,6 @@
 {-# LANGUAGE ViewPatterns, LambdaCase #-}
 module Language.DMoCHi.ML.Flow( FlowMap, flowAnalysis ) where
-import           Control.Monad.Writer
+import           Control.Monad.Writer hiding ((<>))
 import           Control.Monad.State
 import qualified Data.HashTable.IO as H
 import qualified Data.Set as S
@@ -10,9 +10,11 @@ import qualified Data.DList  as DL
 import           Data.List (foldl')
 import           Data.Hashable
 import           Text.PrettyPrint.HughesPJClass
+import Debug.Trace
 
 import           Language.DMoCHi.ML.Syntax.PNormal hiding(Label)
 import           Language.DMoCHi.Common.Id 
+import           Language.DMoCHi.Common.Util
 
 type HashTable k v = H.BasicHashTable k v
 type Cache = HashTable Key (S.Set Func)
@@ -36,14 +38,35 @@ type Proj = Integer
 data Edge = ELabel Label Label    -- ELabel l1 l2 <=> C(l1) \supseteq C(l2)
           | EApp TId Key [Label] Label
           deriving(Show)
-          -- EApp l ls l_x <=> \forall i \in C(l). 
+          -- EApp f l_f ls l_x <=> \forall i \in C(l_f). 
           --                 let (fun ys -> e) = def(i) in
           --                 \forall j \in [0..length ls]. C(labelOf (ys !! j)) \supseteq C(ls !! i)
           --                 C(l_x) \supseteq C(LBody i)
+instance Pretty Edge where
+    pPrintPrec _ prec (ELabel l1 l2) = 
+        maybeParens (prec > 0) $ text (show l1) <+> text "->" <+> text (show l2)
+    pPrintPrec _ prec (EApp f i ls l_x) = 
+        maybeParens (prec > 0) $ 
+            text (show l_x) <+> text "->" <+> 
+            pPrint f <> parens (pPrint i)  <> text "@" <> parens (hsep (punctuate comma $ map pPrint ls))
+
+instance Pretty Key where
+    pPrint (KFun key) = pPrint key
+    pPrint (KVar x i) = pPrint x <> text "." <> pPrint i
+    pPrint (KBody key i) = pPrint key <> text ".body." <> pPrint i
+
+instance Pretty Label where
+    pPrint (LKey key) = pPrint key
+    pPrint (LPair l1 l2) = parens $ pPrint l1 <> comma <+> pPrint l2
+    pPrint LBase = text "Base"
+
+
 data Func = Func { funcIdent :: UniqueKey
                  , funcArgs  :: [Label]
                  , funcBody  :: Label }
                  deriving(Eq,Ord, Show)
+instance Pretty Func where
+    pPrint = text .show 
 
 type Env = M.Map TId Label
 type W e = Writer (DL.DList Edge, DL.DList Func) e
@@ -157,18 +180,16 @@ labelOfAtom env (Atom l arg _) =
 type Graph = HashTable Key [Key]
 type Queue = Q.Seq (Key, [Func])
 
-saturate :: HashTable Key [([Label], Label)] -> Graph -> Cache -> StateT Queue IO ()
+saturate :: HashTable Key [([Label], Label)] -> Graph -> Cache -> StateT Queue (LoggingT IO) ()
 saturate appTbl graph cache = pop >>= \case
     Just (key, values) -> do
-        liftIO $ putStrLn "pop" 
-        liftIO $ putStrLn $ "key:" ++ show key
-        liftIO $ putStrLn $ "values:" ++ show values
+        logPretty "flow" LevelDebug "pop" (key, values)
         Just cValues <- liftIO $ H.lookup cache key
         let (nValues, diff) = foldl' (\(vs,ds) v -> if S.member v vs 
                                                      then (vs,ds) 
                                                      else (S.insert v vs, v : ds)) 
                                      (cValues,[]) values
-        liftIO $ putStrLn $ "diff:" ++ show diff
+        logPretty "flow" LevelDebug "diff" diff
         unless (null diff) $ do
             liftIO $ H.insert cache key nValues
             Just vs <- liftIO (H.lookup graph key)
@@ -181,17 +202,17 @@ saturate appTbl graph cache = pop >>= \case
         saturate appTbl graph cache
     Nothing -> return ()
 
-pop :: StateT Queue IO (Maybe (Key,[Func]))
+pop :: MonadState Queue m => m (Maybe (Key,[Func]))
 pop = (Q.viewl <$> get) >>= \case 
     v Q.:< queue -> put queue >> return (Just v)
     Q.EmptyL -> return Nothing
     
-push :: (Key, [Func]) -> StateT Queue IO ()
+push :: MonadState Queue m => (Key, [Func]) -> m ()
 push v = do
     queue <- get
     put $! queue Q.|> v
 
-decompEdge :: Graph -> Cache -> Label -> Label -> StateT Queue IO ()
+decompEdge :: (MonadIO m,MonadState Queue m) => Graph -> Cache -> Label -> Label -> m ()
 decompEdge graph cache = go where 
     go (LKey k1) (LKey k2) = when (k1 /= k2) $ do
             Just ks <- liftIO $ H.lookup graph k2
@@ -208,23 +229,22 @@ decompLabel (LPair l1 l2) = decompLabel l1 ++ decompLabel l2
 decompLabel LBase = []
 
 type FlowMap = M.Map TId [UniqueKey]
-flowAnalysis :: Program -> IO FlowMap 
+flowAnalysis :: Program -> LoggingT IO FlowMap 
 flowAnalysis (Program fs e0) = do
     let (cs,funcs) = (\(a,b) -> (DL.toList a, DL.toList b)) $ execWriter $ do
             let env = M.fromList [ (f, LKey $ KFun key)  | (f, key, _, _) <- fs ]
             mapM_ (\(_,key, xs, e) -> genCFunDef env (key,xs,e)) fs
             genCTerm env LBase e0
-    putStrLn "Constraints"
-    print cs
+    logPretty "flow" LevelDebug "Constraints" cs
     let keys = S.toList $ S.fromList $ concat $ 
             map (\case 
                 ELabel l1 l2 -> decompLabel l1 ++ decompLabel l2
                 EApp _ k ls l -> k : concat (map decompLabel (l:ls))) cs ++
             map (\(Func ident ls l) -> KFun ident : concat (map decompLabel (l:ls))) funcs
-    graph <- H.new :: IO Graph
-    cache <- H.new :: IO Cache
-    appTbl <- H.new
-    forM_ keys $ \key -> do
+    graph <- liftIO H.new
+    cache <- liftIO H.new
+    appTbl <- liftIO H.new
+    liftIO $ forM_ keys $ \key -> do
         H.insert graph key []
         H.insert cache key S.empty
         H.insert appTbl key []
@@ -237,10 +257,13 @@ flowAnalysis (Program fs e0) = do
         forM_ funcs $ \func -> push (KFun (funcIdent func), [func])
         saturate appTbl graph cache
 
-    foldM (\acc e -> case e of
+    (r, doc) <- foldM (\(acc,acc_doc) e -> case e of
         EApp f key _ _ -> do
-            Just values <- H.lookup cache key
+            Just values <- liftIO $ H.lookup cache key
             let vs = map funcIdent $ S.toList values
-            liftIO $ print $ pPrint f <+> text "->" <+> hsep (map pPrint vs)
-            return $! M.insert f vs acc
-        _ -> return acc) M.empty cs
+            let !acc' = M.insert f vs acc
+                !acc_doc' = acc_doc $+$ pPrint f <+> text "->" <+> hsep (map pPrint vs)
+            return $! (acc', acc_doc')
+        _ -> return (acc,acc_doc)) (M.empty, empty) cs
+    logPretty "flow" LevelDebug "result" (PPrinted doc)
+    return r

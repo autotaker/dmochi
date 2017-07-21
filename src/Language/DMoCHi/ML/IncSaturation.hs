@@ -5,6 +5,7 @@ import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.IType
 import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
 import           Language.DMoCHi.Common.Id
+import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.IncSaturationPre
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 
@@ -744,7 +745,7 @@ updateLoop = popQuery >>= \case
                         updateLoop
                     False -> updateLoop
 
-saturate :: TypeMap -> Program -> IO (Bool, ([ITermType], Maybe [Bool]))
+saturate :: TypeMap -> Program -> LoggingT IO (Bool, ([ITermType], Maybe [Bool]))
 saturate typeMap prog = do
     ctx <- initContext typeMap prog
     let doit :: R (Bool, ([ITermType], Maybe [Bool]))
@@ -764,4 +765,4 @@ saturate typeMap prog = do
             else do
                 printStatistics
                 return (False, (tys, Nothing))
-    evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)
+    liftIO $ evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)
