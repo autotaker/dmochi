@@ -27,7 +27,8 @@ import           Data.Hashable
 import qualified Language.DMoCHi.ML.SMT as SMT
 import qualified Data.Sequence as Q
 import           Text.PrettyPrint.HughesPJClass
-import           Text.Printf
+import qualified Data.PolyDict as Dict
+import           Data.PolyDict(Dict,access)
 
 type HFormulaTbl = HashTable HFormula HFormula
 
@@ -65,12 +66,13 @@ data MeasureKey = CheckSat | CalcCondition | Total | MSaturation | MExtraction
 
 instance Hashable MeasureKey 
 
-newtype R a = R { unR :: ReaderT Context (StateT (Queue UpdateQuery, S.Set Int) IO) a }
-    deriving (Monad, Applicative, Functor, MonadFix, MonadIO)
+newtype R a = R { unR :: ReaderT Context (StateT (Queue UpdateQuery, S.Set Int) (LoggingT IO)) a }
+    deriving (Monad, Applicative, Functor, MonadFix, MonadIO,MonadLogger)
 
 instance MonadReader Context R where
     ask = R ask
     local f a = R (local f $ unR a)
+
 
 instance MonadState (Queue UpdateQuery, S.Set Int) R where
     get = R get
@@ -388,26 +390,34 @@ measureTime key action = do
             Just t  -> H.insert (ctxTimer ctx) key $! dt + t
     return res
 
-printStatistics :: R ()
-printStatistics = do
-    ctx <- ask
-    liftIO $ do
-        nodeSize <- readIORef (ctxNodeCounter ctx)
-        hfmlSize <- readIORef (ctxHFormulaSize ctx)
-        bfmlSize <- readIORef (ctxBFormulaSize ctx)
-        itypSize <- readIORef (ctxITypeSize ctx)
-        itrmSize <- readIORef (ctxITermSize ctx)
-        smtCalls <- readIORef (ctxSMTCount ctx)
-        smtHits  <- readIORef (ctxSMTCountHit ctx)
-        printf "Graph size: %7d\n" nodeSize
-        printf "#HFormula:  %7d\n" hfmlSize
-        printf "#BFormula:  %7d\n" bfmlSize
-        printf "#IType:     %7d\n" itypSize
-        printf "#ITerm:     %7d\n" itrmSize
-        printf "#SMT Calls: %7d\n" smtCalls
-        printf "#SMT Hits:  %7d\n" smtHits
-        H.mapM_ (\(key, t) ->
-            printf "Time %s: %s\n" (show key) (show t)) (ctxTimer ctx)
+data IncSat
+type instance Dict.Assoc IncSat "graph_size" = Int
+type instance Dict.Assoc IncSat "number_hformula" = Int
+type instance Dict.Assoc IncSat "number_bformula" = Int
+type instance Dict.Assoc IncSat "number_itype" = Int
+type instance Dict.Assoc IncSat "number_iterm" = Int
+type instance Dict.Assoc IncSat "number_smt_call" = Int
+type instance Dict.Assoc IncSat "number_smt_hit" = Int
+type instance Dict.Assoc IncSat "time" = M.Map String NominalDiffTime
+
+getStatistics :: Context -> IO (Dict IncSat)
+getStatistics ctx = do
+    nodeSize <- readIORef (ctxNodeCounter ctx)
+    hfmlSize <- readIORef (ctxHFormulaSize ctx)
+    bfmlSize <- readIORef (ctxBFormulaSize ctx)
+    itypSize <- readIORef (ctxITypeSize ctx)
+    itrmSize <- readIORef (ctxITermSize ctx)
+    smtCalls <- readIORef (ctxSMTCount ctx)
+    smtHits  <- readIORef (ctxSMTCountHit ctx)
+    times <- M.fromList . map (\(a,b) -> (show a, b))<$> H.toList (ctxTimer ctx)
+    return $ Dict.empty & access #graph_size ?~ nodeSize
+                        & access #number_hformula ?~ hfmlSize
+                        & access #number_bformula ?~ bfmlSize
+                        & access #number_itype    ?~ itypSize
+                        & access #number_iterm    ?~ itrmSize
+                        & access #number_smt_call ?~ smtCalls
+                        & access #number_smt_hit  ?~ smtHits
+                        & access #time ?~ times
 
 checkSat :: HFormula -> HFormula -> R Bool
 checkSat p1 p2 = measureTime CheckSat $ do

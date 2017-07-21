@@ -63,7 +63,7 @@ library
                        microlens-ghc >= 0.4.8,
                        optparse-applicative >= 0.12,
                        template-haskell >= 2.11,
-                       json-tracer == 0.0.1.2,
+                       json-tracer >= 0.0.2.0 && < 0.0.3,
                        monad-logger >= 0.3.24
   build-tools:         alex, happy
   exposed-modules:     Language.DMoCHi.Common.Heap,

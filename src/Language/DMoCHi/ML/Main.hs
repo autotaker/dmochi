@@ -189,6 +189,7 @@ type instance Assoc Main "result"     = String
 type instance Assoc CEGAR "refine" = NominalDiffTime
 type instance Assoc CEGAR "abst" = Dict PAbst.Abst
 type instance Assoc CEGAR "fusion" = NominalDiffTime
+type instance Assoc CEGAR "fusion_sat" = Dict IncSat.IncSat
 type instance Assoc CEGAR "modelchecking" = Dict Boolean
 
 
@@ -238,8 +239,8 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
             | incremental conf = 
                 measure #fusion $ do
                 unliftedProgram <- IncSat.unliftRec castFreeProgram
-                (_,res) <- lift $ lift $ lift $ IncSat.saturate curTypeMap unliftedProgram
-                liftIO $ print res
+                (_,res) <- lift $ zoom (access' #fusion_sat Dict.empty) $ mapTracerT lift $ IncSat.saturate curTypeMap unliftedProgram
+                logPretty "fusion" LevelDebug "result" res
                 return (snd res)
             | otherwise = do
                 boolProgram <- lift $ zoom (access' #abst Dict.empty) $ PAbst.abstProg curTypeMap castFreeProgram
@@ -294,7 +295,7 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                                                      hccsSolver (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
                                     liftIO $ callCommand cmd
                                     parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-                                    liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
+                                    --liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
                                     let (rtyAssoc,rpostAssoc) = assoc
                                     solution  <- case parseRes of
                                         Left err -> throwError $ RefinementFailed err
@@ -312,7 +313,7 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                                                      hccsSolver opts (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
                                     liftIO $ callCommand cmd
                                     parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-                                    liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
+                                    -- liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
                                     solution  <- case parseRes of
                                         Left err -> throwError $ RefinementFailed err
                                         Right p  -> return p

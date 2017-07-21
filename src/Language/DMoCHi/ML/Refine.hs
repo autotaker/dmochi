@@ -183,7 +183,7 @@ refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m, MonadLogger m) =>
 refineCGen prog traceFile contextSensitive foolThreshold trace = do
     (genv, (Log consts calls closures returns branches letexps), compTree) <- symbolicExec prog trace
     liftIO $ writeFile traceFile (renderCompTree compTree)
-    liftIO $ print consts
+    logPretty "refine" LevelDebug "constraints" $ map (PPrinted . text . show) consts
     let cs = map fromSValue consts
     isFeasible <- liftIO $ SMT.sat cs
     isFool <- if isFeasible then return False 

@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances #-}
-module Language.DMoCHi.ML.IncSaturation(saturate) where
+module Language.DMoCHi.ML.IncSaturation(saturate,IncSat) where
 import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.IType
@@ -22,6 +22,7 @@ import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
 import           Text.PrettyPrint.HughesPJClass
 import           Debug.Trace
+import           Data.PolyDict(Dict)
 
 setFV :: UniqueKey -> S.Set TId -> R ()
 setFV key s = do
@@ -745,24 +746,25 @@ updateLoop = popQuery >>= \case
                         updateLoop
                     False -> updateLoop
 
-saturate :: TypeMap -> Program -> LoggingT IO (Bool, ([ITermType], Maybe [Bool]))
+saturate :: TypeMap -> Program -> TracerT (Dict IncSat) (LoggingT IO) (Bool, ([ITermType], Maybe [Bool]))
 saturate typeMap prog = do
-    ctx <- initContext typeMap prog
+    ctx <- lift $ initContext typeMap prog
     let doit :: R (Bool, ([ITermType], Maybe [Bool]))
         doit = do
             calcContextE M.empty (mainTerm prog) (TId TInt (reserved "main"), PInt, [])
             _ <- calcFVE (mainTerm prog)
-            liftIO $ putStrLn "Abstraction Annotated Program"
-            pprintContext prog >>= liftIO . print
+            pprintContext prog >>= logPretty "saturate" LevelDebug "Abstraction Annotated Program" . PPrinted 
             (root, _) <- mkLiteral (CBool True) >>= \fml0 -> calcExp M.empty fml0 (mainTerm prog)
             updateLoop
             tys <- liftIO $ readIORef (types root)
             if any (\iota -> itermBody iota == IFail) tys
             then do
                 bs <- mkIFail >>= execWriterT . extractor root M.empty
-                printStatistics
                 return (True, (tys, Just bs))
             else do
-                printStatistics
                 return (False, (tys, Nothing))
-    liftIO $ evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)
+    res <- lift $ evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)
+    dict <- liftIO $ getStatistics ctx
+    update (id .~ dict)
+    return res
+
