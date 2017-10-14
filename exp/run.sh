@@ -12,13 +12,14 @@ if [ $# -gt 0 ]; then
 fi
 
 DMOCHI=dmochi
+MOCHI=/home/autotaker/workspace/mochi_bin/mochi
 HIBOCH=hiboch
 TOHORS=tohors
 
 HORSAT=../../horsat-1.01/horsat
 HORSAT2=../../horsat2-0.92/horsat2
 
-TIMEOUT=50
+TIMEOUT=100
 TIMEOUT_CMD=timeout
 
 
@@ -40,12 +41,17 @@ for testcase in $TESTS
 do
     echo "Running testcase" $testcase
     rm -f work/$testcase*
+    testname=${testcase%.prog}.ml
     basename=$(basename $testcase)
+    testbasename=$(basename $testname)
     cp ../sample/$testcase work/$basename
-    DMOCHI_FLAG="--hccs gch --context-sensitive"
+    cp ../sample/$testname work/$testbasename
+    DMOCHI_FLAG="--hccs gch"
     $TIMEOUT_CMD $TIMEOUT $DMOCHI $DMOCHI_FLAG work/$basename > log/$basename.log
-    DMOCHI_FLAG="--hccs gch --context-sensitive --incremental"
+    DMOCHI_FLAG="--hccs gch --incremental"
     $TIMEOUT_CMD $TIMEOUT $DMOCHI $DMOCHI_FLAG work/$basename > log/$basename.fusion.log
+    MOCHI_FLAG='-fpat "-hccs gch -smt z3" -horsat2'
+    $TIMEOUT_CMD $TIMEOUT $MOCHI $MOCHI_FLAG work/$testbasename > log/$basename.mochi.log
 
     if [ $BENCHMARK_BOOL ]; then
         for bool in `find work -name "$basename*.bool"`

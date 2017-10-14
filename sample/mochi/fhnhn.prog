@@ -1,4 +1,5 @@
-let f : [([] -> int), ([] -> int)] -> int = fun x y -> assert( not(x () > 0 && y () <= 0) );;
-let h : [int] -> [] -> int = fun x -> fun () -> x;;
+let f : [([int] -> int), ([int] -> int)] -> int = 
+    fun x y -> let r = assert( not(x 0 > 0 && y 0 <= 0) ) in r;;
+let h : [int] -> [int] -> int = fun x -> fun y -> x;;
 let n = * in
 f (h n) (h n)

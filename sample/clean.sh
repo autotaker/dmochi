@@ -1,1 +1,1 @@
-rm *.{dot,bool,hcs,ans}
+rm *.{dot,bool,hcs,log,ans}

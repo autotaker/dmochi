@@ -4,11 +4,5 @@ let x = * in
 let y = * in
 let z = * in
 let m = max f x y z in
-if f x m = m then
-    if f y m = m then
-        if f z m = m then
-            0
-        else Fail
-    else Fail
-else Fail;; 
+assert( f x m = m );;
 

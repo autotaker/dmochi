@@ -1,0 +1,26 @@
+let f : [([int,int] -> int)] -> [int, int] -> int =
+    fun g -> fun x y -> let r = g (x + 1) (y + 1) in r;;
+
+let zip : [int, int] -> int =
+    fun x y ->
+        if x = 0 then
+            if y = 0 then 0
+            else assume false;0
+        else if y = 0 then
+            assume false;0
+        else
+            let r = zip (x - 1) (y - 1) in
+            1 + r;;
+
+let unzip : [int, ([int,int] -> int)] -> int =
+    fun x k ->
+      if x = 0 then let r = k 0 0 in r
+      else let r = unzip (x - 1) (f k)
+
+let map : [int] -> int =
+    fun x -> if x = 0 then 0 else let r = map (x - 1) in 1 + r;;
+
+let n = * in
+let x = unzip n zip in
+()
+
