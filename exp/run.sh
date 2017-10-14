@@ -50,8 +50,8 @@ do
     $TIMEOUT_CMD $TIMEOUT $DMOCHI $DMOCHI_FLAG work/$basename > log/$basename.log
     DMOCHI_FLAG="--hccs gch --incremental"
     $TIMEOUT_CMD $TIMEOUT $DMOCHI $DMOCHI_FLAG work/$basename > log/$basename.fusion.log
-    MOCHI_FLAG='-fpat "-hccs gch -smt z3" -horsat2'
-    $TIMEOUT_CMD $TIMEOUT $MOCHI $MOCHI_FLAG work/$testbasename > log/$basename.mochi.log
+    MOCHI_FLAG=(-fpat "-hccs gch -smt z3" -horsat2)
+    $TIMEOUT_CMD $TIMEOUT $MOCHI "${MOCHI_FLAG[@]}" work/$testbasename > log/$basename.mochi.log
 
     if [ $BENCHMARK_BOOL ]; then
         for bool in `find work -name "$basename*.bool"`
