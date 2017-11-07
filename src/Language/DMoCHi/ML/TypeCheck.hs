@@ -155,9 +155,11 @@ annotType :: U.Exp U.Type -> U.Type
 annotType (U.Exp _ _ (ty,_)) = ty
 
 -- shouldBe :: (UniqueKey, Env) -> Type -> Type-> ExceptT TypeError FreshIO ()
+-- throw error if the input types are not equivalent
 shouldBe s expected actual =
     unless (expected `equiv` actual) $ throwError (TypeMisMatch s expected actual)
 
+-- type equivalence: equality as curried types
 equiv :: Type -> Type -> Bool
 equiv TInt TInt = True
 equiv TBool TBool = True
@@ -229,110 +231,109 @@ cast e ty = do
     key <- Id.freshKey
     return $ Exp SLet (x, e, e') ty key
 
-
-convertE :: SynEnv -> Env -> U.Exp U.Type -> ExceptT TypeError (FreshIO c) Exp
+convertE :: forall c. SynEnv -> Env -> U.Exp U.Type -> ExceptT TypeError (FreshIO c) Exp
 convertE synEnv env (U.Exp l arg (ty,key)) = do
-    let conv ty = case convertType synEnv ty of
+    let conv :: U.Type -> ExceptT TypeError (FreshIO c) Type
+        conv ty = case convertType synEnv ty of
             Left err -> throwError (Synonym err)
             Right sty -> pure sty
-    sty <- conv ty
-    e <- case (l,arg) of
-        (SLiteral, U.CInt _)  -> do
-            shouldBe (key,env) sty TInt
-            return $ Exp l arg sty key
-        (SLiteral, U.CBool _) -> do
-            shouldBe (key,env) sty TBool
-            return $ Exp l arg sty key
-        (SLiteral, U.CUnit) -> do
-            shouldBe (key, env) sty TInt
-            return $ Exp l (U.CInt 0) sty key
+    case (l, arg) of
+        (SLiteral, U.CInt _)  -> return $ Exp l arg TInt key
+        (SLiteral, U.CBool _) -> return $ Exp l arg TBool key
+        (SLiteral, U.CUnit) -> return $ Exp l (U.CInt 0) TInt key
         (SVar, x) -> do
-            let !sty' = env M.! (U.varName x)
-            shouldBe (key,env) sty sty'
-            return $ Exp l (TId sty' (U.varName x)) sty key
+            let sty = env M.! (U.varName x)
+            return $ Exp l (TId sty (U.varName x)) sty key
         (SBinary, BinArg op e1 e2) ->  do
             e1' <- convertE synEnv env e1
             e2' <- convertE synEnv env e2
             typeOfBinOp env op 
                         (getType e1') (getUniqueKey e1') 
-                        (getType e2') (getUniqueKey e2') $ \sty' -> do
-                shouldBe (key,env) sty sty'
-                return $ Exp l (BinArg op e1' e2') sty' key
+                        (getType e2') (getUniqueKey e2') $ \sty ->
+                return $ Exp l (BinArg op e1' e2') sty key
         (SUnary, UniArg op e1) ->  do
             e1' <- convertE synEnv env e1
             typeOfUniOp env op 
-                        (getType e1') (getUniqueKey e1') $ \sty' -> do
-                shouldBe (key,env) sty sty'
-                return $ Exp l (UniArg op e1') sty' key
+                        (getType e1') (getUniqueKey e1') $ \sty -> 
+                return $ Exp l (UniArg op e1') sty key
         (SPair, (e1, e2)) -> do
             e1' <- convertE synEnv env e1
             e2' <- convertE synEnv env e2
-            let sty' = TPair (getType e1') (getType e2')
-            shouldBe (key,env) sty sty'
-            return $ Exp l (e1', e2') sty' key
+            return $ Exp l (e1', e2') (TPair (getType e1') (getType e2')) key
         (SLambda, (xs, e1)) -> do
-            ty_xs <- mapM (conv.varType) xs
+            ty_xs <- mapM (conv . varType) xs
             let env' = foldr (uncurry M.insert) env $ zip (map U.varName xs) ty_xs
                 ys = zipWith (\x ty -> TId ty (U.varName x)) xs ty_xs
             e1' <- convertE synEnv env' e1
-            let sty' = TFun ty_xs (getType e1')
-            shouldBe (getUniqueKey e1',env) sty sty'
-            return $ Exp l (ys, e1') sty' key
+            let sty = TFun ty_xs (getType e1')
+            return $ Exp l (ys, e1') sty key
         (SApp, (e, es)) -> do
             e' <- convertE synEnv env e
             es' <- mapM (convertE synEnv env) es
-            let ty_f = TFun (map getType es') sty
-            shouldBe (getUniqueKey e', env) ty_f (getType e')
-            e'' <- cast e' ty_f
-            return $ Exp l (e'', es') sty key
+            let go _ f [] = return f
+                go (TFun ty_vs ty_r) f args 
+                    | length args >= length ty_vs = do
+                        -- Suppose go ([ty_1 .. ty_m] -> ty_r) e_f (arg_1 .. arg_n)
+                        -- go ty_r (e_f (cast arg_1 ty_1) .. (cast arg_m ty_m)) (arg_{m+1} .. arg_n)
+                        let (args1,args2) = splitAt (length ty_vs) args
+                        args1' <- zipWithM cast args1 ty_vs
+                        f' <- Exp SApp (f, args1') ty_r <$> Id.freshKey
+                        go ty_r f' args2
+                    | otherwise = do -- partial application: generate closure
+                        -- Suppose: go ([ty_1 .. ty_m] -> ty_r) e_f (arg_1 .. arg_n)
+                        -- let f = e_f in
+                        -- let y_1 = cast arg_1 ty_1 in
+                        -- ...
+                        -- let y_n = cast arg_n ty_n in
+                        -- fun y_{n+1} .. y_m -> f y_1 .. y_m
+                        let (ty_vs1, ty_vs2) = splitAt (length args) ty_vs
+                        f' <- TId (getType f) <$> Id.identify "fun"
+                        ys1 <- mapM (\ty -> TId ty <$> Id.identify "arg") ty_vs1
+                        ys2 <- mapM (\ty -> TId ty <$> Id.identify "arg") ty_vs2
+                        args' <- zipWithM cast args ty_vs1
+                        vs <- mapM (\y -> Exp SVar y (getType y) <$> Id.freshKey) (ys1 ++ ys2)
+                        f'' <- Exp SVar f' (getType f') <$> Id.freshKey
+                        e_app <- Exp SApp (f'', vs) ty_r <$> Id.freshKey 
+                        e_lam <- Exp SLambda (ys2, e_app) (TFun ty_vs2 ty_r) <$> Id.freshKey
+                        keys <- replicateM (length args + 1) Id.freshKey
+                        return $ foldr (\(y, e_y,key) e -> Exp SLet (y, e_y, e) (getType e) key) e_lam (zip3 (f':ys1) (f:args') keys)
+                go _ _ _ = error "convertE: App: unexpected pattern"
+            go (getType e') e' es'
         (SLet, (x, e1, e2)) -> do
             e1' <- convertE synEnv env e1
             let env' = M.insert (U.varName x) (getType e1') env
             e2' <- convertE synEnv env' e2
-            shouldBe (key,env) sty (getType e2')
             return $ Exp l (TId (getType e1') (U.varName x), e1', e2') (getType e2') key
         (SLetRec, (fs, e)) -> do
-            env' <- fmap (foldr (uncurry M.insert) env) $ forM fs $ \(f, _) ->
-                case convertType synEnv (varType f) of
+            env' <- fmap (foldr (uncurry M.insert) env) $ forM fs $ \(f, e_f) ->
+                case convertType synEnv (annotType e_f) of
                     Left err -> throwError (Synonym err)
                     Right sty -> return (U.varName f, sty)
             fs' <- forM fs $ \(f, e1) -> do
-                e1' <- convertE synEnv env' e1 
-                let ty_f = env' M.! U.varName f
-                shouldBe (getUniqueKey e1', env') ty_f (getType e1')
-                e1' <- cast e1' ty_f
-                return (TId ty_f (U.varName f), e1')
+                (Exp SLambda (xs, e_body) _ key) <- convertE synEnv env' e1 
+                let ty_f@(TFun _ ty_r) = env' M.! U.varName f
+                e_body <- cast e_body ty_r
+                return (TId ty_f (U.varName f), Exp SLambda (xs, e_body) ty_f key)
             e' <- convertE synEnv env' e
-            shouldBe (key, env) sty (getType e')
             return $ Exp l (fs', e') (getType e') key
         (SAssume, (e1, e2)) -> do
             e1' <- convertE synEnv env e1
-            shouldBe (getUniqueKey e1',env) (getType e1') TBool
             e2' <- convertE synEnv env e2
-            shouldBe (key,env) sty (getType e2')
             return $ Exp l (e1', e2') (getType e2') key
         (SIf, (e1, e2, e3)) -> do
             e1' <- convertE synEnv env e1
-            shouldBe (getUniqueKey e1',env) (getType e1') TBool
             e2' <- convertE synEnv env e2
-            shouldBe (key,env) sty (getType e2')
-            e2' <- cast e2' sty
             e3' <- convertE synEnv env e3
-            shouldBe (key,env) sty (getType e3')
-            e3' <- cast e3' sty
-            return $ Exp l (e1', e2', e3') sty key
+            e3' <- cast e3' (getType e2')
+            return $ Exp l (e1', e2', e3') (getType e2') key
         (SBranch, (e2, e3)) -> do
             e2' <- convertE synEnv env e2
-            shouldBe (key,env) sty (getType e2')
-            e2' <- cast e2' sty
             e3' <- convertE synEnv env e3
-            shouldBe (key,env) sty (getType e3')
-            e3' <- cast e3' sty
-            return $ Exp l (e2', e3') sty key
-        (SFail, ()) -> return $ Exp l () sty key
-        (SOmega, ()) -> return $ Exp l () sty key
-        (SRand, ()) -> shouldBe (key,env) sty TInt >> return (Exp l () sty key)
-    cast e sty
+            e3' <- cast e3' (getType e2')
+            return $ Exp l (e2', e3') (getType e2') key
+        (SFail, ())  -> conv ty >>= \sty -> return $ Exp l () sty key
+        (SOmega, ()) -> conv ty >>= \sty -> return $ Exp l () sty key
+        (SRand, ())  -> return $ Exp l () TInt key
                 
 typeOfUniOp :: Env -> SUniOp op -> Type -> UniqueKey -> (Type -> ExceptT TypeError (FreshIO c) b) -> ExceptT TypeError (FreshIO c) b
 typeOfUniOp _ SFst sty1 _key1 k = do
