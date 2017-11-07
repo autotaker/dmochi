@@ -12,7 +12,7 @@ import qualified Language.DMoCHi.ML.Alpha as U
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U(AnnotVar(..),SynName, SynonymDef(..), Type(..), TypeScheme(..), Lit(..), matchType)
 import qualified Language.DMoCHi.Common.Id as Id
 import Language.DMoCHi.ML.TypeInfer
-import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey, getUniqueKey)
+import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey)
 import Language.DMoCHi.ML.DesugarSynonym
 import Language.DMoCHi.Common.Util
 
@@ -191,35 +191,35 @@ cast e ty = do
     let castV v ty | ty_v == ty = return v
                    | otherwise = 
             case (ty_v, ty) of
-                (TPair ty1 ty2, TPair ty3 ty4) -> do
-                    v1 <- Exp SUnary (UniArg SFst v) ty1 <$> Id.freshKey
-                    v2 <- Exp SUnary (UniArg SSnd v) ty2 <$> Id.freshKey
+                (TPair _ _, TPair ty3 ty4) -> do
+                    v1 <- mkUni SFst v <$> Id.freshKey
+                    v2 <- mkUni SSnd v <$> Id.freshKey
                     v1' <- castV v1 ty3
                     v2' <- castV v2 ty4
-                    Exp SPair (v1', v2') ty <$> Id.freshKey
+                    mkPair v1' v2' <$> Id.freshKey
                 (TFun _ _, TFun tys2 ty2) -> do
                     xs <- mapM (\ty -> TId ty <$> Id.identify "arg") tys2
                     -- dig e ty xs : ty2
                     --   e : ty
                     let dig e _ [] = cast e ty2
-                        dig e (TFun tys1 ty1) xs | length xs < length tys1 = do --partially applied
+                        dig e (TFun tys1 _) xs | length xs < length tys1 = do --partially applied
                             vs1 <- zipWithM (\x ty -> do
-                                    v_x <- Exp SVar x (getType x) <$> Id.freshKey
+                                    v_x <- mkVar x <$> Id.freshKey
                                     castV v_x ty) xs tys1
                             ys <- mapM (\ty -> TId ty <$> Id.identify "arg") (drop (length xs) tys1)
-                            vs2 <- mapM (\y -> Exp SVar y (getType y) <$> Id.freshKey) ys
-                            e_app <- Exp SApp (e, vs1 ++ vs2) ty1  <$> Id.freshKey 
-                            e_lam <- Exp SLambda (ys, e_app) (TFun (drop (length xs) tys1) ty1) <$> Id.freshKey
+                            vs2 <- mapM (\y -> mkVar y <$> Id.freshKey) ys
+                            e_app <- mkApp e (vs1 ++ vs2) <$> Id.freshKey 
+                            e_lam <- mkLambda ys e_app <$> Id.freshKey
                             castV e_lam ty2
                         dig e (TFun tys1 ty1) xs = do
                             vs1 <- zipWithM (\x ty -> do
-                                    v_x <- Exp SVar x (getType x) <$> Id.freshKey
+                                    v_x <- mkVar x  <$> Id.freshKey
                                     castV v_x ty) xs tys1
-                            e_app <- Exp SApp (e, vs1) ty1 <$> Id.freshKey
+                            e_app <- mkApp e vs1 <$> Id.freshKey
                             dig e_app ty1 (drop (length tys1) xs)
                         dig _ _ _ = error "unexpected pattern"
                     e_body <- dig v ty_v xs
-                    Exp SLambda (xs, e_body) (TFun tys2 ty2) <$> Id.freshKey
+                    mkLambda xs e_body <$> Id.freshKey
                 (TPair _ _, _) -> error "unexpected pattern"
                 (TInt, _) -> error "unexpected pattern"
                 (TBool, _) -> error "unexpected pattern"
@@ -227,9 +227,8 @@ cast e ty = do
          where ty_v = getType v
     let ty_e = getType e
     x <- TId ty_e <$> Id.identify "tmp"
-    e' <- (Exp SVar x ty_e <$> Id.freshKey) >>= \v -> castV v ty
-    key <- Id.freshKey
-    return $ Exp SLet (x, e, e') ty key
+    e' <- (mkVar x <$> Id.freshKey) >>= \v -> castV v ty
+    mkLet x e e' <$> Id.freshKey
 
 convertE :: forall c. SynEnv -> Env -> U.Exp U.Type -> ExceptT TypeError (FreshIO c) Exp
 convertE synEnv env (U.Exp l arg (ty,key)) = do
@@ -238,35 +237,29 @@ convertE synEnv env (U.Exp l arg (ty,key)) = do
             Left err -> throwError (Synonym err)
             Right sty -> pure sty
     case (l, arg) of
-        (SLiteral, U.CInt _)  -> return $ Exp l arg TInt key
-        (SLiteral, U.CBool _) -> return $ Exp l arg TBool key
-        (SLiteral, U.CUnit) -> return $ Exp l (U.CInt 0) TInt key
+        (SLiteral, U.CInt _)  -> return $ mkLiteral arg key
+        (SLiteral, U.CBool _) -> return $ mkLiteral arg key
+        (SLiteral, U.CUnit) -> return $ mkLiteral (U.CInt 0) key
         (SVar, x) -> do
             let sty = env M.! (U.varName x)
-            return $ Exp l (TId sty (U.varName x)) sty key
+            return $ mkVar (TId sty (U.varName x)) key
         (SBinary, BinArg op e1 e2) ->  do
             e1' <- convertE synEnv env e1
             e2' <- convertE synEnv env e2
-            typeOfBinOp env op 
-                        (getType e1') (getUniqueKey e1') 
-                        (getType e2') (getUniqueKey e2') $ \sty ->
-                return $ Exp l (BinArg op e1' e2') sty key
+            return $ mkBin op e1' e2' key
         (SUnary, UniArg op e1) ->  do
             e1' <- convertE synEnv env e1
-            typeOfUniOp env op 
-                        (getType e1') (getUniqueKey e1') $ \sty -> 
-                return $ Exp l (UniArg op e1') sty key
+            return $ mkUni op e1' key
         (SPair, (e1, e2)) -> do
             e1' <- convertE synEnv env e1
             e2' <- convertE synEnv env e2
-            return $ Exp l (e1', e2') (TPair (getType e1') (getType e2')) key
+            return $ mkPair e1' e2' key
         (SLambda, (xs, e1)) -> do
             ty_xs <- mapM (conv . varType) xs
             let env' = foldr (uncurry M.insert) env $ zip (map U.varName xs) ty_xs
                 ys = zipWith (\x ty -> TId ty (U.varName x)) xs ty_xs
             e1' <- convertE synEnv env' e1
-            let sty = TFun ty_xs (getType e1')
-            return $ Exp l (ys, e1') sty key
+            return $ mkLambda ys e1' key
         (SApp, (e, es)) -> do
             e' <- convertE synEnv env e
             es' <- mapM (convertE synEnv env) es
@@ -274,13 +267,14 @@ convertE synEnv env (U.Exp l arg (ty,key)) = do
                 go (TFun ty_vs ty_r) f args 
                     | length args >= length ty_vs = do
                         -- Suppose go ([ty_1 .. ty_m] -> ty_r) e_f (arg_1 .. arg_n)
-                        -- go ty_r (e_f (cast arg_1 ty_1) .. (cast arg_m ty_m)) (arg_{m+1} .. arg_n)
+                        -- Return Term: go ty_r (e_f (cast arg_1 ty_1) .. (cast arg_m ty_m)) (arg_{m+1} .. arg_n)
                         let (args1,args2) = splitAt (length ty_vs) args
                         args1' <- zipWithM cast args1 ty_vs
-                        f' <- Exp SApp (f, args1') ty_r <$> Id.freshKey
+                        f' <- mkApp f args1' <$> Id.freshKey
                         go ty_r f' args2
                     | otherwise = do -- partial application: generate closure
                         -- Suppose: go ([ty_1 .. ty_m] -> ty_r) e_f (arg_1 .. arg_n)
+                        -- Return Term:
                         -- let f = e_f in
                         -- let y_1 = cast arg_1 ty_1 in
                         -- ...
@@ -292,18 +286,18 @@ convertE synEnv env (U.Exp l arg (ty,key)) = do
                         ys2 <- mapM (\ty -> TId ty <$> Id.identify "arg") ty_vs2
                         args' <- zipWithM cast args ty_vs1
                         vs <- mapM (\y -> Exp SVar y (getType y) <$> Id.freshKey) (ys1 ++ ys2)
-                        f'' <- Exp SVar f' (getType f') <$> Id.freshKey
-                        e_app <- Exp SApp (f'', vs) ty_r <$> Id.freshKey 
-                        e_lam <- Exp SLambda (ys2, e_app) (TFun ty_vs2 ty_r) <$> Id.freshKey
+                        f'' <- mkVar f' <$> Id.freshKey
+                        e_app <- mkApp f'' vs <$> Id.freshKey 
+                        e_lam <- mkLambda ys2 e_app  <$> Id.freshKey
                         keys <- replicateM (length args + 1) Id.freshKey
-                        return $ foldr (\(y, e_y,key) e -> Exp SLet (y, e_y, e) (getType e) key) e_lam (zip3 (f':ys1) (f:args') keys)
+                        return $ foldr (\(y, e_y, key) e -> mkLet y e_y e key) e_lam (zip3 (f':ys1) (f:args') keys)
                 go _ _ _ = error "convertE: App: unexpected pattern"
             go (getType e') e' es'
         (SLet, (x, e1, e2)) -> do
             e1' <- convertE synEnv env e1
             let env' = M.insert (U.varName x) (getType e1') env
             e2' <- convertE synEnv env' e2
-            return $ Exp l (TId (getType e1') (U.varName x), e1', e2') (getType e2') key
+            return $ mkLet (TId (getType e1') (U.varName x)) e1' e2' key
         (SLetRec, (fs, e)) -> do
             env' <- fmap (foldr (uncurry M.insert) env) $ forM fs $ \(f, e_f) ->
                 case convertType synEnv (annotType e_f) of
@@ -313,65 +307,25 @@ convertE synEnv env (U.Exp l arg (ty,key)) = do
                 (Exp SLambda (xs, e_body) _ key) <- convertE synEnv env' e1 
                 let ty_f@(TFun _ ty_r) = env' M.! U.varName f
                 e_body <- cast e_body ty_r
-                return (TId ty_f (U.varName f), Exp SLambda (xs, e_body) ty_f key)
+                return (TId ty_f (U.varName f), mkLambda xs e_body key)
             e' <- convertE synEnv env' e
-            return $ Exp l (fs', e') (getType e') key
+            return $ mkLetRec fs' e' key
         (SAssume, (e1, e2)) -> do
             e1' <- convertE synEnv env e1
             e2' <- convertE synEnv env e2
-            return $ Exp l (e1', e2') (getType e2') key
+            return $ mkAssume e1' e2' key
         (SIf, (e1, e2, e3)) -> do
             e1' <- convertE synEnv env e1
             e2' <- convertE synEnv env e2
             e3' <- convertE synEnv env e3
             e3' <- cast e3' (getType e2')
-            return $ Exp l (e1', e2', e3') (getType e2') key
+            return $ mkIf e1' e2' e3' key
         (SBranch, (e2, e3)) -> do
             e2' <- convertE synEnv env e2
             e3' <- convertE synEnv env e3
             e3' <- cast e3' (getType e2')
-            return $ Exp l (e2', e3') (getType e2') key
-        (SFail, ())  -> conv ty >>= \sty -> return $ Exp l () sty key
-        (SOmega, ()) -> conv ty >>= \sty -> return $ Exp l () sty key
-        (SRand, ())  -> return $ Exp l () TInt key
+            return $ mkBranch e2' e3' key
+        (SFail, ())  -> conv ty >>= \sty -> return $ mkFail sty key
+        (SOmega, ()) -> conv ty >>= \sty -> return $ mkOmega sty key
+        (SRand, ())  -> return $ mkRand key
                 
-typeOfUniOp :: Env -> SUniOp op -> Type -> UniqueKey -> (Type -> ExceptT TypeError (FreshIO c) b) -> ExceptT TypeError (FreshIO c) b
-typeOfUniOp _ SFst sty1 _key1 k = do
-    case sty1 of
-        TPair sty' _ -> k sty'
-        _ -> throwError $ OtherError $ "Expected a pair type but found " ++ show sty1
-typeOfUniOp _ SSnd sty1 _key1 k = do
-    case sty1 of
-        TPair _ sty' -> k sty'
-        _ -> throwError $ OtherError $ "Expected a pair type but found " ++ show sty1
-typeOfUniOp env SNot sty1 key1 k = do
-    shouldBe (key1,env) sty1 TBool
-    k TBool
-typeOfUniOp env SNeg sty1 key1 k = do
-    shouldBe (key1,env) sty1 TInt
-    k TInt
-        
-typeOfBinOp :: Env -> SBinOp op -> Type -> UniqueKey -> Type -> UniqueKey -> 
-               (Type -> ExceptT TypeError (FreshIO c) b) -> ExceptT TypeError (FreshIO c) b 
-typeOfBinOp env op sty1 key1 sty2 key2 k = (case op of
-    SAdd -> intOp TInt
-    SSub -> intOp TInt
-    SMul -> intOp TInt
-    SDiv -> intOp TInt
-    SEq  -> intOp TBool
-    SNEq -> intOp TBool
-    SLt -> intOp TBool
-    SGt -> intOp TBool
-    SLte -> intOp TBool
-    SGte -> intOp TBool
-    SAnd -> boolOp
-    SOr  -> boolOp
-    ) where intOp sty = do
-                shouldBe (key1,env) sty1 TInt
-                shouldBe (key2,env) sty2 TInt
-                k sty
-            boolOp = do
-                shouldBe (key1,env) sty1 TBool
-                shouldBe (key2,env) sty2 TBool
-                k TBool
-    
