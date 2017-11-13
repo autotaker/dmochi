@@ -72,12 +72,13 @@ import Language.DMoCHi.ML.MLLexer
 Prog : Def ';;' Prog { $1 : $3 }
      | Def Defs      { $1 : $2 }
      | Def ';;'      { [$1] } 
-     | Def           { [$1] }
 
 Defs : let LetDef Defs        { $2 : $3 }
      | let LetDef ';;' Prog   { $2 : $4 }
-     | type TypDef Defs      { $2 : $3 }
-     | type TypDef ';;' Prog { $2 : $4 }
+     | type TypDef Defs       { $2 : $3 }
+     | type TypDef ';;' Prog  { $2 : $4 }
+     |                        { [] }
+
 
 Def : Expr                       { DLet unusedVar $1 }
     | let LetDef                 { $2 }
@@ -195,8 +196,11 @@ primFuncs =
     sndDef = mkLambda [x] (mkUnary SSnd (mkVar x))
 
 toProg :: [Def] -> Program
-toProg defs = foldr f (Program primFuncs [] (mkLiteral CUnit)) defs
+toProg defs = foldr f (Program primFuncs [] e0) defs
     where
+    e0 = case last defs of
+        DLet x e | arity e > 0 -> mkApp (mkVar x) [mkRand | _ <- [1..arity e]]
+        _                      -> mkLiteral CUnit
     f (DLet x e) (Program fs syns main) = Program fs syns (mkLet x e main)
     f (DSyn syn) (Program fs syns main) = Program fs (syn:syns) main
     f (DRec funs) (Program fs syns main) = Program fs syns (mkLetRec funs main)

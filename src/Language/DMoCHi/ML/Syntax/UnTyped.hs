@@ -2,6 +2,7 @@
 module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..)
                                         , Type(..), TypeScheme(..), SynName, annot, annotVar, toTypeScheme
                                         , SynonymDef(..), Program(..), unusedVar, matchTypeScheme, matchType
+                                        , arity
                                         , mkLiteral, mkVar, mkUnary, mkBinary
                                         , mkPair, mkLambda, mkApp, mkLet, mkLetRec
                                         , mkAssume, mkIf
@@ -127,6 +128,10 @@ matchTypeScheme (TypeScheme fvs1 ty1) (TypeScheme _ ty2) = doit
 instance HasUniqueKey Exp where
     getUniqueKey (Exp _ _ key) = key
     -}
+
+arity :: Exp -> Int
+arity (Exp SLambda (xs, _) _) = length xs
+arity _ = 0
 
 annot :: Exp -> Type -> Exp
 annot (Exp l arg _) ty = Exp l arg (Just ty)

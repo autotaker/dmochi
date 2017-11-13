@@ -19,8 +19,9 @@ import qualified Data.IntMap as IM
 import qualified Data.PolyDict as Dict
 import Data.PolyDict(Dict, access',Assoc,access)
 -- import Data.Aeson
-import qualified Data.ByteString.Lazy as ByteString
-import Data.Aeson.Encode.Pretty(encodePretty)
+--import qualified Data.ByteString.Lazy as ByteString
+import qualified Data.ByteString.Lazy.Char8 as ByteString
+import Data.Aeson(encode)
 
 import           Language.DMoCHi.Boolean.Syntax.Typed as B(tCheck)
 import           Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
@@ -116,7 +117,7 @@ run = do
     -- check args
     conf <- parseArgs
     (r, d) <- verify conf
-    ByteString.putStr $ encodePretty d
+    ByteString.writeFile (targetProgram conf ++ ".result.json") (encode d <> ByteString.pack "\n")
     putStrLn ""
     case r of
         Left err -> putStr "Error: " >> print err >> exitFailure
@@ -260,7 +261,7 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                 return r
         cegar _ k _  | k >= cegarLimit conf = throwError CEGARLimitExceeded
         cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs,traces) = do
-            update $ access' #cycles 1 %~ succ
+            update $ access' #cycles 0 %~ succ
             res <- mapExceptT (zoom (access' #cegar IM.empty . at k . non Dict.empty)) $ do
                 -- liftIO $ putStrLn "Predicate Abstracion"
                 -- liftIO $ PAbst.printTypeMap typeMap
