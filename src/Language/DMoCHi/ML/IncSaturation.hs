@@ -8,6 +8,7 @@ import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.IncSaturationPre
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
+import qualified Language.DMoCHi.ML.SMT as SMT
 
 -- import Control.Monad
 import           Control.Monad.Fix
@@ -23,6 +24,7 @@ import qualified Data.HashTable.IO as H
 import           Text.PrettyPrint.HughesPJClass
 import           Debug.Trace
 import           Data.PolyDict(Dict)
+
 
 setFV :: UniqueKey -> S.Set TId -> R ()
 setFV key s = do
@@ -751,6 +753,7 @@ saturate typeMap prog = do
     ctx <- lift $ initContext typeMap prog
     let doit :: R (Bool, ([ITermType], Maybe [Bool]))
         doit = do
+            SMT.initSMTContext
             calcContextE M.empty (mainTerm prog) (TId TInt (reserved "main"), PInt, [])
             _ <- calcFVE (mainTerm prog)
             pprintContext prog >>= logPretty "saturate" LevelDebug "Abstraction Annotated Program" . PPrinted 

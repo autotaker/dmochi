@@ -12,6 +12,7 @@ import Text.PrettyPrint.HughesPJClass
 import Control.Monad.Writer
 import Data.Proxy
 import qualified Data.DList as DL
+import Debug.Trace
 
 data PType = PInt | PBool
            | PFun Type ArgType TermType

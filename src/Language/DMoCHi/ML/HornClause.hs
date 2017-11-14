@@ -15,6 +15,8 @@ data Term = Bool Bool
           | Pred String [Term]
           | Add Term Term
           | Sub Term Term
+          | Mul Term Term
+          | Div Term Term
           | Eq  Term Term
           | NEq Term Term
           | Gt  Term Term
@@ -51,6 +53,10 @@ instance Show Term where
         showString p . showChar '(' .
         (foldr1 (\a b -> a . showChar ',' . showChar ' ' . b) (map shows ps)) .
         showChar ')'
+    showsPrec d (Mul t1 t2) = showParen (d >= 6) $ 
+        (showsPrec 6 t1) . showString " * " . (showsPrec 6 t2)
+    showsPrec d (Div t1 t2) = showParen (d >= 6) $ 
+        (showsPrec 6 t1) . showString " / " . (showsPrec 6 t2)
     showsPrec d (Add t1 t2) = showParen (d >= 5) $ 
         (showsPrec 5 t1) . showString " + " . (showsPrec 5 t2)
     showsPrec d (Sub t1 t2) = showParen (d >= 5) $ 

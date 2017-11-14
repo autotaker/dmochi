@@ -17,6 +17,7 @@ $symchar = [a-zA-Z0-9\'\_]
 $eol = [\n]
 
 @ident = $symstart $symchar*
+@module = ($upper$symchar*\.)*
 
 tokens :-
 <0>            $eol    ;
@@ -57,7 +58,7 @@ tokens :-
 <0>            true    { lexeme $ \_ -> TokenTrue }
 <0>            false   { lexeme $ \_ -> TokenFalse }
 <0>            assert  { lexeme $ \_ -> TokenAssert }
-<0>            @ident  { lexeme $ \s -> if s == "_" then TokenHole else TokenVar s }
+<0>            @module@ident  { lexeme $ \s -> if s == "_" then TokenHole else TokenVar s }
 <0>            \'@ident{ lexeme $ \s -> TokenTVar s }
 <0>            $digit+ { lexeme $ \s -> TokenNum (read s) }
 {

@@ -436,6 +436,8 @@ termOfValue = \case
     Neg v -> Horn.Sub (Horn.Int 0) (termOfValue v)
     And v1 v2 -> Horn.And (termOfValue v1) (termOfValue v2)
     Or  v1 v2 -> Horn.Or  (termOfValue v1) (termOfValue v2)
+    Mul v1 v2 -> Horn.Mul (termOfValue v1) (termOfValue v2)
+    Div v1 v2 -> Horn.Div (termOfValue v1) (termOfValue v2)
     v -> error $ "termOfValue: unexpected value: " ++ show v
 
 -- assume the value has type bool

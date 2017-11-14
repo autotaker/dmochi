@@ -45,17 +45,22 @@ toIValue v@(Value l arg _ _) = case atomOfValue v of
         _ -> error "impossible"
 
 mkUDiv :: MonadZ3 z3 => IValue -> IValue -> z3 IValue
+mkUDiv (ASTValue v1) (ASTValue v2) = ASTValue <$> mkDiv v1 v2
+{-
 mkUDiv (ASTValue v1) (ASTValue v2) = do
     ctx <- liftIO $ readIORef smtContext
     ASTValue <$> mkApp (divFD ctx) [v1, v2] 
+    -}
 mkUDiv _ _ = error "unexpected pattern"
 
 {- the first boolean argument represents that this is scalar or not -}
 mkUMul :: MonadZ3 z3 => Bool -> IValue -> IValue -> z3 IValue
-mkUMul True (ASTValue v1) (ASTValue v2) = ASTValue <$> mkMul [v1, v2]
+mkUMul _ (ASTValue v1) (ASTValue v2) = ASTValue <$> mkMul [v1, v2]
+{-
 mkUMul False (ASTValue v1) (ASTValue v2) = do
     ctx <- liftIO $ readIORef smtContext
     ASTValue <$> mkApp (mulFD ctx) [v1, v2] 
+    -}
 mkUMul _ _ _ = error "unexpected pattern"
     
 
@@ -131,6 +136,7 @@ mkAnd' l  = mkAnd l
 
 sat :: [Value] -> IO Bool
 sat vs = evalZ3 $ do
+    initSMTContext
     ivs <- mapM toIValue vs
     {-
     forM_ ivs $ \(ASTValue v) -> do
@@ -193,6 +199,7 @@ abst :: [Atom] -> [Atom] -> IO (BDDNode Atom)
 abst constraints predicates = evalZ3 $ do
     let f (ASTValue v) = v
         f _ = error "Expecting an SMT value"
+    initSMTContext
     assert =<< mkAnd' =<< mapM (toIValueA >=> (return . f)) constraints
     z3_predicates  <- mapM (toIValueA >=> (return . f)) predicates
     hashTable <- liftIO $ HT.new :: Z3 (HT.BasicHashTable BDDHashKey (BDDNode Atom))

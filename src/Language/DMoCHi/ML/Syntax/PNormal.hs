@@ -125,7 +125,7 @@ mkUni op v1@(Atom _ _ sty) = case op of
 
 mkLiteral :: Lit -> Atom
 mkLiteral l@(CInt _) = Atom SLiteral l TInt
-mkLiteral l@(CBool _) = Atom SLiteral l TInt
+mkLiteral l@(CBool _) = Atom SLiteral l TBool
 mkLiteral CUnit = error "mkLiteral: unexpected unit literal"
 
 mkVar :: TId -> Atom

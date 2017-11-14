@@ -181,19 +181,24 @@ data Def = DLet (AnnotVar String (Maybe Type)) Exp
 primFuncs :: [(AnnotVar String (Maybe Type), TypeScheme, Exp)]
 primFuncs = 
     [ build "read_int" (TFun [TUnit] TInt) readIntDef
+    , build "Random.bool" (TFun [TUnit] TBool) randomBoolDef
+    , build "Random.int" (TFun [TUnit] TInt) readIntDef
     , build "assume"   (TFun [TBool] TUnit) assumeDef
     , build "fst"      (TFun [TPair ta tb] (TVar "a")) fstDef
     , build "snd"      (TFun [TPair ta tb] (TVar "b")) sndDef
+    , build "not"      (TFun [TBool] TBool) notDef
     ]
     where
     ta = TVar "a"
     tb = TVar "b"
     build fname ty def = (V fname Nothing, toTypeScheme ty, def)
     readIntDef = mkLambda [unusedVar] mkRand
+    randomBoolDef = mkLambda [unusedVar] (mkBranch (mkLiteral (CBool True)) (mkLiteral (CBool False)))
     assumeDef  = mkLambda [x] (mkAssume (mkVar x) (mkLiteral CUnit))
     x = V "x" Nothing
     fstDef = mkLambda [x] (mkUnary SFst (mkVar x))
     sndDef = mkLambda [x] (mkUnary SSnd (mkVar x))
+    notDef = mkLambda [x] (mkUnary SNot (mkVar x))
 
 toProg :: [Def] -> Program
 toProg defs = foldr f (Program primFuncs [] e0) defs
