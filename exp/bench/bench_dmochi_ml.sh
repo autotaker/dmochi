@@ -1,6 +1,7 @@
 #!/bin/bash
 
 PROJECT_DIR=../..
+SRC_DIR=$PROJECT_DIR/benchmarks/caml/lia/mochi
 TESTS=`cat testcases`
 
 if [ $# -gt 0 ]; then
@@ -34,7 +35,7 @@ do
     echo "Running testcase" $testcase
     rm -f work/$testcase*
     src=$testcase.ml
-    cp $PROJECT_DIR/sample/mochi/$src work/$src
+    cp $SRC_DIR/$src work/$src
     DMOCHI_FLAG="--hccs gch --incremental"
     $TIMEOUT_CMD $TIMEOUT $DMOCHI $DMOCHI_FLAG work/$src > $LOG_DIR/$testcase.log
     cp work/$src.result.json $LOG_DIR/$testcase.result.json
