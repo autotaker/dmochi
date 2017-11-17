@@ -1,6 +1,10 @@
 module Language.DMoCHi.ML.HornClause where
 import Data.List(intersperse)
 import Language.DMoCHi.ML.Syntax.Type
+import Text.PrettyPrint.HughesPJ
+import qualified Data.Map as M
+import qualified Data.Set as S
+import Control.Monad.State.Strict
 
 newtype HCCS = HCCS { clauses :: [Clause] }
 
@@ -8,6 +12,7 @@ data Clause = Clause { cHead :: Head , cBody :: Body }
 
 data Head = Bot | PVar String [Term] deriving(Show)
 type Body = [Term]
+
 
 data Term = Bool Bool
           | Int Integer
@@ -26,8 +31,125 @@ data Term = Bool Bool
 --          | Pair Term Term
           | Not Term
           | And Term Term
-          | Iff Term Term
           | Or  Term Term
+
+instance HasType Term where
+    getType (Bool _) = TBool
+    getType (Int _) = TInt
+    getType (Var x) = getType x
+    getType (Pred _ _) = TBool
+    getType (Add _ _) = TInt
+    getType (Sub _ _) = TInt
+    getType (Mul _ _) = TInt
+    getType (Div _ _) = TInt
+    getType (Eq _ _) = TBool
+    getType (NEq _ _) = TBool
+    getType (Gt _ _) = TBool
+    getType (Lt _ _) = TBool
+    getType (Gte _ _) = TBool
+    getType (Lte _ _) = TBool
+    getType (Not _) = TBool
+    getType (And _ _) = TBool
+    getType (Or _ _) = TBool
+
+freeVariables :: Clause -> [TId]
+freeVariables clause = S.toList $ execState doit S.empty
+    where
+    doit = do
+        forM_ (cBody clause) $ \case
+            Pred _ ts -> mapM_ term ts
+            _ -> return () 
+        case cHead clause of
+            Bot -> return ()
+            PVar _ ts -> mapM_ term ts
+    push k = modify' (S.insert k)
+    term = \case
+        Bool _ -> return ()
+        Int _ -> return ()
+        Var x -> push x
+        Pred _ ts -> mapM_ term ts
+        Add t1 t2 -> term t1 >> term t2
+        Sub t1 t2 -> term t1 >> term t2
+        Mul t1 t2 -> term t1 >> term t2
+        Div t1 t2 -> term t1 >> term t2
+        Eq  t1 t2 -> term t1 >> term t2
+        NEq t1 t2 -> term t1 >> term t2
+        Gt  t1 t2 -> term t1 >> term t2
+        Lt  t1 t2 -> term t1 >> term t2
+        Gte t1 t2 -> term t1 >> term t2
+        Lte t1 t2 -> term t1 >> term t2
+        Not t1    -> term t1
+        Or  t1 t2 -> term t1 >> term t2
+        And t1 t2 -> term t1 >> term t2
+
+
+predicates :: HCCS -> [(String, [Type])]
+predicates (HCCS hccs) = M.toList $ execState doit M.empty
+    where
+    doit :: State (M.Map String [Type]) ()
+    doit = forM_ hccs $ \clause -> do
+        forM_ (cBody clause) $ \case
+            Pred s ts -> push s (map getType ts)
+            _ -> return () 
+        case cHead clause of
+            Bot -> return ()
+            PVar s ts -> push s (map getType ts)
+    push k v = modify' (M.insert k v)
+
+renderSMTLib2 :: HCCS -> String
+renderSMTLib2 hccs = render doit ++ "\n"
+    where
+    doit = header $+$ vcat (map renderClause (clauses hccs)) $+$ footer
+    header = setLogic $+$ declareFuncs
+        where
+        setLogic = parens $ text "set-logic" <+> text "HORN"
+        declareFuncs = vcat $ map declareFunc (predicates hccs)
+        declareFunc (pred, argTypes) = 
+            parens $ text "declare-fun" 
+                 <+> quote pred 
+                 <+> parens (hsep $ map renderType argTypes)
+                 <+> text "Bool"
+    renderType TInt = text "Int"
+    renderType TBool = text "Bool"
+    renderType t = error $ "renderSMTLib2: unsupported type :" ++ show t
+    quote s = text ("|" ++ s  ++ "|")
+    renderClause clause = 
+        parens $ text "assert" 
+             <+> (parens $ text "forall" 
+                       <+> parens (hsep (map renderTId vars)) 
+                       <+> (parens $ text "=>" <+> body <+> head))
+        where
+        vars = freeVariables clause
+        head = case cHead clause of
+            Bot -> text "false"
+            PVar s ts -> renderTerm (Pred s ts)
+        body = case cBody clause of
+            [] -> text "true"
+            ts -> parens $ hsep $ text "and" : map renderTerm ts
+    renderTId x = parens $ (quote $ show $ name x) <+> (renderType $ getType x)
+    renderTerm = \case
+        Bool True -> text "true"
+        Bool False -> text "false"
+        Int i -> integer i
+        Var x -> quote $ show $ name x
+        Pred s ts -> parens $ hsep (quote s : map renderTerm ts)
+        Add t1 t2 -> parens $ text "+" <+> renderTerm t1 <+> renderTerm t2
+        Sub t1 t2 -> parens $ text "-" <+> renderTerm t1 <+> renderTerm t2
+        Mul t1 t2 -> parens $ text "*" <+> renderTerm t1 <+> renderTerm t2
+        Div t1 t2 -> parens $ text "/" <+> renderTerm t1 <+> renderTerm t2
+        Eq  t1 t2 -> parens $ text "=" <+> renderTerm t1 <+> renderTerm t2
+        NEq t1 t2 -> parens $ text "!=" <+> renderTerm t1 <+> renderTerm t2
+        Gt  t1 t2 -> parens $ text ">" <+> renderTerm t1 <+> renderTerm t2
+        Lt  t1 t2 -> parens $ text "<" <+> renderTerm t1 <+> renderTerm t2
+        Gte t1 t2 -> parens $ text ">=" <+> renderTerm t1 <+> renderTerm t2
+        Lte t1 t2 -> parens $ text "<=" <+> renderTerm t1 <+> renderTerm t2
+        Not t1    -> parens $ text "not" <+> renderTerm t1
+        And t1 t2 -> parens $ text "and" <+> renderTerm t1 <+> renderTerm t2
+        Or  t1 t2 -> parens $ text "or" <+> renderTerm t1 <+> renderTerm t2
+    footer = checkSat $+$ getModel 
+        where
+        checkSat = parens $ text "check-sat"
+        getModel = parens $ text "get-model"
 
 instance Show HCCS where
     show (HCCS cs) = unlines $ map show cs
@@ -77,8 +199,6 @@ instance Show Term where
         (showsPrec 3 t1) . showString " /\\ " . (showsPrec 4 t2)
     showsPrec d (Or  t1 t2) = showParen (d >= 3) $
         (showsPrec 3 t1) . showString " \\/ " . (showsPrec 4 t2)
-    showsPrec d (Iff t1 t2) = showParen (d >= 3) $
-        (showsPrec 3 t1) . showString " = " . (showsPrec 4 t2)
     showsPrec _ (Not t1) = showChar '!' . (showsPrec 6 t1)
 
 

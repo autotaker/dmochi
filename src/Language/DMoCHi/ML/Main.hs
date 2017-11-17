@@ -285,6 +285,7 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                             Nothing -> return Unsafe
                             Just (isFool,(clauses, assoc)) -> do
                                 let file_hcs = printf "%s_%d.hcs" path k
+                                --let file_hcs_smt2 = printf "%s_%d.smt2" path k
                                 let bf = case isFoolI of
                                         Just b -> b
                                         Nothing -> foolTraces conf && isFool
@@ -292,6 +293,7 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                                     logInfoNS "refinement" "Fool counterexample refinement"
                                     let hcs' = clauses
                                     liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
+                                    --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
                                     let cmd = printf "%s -hccs it -print-hccs-solution %s %s > %s" 
                                                      hccsSolver (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
                                     liftIO $ callCommand cmd
@@ -309,6 +311,7 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                                             if accErrTraces conf then assoc <> (rtyAssoc0,rpostAssoc0)
                                                                  else assoc
                                     liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
+                                    --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
                                     let opts = hornOption conf
                                     let cmd = printf "%s %s -print-hccs-solution %s %s > %s" 
                                                      hccsSolver opts (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
