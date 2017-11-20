@@ -19,6 +19,11 @@ instance Hashable TId where
 
 data Type = TInt | TBool | TPair Type Type | TFun [Type] Type deriving(Eq)
 
+isBase :: Type -> Bool
+isBase TInt = True
+isBase TBool = True
+isBase _ = False
+
 alphaTId :: Id.MonadId m => TId -> m TId
 alphaTId (TId sty x) = TId sty <$> Id.refresh x
 

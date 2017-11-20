@@ -41,6 +41,7 @@ import qualified Language.DMoCHi.ML.UnliftRec as IncSat
 import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
+import qualified Language.DMoCHi.ML.EtaNormalize as Eta
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 
@@ -233,7 +234,12 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
         -- unreachable code elimination
         _normalizedProgram <- return $ Unreachable.elimUnreachable _normalizedProgram
         prettyPrint "preprocess" "Unreachable Code Elimination" _normalizedProgram
+
+        _normalizedProgram <- lift $Eta.normalize _normalizedProgram
+        prettyPrint "preprocess" "Eta normalize" _normalizedProgram
         return _normalizedProgram) :: ExceptT MainError (FreshIO (Dict Main)) PNormal.Program
+
+    
 
     (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
     let mc k curTypeMap castFreeProgram 
@@ -267,10 +273,10 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                 -- liftIO $ PAbst.printTypeMap typeMap
                 let curTypeMap = PAbst.mergeTypeMap typeMap typeMapFool
 
-                castFreeProgram <- lift $ PAbst.elimCast curTypeMap normalizedProgram
-                prettyPrint "cegar" "Elim cast" castFreeProgram
+                --castFreeProgram <- lift $ PAbst.elimCast curTypeMap normalizedProgram
+                --prettyPrint "cegar" "Elim cast" castFreeProgram
 
-                mc k curTypeMap castFreeProgram >>= \case
+                mc k curTypeMap normalizedProgram >>= \case
                     Nothing -> return Safe
                     Just trace -> measure #refine $ do
                         when (elem trace traces) $ throwError $ OtherError "No progress"
