@@ -7,7 +7,7 @@ import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.Flow
 import           Language.DMoCHi.ML.Syntax.IType
--- import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
+import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 
 import           GHC.Generics (Generic)
 -- import           Data.Kind(Constraint)
@@ -31,6 +31,7 @@ import qualified Data.PolyDict as Dict
 import           Data.PolyDict(Dict,access)
 
 type HFormulaTbl = HashTable HFormula HFormula
+newtype Scope = Scope { unScope :: [HFormula] }
 
 data Context = 
   Context { 
@@ -41,8 +42,8 @@ data Context =
   , ctxNodeCounter   :: IORef Int
   , ctxNodeTbl       :: HashTable Int SomeNode
   , ctxNodeDepG      :: HashTable Int [SomeNode]
-  , ctxRtnTypeTbl    :: HashTable UniqueKey (PType, [HFormula]) 
-  , ctxArgTypeTbl    :: HashTable UniqueKey ([PType], [HFormula]) 
+  , ctxRtnTypeTbl    :: HashTable UniqueKey (PType, [HFormula], Scope) 
+  , ctxArgTypeTbl    :: HashTable UniqueKey ([PType], [HFormula], Scope) 
   , ctxFreeVarTbl    :: HashTable UniqueKey (S.Set TId)
   , ctxHFormulaTbl   :: HFormulaTbl
   , ctxHFormulaSize  :: IORef Int
@@ -107,6 +108,9 @@ instance ITypeFactory R where
     getBFormulaTable   = ctxBFormulaTbl <$> ask
     getBFormulaCounter = ctxBFormulaSize <$> ask
 
+instance Pretty Scope where
+    pPrint (Scope vs) = brackets $ hsep $ punctuate comma $ map pPrint vs 
+
 type PEnv = M.Map TId PType
 type IEnv = M.Map TId IType
 
@@ -153,14 +157,14 @@ initContext typeMap prog = do
 pprintContext :: Program -> R Doc
 pprintContext prog = do
     d_fs <- forM (functions prog) $ \(f,key,xs,e) -> do
-        Just (ty_xs, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
+        Just (ty_xs, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
         let d_args = vcat $ zipWith (\x ty_x -> parens $ pPrint (name x) 
                                             <+> colon 
                                             <+> pPrint ty_x) xs ty_xs
             d_ps = hsep $ punctuate comma $ map pPrint ps
         d_body <- pprintE e
-        return $ text "let" <+> pPrint (name f) <+> (case ps of [] -> d_args <+> text "="
-                                                                _  -> d_args $+$ text "|" <+> d_ps <+> text "=")
+        return $ text "let" <+> pPrint (name f) <+> (case ps of [] -> d_args <+> pPrint scope <+> text "="
+                                                                _  -> d_args $+$ text "|" <+> d_ps <+> pPrint scope <+> text "=")
                             $+$ (nest 4 d_body <> text ";;")
     d_main <- pprintE (mainTerm prog)
     return $ vcat d_fs $+$ d_main 
@@ -170,8 +174,8 @@ pprintContext prog = do
         let valueCase :: Value -> R Doc
             valueCase v = do
                 d_v <- pprintV 0 v
-                Just (ty_r, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
-                return $ comment (ty_r, ps) $+$ d_v
+                Just (ty_r, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+                return $ comment (ty_r, ps, scope) $+$ d_v
         in case (l, arg) of
             (SLiteral, _) -> valueCase (Value l arg sty key)
             (SVar, _)     -> valueCase (Value l arg sty key)
@@ -181,13 +185,13 @@ pprintContext prog = do
             (SLambda, _)  -> valueCase (Value l arg sty key)
             (SLet, (x, e1@(LExp l1 arg1 sty1 key1), e2)) ->
                 let exprCase d_e1 = do
-                        Just (ty_x, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+                        Just (ty_x, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
                         d_e2 <- pprintE e2
                         let d_ps = hsep $ punctuate comma $ map pPrint ps
                         return $ 
                             text "let" <+> pPrint (name x)
                                        <+> (colon <+> pPrint ty_x <+> (case ps of [] -> empty
-                                                                                  _  -> text "|" <+> d_ps) $+$
+                                                                                  _  -> text "|" <+> d_ps) <+> pPrint scope $+$
                                             text "=" <+> d_e1) 
                                        <+> text "in" 
                                        $+$ d_e2
@@ -203,10 +207,10 @@ pprintContext prog = do
                     SOmega   -> pprintE (Exp l1 arg1 sty1 key1) >>= exprCase
                     SApp     -> do
                         let (f, vs) = arg1
-                        Just (ty_vs, ps) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
-                        vs' <- mapM (pprintV 0) vs
+                        Just (ty_vs, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
+                        vs' <- mapM (pprintV 1) vs
                         let d_e1 = pPrint (name f) <+> (case ps of [] -> d_vs
-                                                                   _  -> d_vs $+$ text "|" <+> d_ps)
+                                                                   _  -> d_vs $+$ text "|" <+> d_ps) <+> pPrint scope
                             d_vs = vcat $ zipWith (\d_v ty_v -> parens $ d_v
                                                                      <+> text ":" 
                                                                      <+> pPrint ty_v) vs' ty_vs
@@ -244,7 +248,7 @@ pprintContext prog = do
                 d_v2 <- pprintV 0 v2
                 return $ parens $ d_v1 <> comma <+> d_v2
             (SLambda, (xs, e)) -> do
-                Just (ty_xs, ps) <- do
+                Just (ty_xs, ps, scope) <- do
                     m <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
                     case m of Just v -> return (Just v)
                               Nothing -> error (render (pPrint v))
@@ -256,7 +260,7 @@ pprintContext prog = do
                 return $ maybeParens (prec > 0) $ 
                     text "fun" <+> (case ps of 
                                         [] -> d_args <+> text "->"
-                                        _  -> d_args $+$ text "|" <+> d_ps <+> text "->") $+$
+                                        _  -> d_args $+$ text "|" <+> d_ps <+> text "->") <+> pPrint scope $+$
                         nest 4 d_e
 
 data CValue = CBase | CPair CValue CValue 
@@ -470,3 +474,29 @@ pushQuery q = modify' $ \(que, nodes) ->
     if S.member ident nodes
     then (que, nodes)
     else (pushQueue q que, S.insert ident nodes)
+
+flatten :: Value -> [Atom] -> [Atom]
+flatten (Value l arg sty _) xs = 
+    case (l, arg) of
+        (SPair, (v1, v2)) -> flatten v1 (flatten v2 xs)
+        (SVar, _)         -> Atom l arg sty : xs
+        (SLiteral, _)     -> Atom l arg sty : xs
+        (SBinary, _)      -> Atom l arg sty : xs
+        (SUnary, _)       -> Atom l arg sty : xs
+        (SLambda, _)  -> xs
+
+decompose :: Atom -> [Atom] -> [Atom]
+decompose x l = case getType x of
+    TPair _ _ -> decompose (PNormal.mkUni SFst x) (decompose (PNormal.mkUni SSnd x) l)
+    TFun _ _  -> l
+    TInt -> x : l
+    TBool -> x : l
+
+scopeOfAtom :: M.Map TId [Atom] -> Atom -> [Atom]
+scopeOfAtom env (Atom l arg _) = 
+    case (l, arg) of
+        (SLiteral, _) -> []
+        (SVar, x) -> (env M.! x)
+        (SUnary, UniArg _ a1) ->  scopeOfAtom env a1
+        (SBinary, _) -> []
+
