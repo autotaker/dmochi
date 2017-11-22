@@ -87,17 +87,19 @@ inlineA env (Atom l arg sty) =
             Just v -> alphaV M.empty v
             Nothing -> Value l arg sty <$> freshKey
         (SBinary, BinArg op a1 a2) -> do
-            Just a1' <- atomOfValue <$> inlineA env a1
-            Just a2' <- atomOfValue <$> inlineA env a2
+            VAtom a1' <- valueView <$> inlineA env a1
+            VAtom a2' <- valueView <$> inlineA env a2
             castWith <$> freshKey <*> pure (mkBin op a1' a2')
         (SUnary, UniArg op a) -> do 
-            v'@(Value l' arg' _ _) <- inlineA env a
-            case (op,l') of
-                (SFst, SPair) -> pure (fst arg')
-                (SSnd, SPair) -> pure (snd arg')
-                _ -> do
-                    let Just a1' = atomOfValue v'
-                    castWith <$> freshKey <*> pure (mkUni op a1')
+            v' <- inlineA env a
+            case valueView v' of
+                VAtom a1' -> castWith <$> freshKey <*> pure (mkUni op a1')
+                VOther SPair (v1,v2) ->
+                    case op of
+                        SFst -> pure v1
+                        SSnd -> pure v2
+                        _    -> error "inlineA: unexpected pattern"
+                VOther _ _ -> error "inlineA: unexpected pattern"
 
 inlineV :: MonadId m => Env -> Value -> m Value
 inlineV env v = 
@@ -154,7 +156,7 @@ inlineE env e@(Exp _ _ sty key) =
             e2' <- inlineE env e2
             pure $ mkLetRec fs' e2' key
         EOther SAssume (cond, e) -> do
-            Just av <- atomOfValue <$> inlineA env cond 
+            VAtom av <- valueView <$> inlineA env cond 
             mkAssume av <$> inlineE env e <*> pure key
         EOther SBranch (e1, e2) -> mkBranch <$> inlineE env e1 <*> inlineE env e2 <*> pure key
         EOther SFail _ -> pure e

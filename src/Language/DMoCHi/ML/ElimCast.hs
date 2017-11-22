@@ -36,9 +36,9 @@ elimCastValue tbl env v@(Value l arg sty key) sigma = case (l,arg) of
         v1' <- elimCastValue tbl env v1 sigma1 
         v2' <- elimCastValue tbl env v2 sigma2 
         return $ mkPair v1' v2' key
-    _ -> case atomOfValue v of
-        Nothing -> error "elimCastValue: impossible"
-        Just av -> case sigma of
+    _ -> case valueView v of
+        VOther _ _ -> error "elimCastValue: impossible"
+        VAtom av -> case sigma of
                 PInt -> return v
                 PBool -> return v
                 _ | sigma == typeOfAtom env av -> return v

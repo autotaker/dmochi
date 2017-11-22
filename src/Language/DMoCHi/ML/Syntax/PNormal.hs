@@ -8,9 +8,8 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , mkFail, mkOmega, mkRand
                                         , mkFailL, mkOmegaL
                                         , Castable(..)
-                                        , normalize, atomOfValue, valueOfLExp, valueOfExp
+                                        , normalize
                                         , freeVariables
-                                        , isValue, isAtom
                                         , module Language.DMoCHi.ML.Syntax.Type
                                         , module Language.DMoCHi.ML.Syntax.Base )where
 -- import Control.Monad
@@ -527,64 +526,6 @@ convertV e@(Typed.Exp l arg _ key) =
             kr <- freshKey 
             castWith kr . mkVar <$> convertVar e
 
-{-# INLINE atomOfValue #-}
-atomOfValue :: Value -> Maybe Atom
-atomOfValue (Value l arg sty _) = case l of
-    SLiteral -> Just $ Atom l arg sty
-    SVar     -> Just $ Atom l arg sty
-    SUnary   -> Just $ Atom l arg sty
-    SBinary  -> Just $ Atom l arg sty
-    SPair    -> Nothing
-    SLambda  -> Nothing
-
-{-# INLINE valueOfLExp #-}
-valueOfLExp :: LExp -> Maybe Value
-valueOfLExp (LExp l arg sty key) = case l of
-    SLiteral -> Just $ Value l arg sty key
-    SVar     -> Just $ Value l arg sty key
-    SUnary   -> Just $ Value l arg sty key
-    SBinary  -> Just $ Value l arg sty key
-    SPair    -> Just $ Value l arg sty key
-    SLambda  -> Just $ Value l arg sty key
-    SApp     -> Nothing
-    SRand    -> Nothing
-    SBranch  -> Nothing
-    SFail    -> Nothing
-    SOmega   -> Nothing
-    
-{-# INLINE valueOfExp #-}
-valueOfExp :: Exp -> Maybe Value
-valueOfExp (Exp l arg sty key) = case l of
-    SLiteral -> Just $ Value l arg sty key
-    SVar     -> Just $ Value l arg sty key
-    SUnary   -> Just $ Value l arg sty key
-    SBinary  -> Just $ Value l arg sty key
-    SPair    -> Just $ Value l arg sty key
-    SLambda  -> Just $ Value l arg sty key
-    SLet     -> Nothing
-    SLetRec  -> Nothing
-    SAssume  -> Nothing
-    SBranch  -> Nothing
-    SFail    -> Nothing
-    SOmega   -> Nothing
-
-isValue :: SLabel l -> Bool
-isValue l = case l of
-    SLiteral -> True
-    SVar -> True
-    SUnary -> True
-    SBinary -> True
-    SLambda -> True
-    SPair -> True
-    _ -> False
-
-isAtom :: SLabel l -> Bool
-isAtom l = case l of
-    SLiteral -> True
-    SVar -> True
-    SUnary -> True
-    SBinary -> True
-    _ -> False
 
 freeVariables :: S.Set TId -> Exp -> S.Set TId
 freeVariables _scope _e = subE _scope _e S.empty

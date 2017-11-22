@@ -193,9 +193,9 @@ abstValue tbl env cs pv v@(ML.Value l arg _ key) ty = case (l,arg) of
     (ML.SPair, (v1,v2)) -> 
         let PPair _ ty1 ty2 = ty in
         (\x y -> B.T [x,y]) <$> abstValue tbl env cs pv v1 ty1 <*> abstValue tbl env cs pv v2 ty2
-    _ -> case ML.atomOfValue v of
-        Just av -> abstAValue env cs pv av ty
-        Nothing -> error "abstValue"
+    _ -> case ML.valueView v of
+        ML.VAtom av -> abstAValue env cs pv av ty
+        _ -> error "abstValue"
 
 abstTerm :: forall m. (MonadId m, MonadLogger m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
 abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) = 

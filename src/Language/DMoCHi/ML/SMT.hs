@@ -37,12 +37,10 @@ resetSMTCount :: IO ()
 resetSMTCount = writeIORef smtCounter 0
 
 toIValue :: MonadZ3 z3 => Value -> z3 IValue
-toIValue v@(Value l arg _ _) = case atomOfValue v of
-    Just av -> toIValueA av
-    Nothing -> case (l,arg) of
-        (SLambda, _) -> return Func
-        (SPair, (v1,v2)) -> IPair <$> toIValue v1 <*> toIValue v2
-        _ -> error "impossible"
+toIValue v = case valueView v of
+    VAtom av -> toIValueA av
+    VOther SLambda _ ->return Func
+    VOther SPair (v1, v2) -> IPair <$> toIValue v1 <*> toIValue v2
 
 mkUDiv :: MonadZ3 z3 => IValue -> IValue -> z3 IValue
 mkUDiv (ASTValue v1) (ASTValue v2) = ASTValue <$> mkDiv v1 v2

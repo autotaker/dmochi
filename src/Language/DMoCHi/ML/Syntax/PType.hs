@@ -117,9 +117,9 @@ substFormula subst = substVFormula (fmap (cast . mkVar) subst)
 
 substVFormula :: M.Map Id Value -> Formula -> Formula
 substVFormula subst = atomic . go where
-    atomic v = case atomOfValue v of
-        Just a -> a
-        Nothing -> error "substVFormula: type error"
+    atomic v = case valueView v of
+        VAtom a -> a
+        _ -> error "substVFormula: type error"
     go e@(Atom l arg _) = case (l,arg) of
         (SVar,x) ->
             case M.lookup x subst of

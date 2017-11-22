@@ -222,13 +222,14 @@ fromSValue = \case
     where
     bin :: (ML.Atom -> ML.Atom -> ML.Atom) -> SValue -> SValue -> ML.Value
     bin f v1 v2 = 
-        let Just !av1 = ML.atomOfValue (fromSValue v1) in
-        let Just !av2 = ML.atomOfValue (fromSValue v2) in
-        ML.cast $ f av1 av2
+        case (ML.valueView (fromSValue v1), ML.valueView (fromSValue v2)) of
+            (ML.VAtom av1, ML.VAtom av2) -> ML.cast $ f av1 av2
+            _ -> error "fromSValue: unexpected pattern"
     unary :: (ML.Atom -> ML.Atom) -> SValue -> ML.Value
     unary f v1 = 
-        let Just !av1 = ML.atomOfValue (fromSValue v1) in
-        ML.cast $ f av1
+        case ML.valueView (fromSValue v1) of
+            ML.VAtom av1 -> ML.cast $ f av1
+            _ -> error "fromSValue : unexpected pattern"
     
 
 leaf :: ML.Exp -> CompTree
