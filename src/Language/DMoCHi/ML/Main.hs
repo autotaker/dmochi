@@ -35,13 +35,15 @@ import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
-import qualified Language.DMoCHi.ML.ElimCast as PAbst
+-- import qualified Language.DMoCHi.ML.ElimCast as PAbst
 import qualified Language.DMoCHi.ML.IncSaturation as IncSat
 import qualified Language.DMoCHi.ML.UnliftRec as IncSat
 import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
 import qualified Language.DMoCHi.ML.EtaNormalize as Eta
+import qualified Language.DMoCHi.ML.ConstPropagation as ConstProp
+import qualified Language.DMoCHi.ML.TailOptimization as TailOpt
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 
@@ -235,8 +237,18 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
         _normalizedProgram <- return $ Unreachable.elimUnreachable _normalizedProgram
         prettyPrint "preprocess" "Unreachable Code Elimination" _normalizedProgram
 
+
         _normalizedProgram <- lift $Eta.normalize _normalizedProgram
-        prettyPrint "preprocess" "Eta normalize" _normalizedProgram
+        prettyPrint "preprocess" "Eta normalization" _normalizedProgram
+        
+        -- const propagation
+        _normalizedProgram <- return $ ConstProp.simplify _normalizedProgram
+        prettyPrint "preprocess" "Constant Propagation" _normalizedProgram
+        
+        -- tail optimization
+        _normalizedProgram <- return $ TailOpt.simplify _normalizedProgram
+        prettyPrint "preprocess" "Tail optimization" _normalizedProgram
+
         return _normalizedProgram) :: ExceptT MainError (FreshIO (Dict Main)) PNormal.Program
 
     

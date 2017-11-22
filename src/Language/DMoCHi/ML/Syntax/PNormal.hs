@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts, BangPatterns, TypeFamilies, DataKinds, KindSignatures, GADTs, MultiParamTypeClasses #-}
 module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , Exp(..), Value(..), Atom(..), LExp(..), Normalized
+                                        , LExpView(..), ExpView(..), ValueView(..), expView, valueView, lexpView
                                         , mkBin, mkUni, mkLiteral, mkVar, mkPair
                                         , mkLambda, mkApp, mkLet, mkLetRec
                                         , mkAssume, mkBranch, mkBranchL
@@ -34,7 +35,6 @@ data Exp where
     Exp :: (Normalized l Exp arg, Supported l (Labels Exp)) => 
             SLabel l -> arg -> Type -> UniqueKey -> Exp
 
-
 data Value where
     Value :: (Normalized l Value arg, Supported l (Labels Value)) => 
             SLabel l -> arg -> Type -> UniqueKey -> Value
@@ -49,6 +49,8 @@ data LExp where
 
 instance HasUniqueKey Exp where
     getUniqueKey (Exp _ _ _ key) = key
+instance HasUniqueKey LExp where
+    getUniqueKey (LExp _ _ _ key) = key
 instance HasUniqueKey Value where
     getUniqueKey (Value _ _ _ key) = key
 
@@ -82,18 +84,77 @@ type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Rand    e arg = arg ~ ()
     Normalized l        e arg = 'True ~ 'False
 
+data ExpView where
+    EValue :: Value -> ExpView
+    EOther :: ( Normalized l Exp arg
+              , Supported l '[ 'Let, 'LetRec, 'Assume, 'Branch, 'Fail, 'Omega]) => SLabel l -> arg -> ExpView
+
+data LExpView where
+    LValue :: Value -> LExpView
+    LOther :: ( Normalized l LExp arg
+              , Supported l '[  'App, 'Branch, 'Rand, 'Fail, 'Omega]) => SLabel l -> arg -> LExpView
+
+data ValueView where
+    VAtom  :: Atom -> ValueView
+    VOther :: ( Normalized l Value arg
+              , Supported l '[ 'Pair, 'Lambda ]) => SLabel l -> arg -> ValueView
+
+
 type instance Labels Exp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
                             , 'Let, 'LetRec, 'Assume, 'Branch, 'Fail, 'Omega ]
 type instance Labels LExp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
                              , 'App, 'Branch, 'Rand, 'Fail, 'Omega ]
 type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda ]
 type instance Labels Atom  = '[ 'Literal, 'Var, 'Binary, 'Unary ]
+
+
 type instance BinOps Atom  = '[ 'Add, 'Sub, 'Div, 'Mul, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
 type instance UniOps Atom  = '[ 'Fst, 'Snd, 'Not, 'Neg ]
 type instance Ident  Exp = TId
 type instance Ident  LExp = TId
 type instance Ident  Value = TId
 type instance Ident  Atom = TId
+
+{-# INLINE expView #-}
+expView :: Exp -> ExpView
+expView (Exp l arg sty key) = case l of
+    SLiteral -> EValue (Value l arg sty key)
+    SVar     -> EValue (Value l arg sty key)
+    SBinary  -> EValue (Value l arg sty key)
+    SUnary   -> EValue (Value l arg sty key)
+    SPair    -> EValue (Value l arg sty key)
+    SLambda  -> EValue (Value l arg sty key)
+    SLet     -> EOther l arg
+    SLetRec  -> EOther l arg
+    SAssume  -> EOther l arg
+    SBranch  -> EOther l arg
+    SFail    -> EOther l arg
+    SOmega   -> EOther l arg
+
+{-# INLINE valueView #-}
+valueView :: Value -> ValueView
+valueView (Value l arg sty _) = case l of
+    SLiteral -> VAtom (Atom l arg sty)
+    SVar     -> VAtom (Atom l arg sty)
+    SBinary  -> VAtom (Atom l arg sty)
+    SUnary   -> VAtom (Atom l arg sty)
+    SPair    -> VOther l arg
+    SLambda  -> VOther l arg
+
+{-# INLINE lexpView #-}
+lexpView :: LExp -> LExpView
+lexpView (LExp l arg sty key) = case l of
+    SLiteral -> LValue (Value l arg sty key)
+    SVar     -> LValue (Value l arg sty key)
+    SBinary  -> LValue (Value l arg sty key)
+    SUnary   -> LValue (Value l arg sty key)
+    SPair    -> LValue (Value l arg sty key)
+    SLambda  -> LValue (Value l arg sty key)
+    SBranch  -> LOther l arg
+    SRand    -> LOther l arg
+    SApp     -> LOther l arg
+    SFail    -> LOther l arg
+    SOmega   -> LOther l arg
 
 mkBin :: SBinOp op -> Atom -> Atom -> Atom
 mkBin op v1 v2 = case op of

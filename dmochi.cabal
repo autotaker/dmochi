@@ -91,6 +91,8 @@ library
                        Language.DMoCHi.ML.Refine,
                        Language.DMoCHi.ML.Inline,
                        Language.DMoCHi.ML.ElimCast,
+                       Language.DMoCHi.ML.ConstPropagation,
+                       Language.DMoCHi.ML.TailOptimization,
                        Language.DMoCHi.ML.UnliftRec,
                        Language.DMoCHi.ML.EtaNormalize,
                        Language.DMoCHi.ML.Flow,
