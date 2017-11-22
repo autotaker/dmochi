@@ -18,19 +18,15 @@ type Env = M.Map TId Value
 type REnv = M.Map TId TId
 
 alphaV :: forall m. MonadId m => REnv -> Value -> m Value
-alphaV renv (Value l arg sty _) =
-    let atomCase :: Atom -> m Value
-        atomCase av = castWith <$> freshKey <*> pure (alphaA renv av) in
-    case (l,arg) of
-        (SLiteral, _) -> atomCase (Atom l arg sty)
-        (SVar, _)     -> atomCase (Atom l arg sty)
-        (SBinary, _)  -> atomCase (Atom l arg sty)
-        (SUnary,  _)  -> atomCase (Atom l arg sty)
-        (SPair, (v1, v2)) -> mkPair <$> alphaV renv v1 <*> alphaV renv v2 <*> freshKey
-        (SLambda,(xs, e)) -> do
+alphaV renv v =
+    case valueView v of
+        VAtom a -> castWith <$> freshKey <*> pure (alphaA renv a) 
+        VOther SPair (v1, v2) -> mkPair <$> alphaV renv v1 <*> alphaV renv v2 <*> freshKey
+        VOther SLambda (xs, e) -> do
             ys <- mapM alphaTId xs 
             let renv' = foldr (uncurry M.insert) renv (zip xs ys)
             mkLambda ys <$> alphaE renv' e <*> freshKey
+
 rename :: REnv -> TId -> TId
 rename renv x = case M.lookup x renv of
     Just y -> y
@@ -44,21 +40,16 @@ alphaA renv (Atom l arg sty) = case (l, arg) of
     (SUnary, UniArg op a) -> mkUni op (alphaA renv a)
 
 alphaE :: MonadId m => REnv -> Exp -> m Exp
-alphaE renv (Exp l arg sty key) = 
-    case (l, arg) of
-        (SLiteral, _) -> cast <$> alphaV renv (Value l arg sty key)
-        (SVar, _)     -> cast <$> alphaV renv (Value l arg sty key)
-        (SBinary, _)  -> cast <$> alphaV renv (Value l arg sty key)
-        (SUnary, _)   -> cast <$> alphaV renv (Value l arg sty key)
-        (SPair, _)    -> cast <$> alphaV renv (Value l arg sty key)
-        (SLambda, _)  -> cast <$> alphaV renv (Value l arg sty key)
-        (SLet, (x, e1, e2)) -> do
+alphaE renv e = 
+    case expView e of
+        EValue v -> cast <$> alphaV renv v
+        EOther SLet (x,e1,e2) -> do
             x' <- alphaTId x
             e1' <- alphaL renv e1
             let renv' = M.insert x x' renv
             e2' <- alphaE renv' e2
             mkLet x' e1' e2' <$> freshKey
-        (SLetRec, (fs, e2)) -> do
+        EOther SLetRec (fs, e2) -> do
             names <- mapM (alphaTId . fst) fs
             let renv' = foldr (uncurry M.insert) renv (zip (map fst fs) names)
             fs' <- forM fs $ \(f,v_f) -> do
@@ -66,30 +57,23 @@ alphaE renv (Exp l arg sty key) =
                 return (renv' M.! f, v_f')
             e2' <- alphaE renv' e2
             mkLetRec fs' e2' <$> freshKey
-        (SAssume, (cond,e)) -> do
+        EOther SAssume (cond, e) -> do
             mkAssume (alphaA renv cond) <$> alphaE renv e <*> freshKey
-        (SBranch, (e1,e2)) -> mkBranch <$> alphaE renv e1 
-                                       <*> alphaE renv e2 
-                                       <*> freshKey
-        (SFail, _) -> Exp l arg sty <$> freshKey
-        (SOmega, _) -> Exp l arg sty <$> freshKey
+        EOther SBranch (e1, e2) -> 
+            mkBranch <$> alphaE renv e1 <*> alphaE renv e2 <*> freshKey
+        EOther SFail  _ -> mkFail  (getType e) <$> freshKey
+        EOther SOmega _ -> mkOmega (getType e) <$> freshKey
 
 alphaL :: MonadId m => REnv -> LExp -> m LExp
-alphaL renv (LExp l arg sty key) =
-    case (l, arg) of
-        (SLiteral, _) -> cast <$> alphaV renv (Value l arg sty key)
-        (SVar, _)     -> cast <$> alphaV renv (Value l arg sty key)
-        (SBinary, _)  -> cast <$> alphaV renv (Value l arg sty key)
-        (SUnary, _)   -> cast <$> alphaV renv (Value l arg sty key)
-        (SPair, _)    -> cast <$> alphaV renv (Value l arg sty key)
-        (SLambda, _)  -> cast <$> alphaV renv (Value l arg sty key)
-        (SBranch, (e1,e2)) -> mkBranchL <$> alphaE renv e1 
-                                        <*> alphaE renv e2 
-                                        <*> freshKey
-        (SFail, _)  -> LExp l arg sty <$> freshKey
-        (SOmega, _) -> LExp l arg sty <$> freshKey
-        (SRand, _) -> LExp l arg sty <$> freshKey
-        (SApp, (f,vs)) -> do
+alphaL renv e =
+    case lexpView e of
+        LValue v -> cast <$> alphaV renv v
+        LOther SBranch (e1, e2) ->
+            mkBranchL <$> alphaE renv e1 <*> alphaE renv e2 <*> freshKey
+        LOther SFail  _ -> mkFailL  (getType e) <$> freshKey
+        LOther SOmega _ -> mkOmegaL (getType e) <$> freshKey
+        LOther SRand _  -> mkRand  <$> freshKey
+        LOther SApp (f, vs) -> do
             let f' = rename renv f
             vs' <- mapM (alphaV renv) vs
             mkApp f' vs' <$> freshKey
@@ -116,45 +100,32 @@ inlineA env (Atom l arg sty) =
                     castWith <$> freshKey <*> pure (mkUni op a1')
 
 inlineV :: MonadId m => Env -> Value -> m Value
-inlineV env (Value l arg sty key) = 
-    case (l, arg) of
-        (SLiteral, _) -> inlineA env (Atom l arg sty)
-        (SVar, _)     -> inlineA env (Atom l arg sty)
-        (SBinary, _)  -> inlineA env (Atom l arg sty)
-        (SUnary, _)   -> inlineA env (Atom l arg sty)
-        (SPair, (v1, v2)) -> mkPair <$> inlineV env v1 <*> inlineV env v2 <*> pure key
-        (SLambda, (xs, e)) -> mkLambda xs <$> inlineE env e <*> pure key
+inlineV env v = 
+    let key = getUniqueKey v in
+    case valueView v of
+        VAtom a -> inlineA env a
+        VOther SPair (v1, v2) -> mkPair <$> inlineV env v1 <*> inlineV env v2 <*> pure key
+        VOther SLambda (xs, e) -> mkLambda xs <$> inlineE env e <*> pure key
 
 inlineE :: forall m. MonadId m => Env -> Exp -> m Exp
-inlineE env (Exp l arg sty key) =
-    case (l, arg) of
-        (SLiteral, _) -> cast <$> inlineV env (Value l arg sty key)
-        (SVar, _)     -> cast <$> inlineV env (Value l arg sty key)
-        (SBinary, _)     -> cast <$> inlineV env (Value l arg sty key)
-        (SUnary, _)     -> cast <$> inlineV env (Value l arg sty key)
-        (SPair, _)     -> cast <$> inlineV env (Value l arg sty key)
-        (SLambda, _)     -> cast <$> inlineV env (Value l arg sty key)
-        (SLet, (x, e1@(LExp l1 arg1 sty1 key1), e2)) ->
+inlineE env e@(Exp _ _ sty key) =
+    case expView e of
+        EValue v -> cast <$> inlineV env v
+        EOther SLet (x, e1, e2) ->
             let defaultCase :: LExp -> m Exp
                 defaultCase e1' = do
                     e2' <- inlineE env e2 
                     return $ mkLet x e1' e2' key
-                valueCase :: Value -> m Exp
-                valueCase v1 = do
+                key1 = getUniqueKey e1
+            in case lexpView e1 of
+                LValue v1 -> do
                     v1'@(Value l1' _ _ _) <- inlineV env v1
                     case l1' of
                         SVar    -> inlineE (M.insert x v1' env) e2
                         SLambda -> inlineE (M.insert x v1' env) e2
                         SPair   -> inlineE (M.insert x v1' env) e2
                         _ -> defaultCase (cast v1')
-            in case (l1, arg1) of
-                (SLiteral, _) -> valueCase (Value l1 arg1 sty1 key1)
-                (SVar, _)     -> valueCase (Value l1 arg1 sty1 key1)
-                (SBinary, _)  -> valueCase (Value l1 arg1 sty1 key1)
-                (SUnary, _)   -> valueCase (Value l1 arg1 sty1 key1)
-                (SPair, _)    -> valueCase (Value l1 arg1 sty1 key1)
-                (SLambda, _)  -> valueCase (Value l1 arg1 sty1 key1)
-                (SApp, (f, vs)) -> do
+                LOther SApp (f, vs) -> do
                     vs' <- mapM (inlineV env) vs
                     case M.lookup f env of
                         Just (Value SLambda (xs,ef) _ _) -> do
@@ -169,25 +140,25 @@ inlineE env (Exp l arg sty key) =
                                      <*> defaultCase (mkApp f' vs' key1)
                                      <*> freshKey
                         Nothing -> defaultCase (mkApp f vs' key1)
-                (SBranch, (el, er)) -> do
+                LOther SBranch (el, er) -> do
                     el' <- inlineE env el
                     er' <- inlineE env er
                     defaultCase (mkBranchL el' er' key1)
-                (SFail, _) -> pure $ mkFail sty key
-                (SOmega, _) -> pure $ mkOmega sty key
-                (SRand, _) -> defaultCase e1
-        (SLetRec, (fs, e2)) -> do
+                LOther SFail _ -> pure $ mkFail sty key
+                LOther SOmega _ -> pure $ mkOmega sty key
+                LOther SRand _ -> defaultCase e1
+        EOther SLetRec (fs, e2) -> do
             fs' <- forM fs $ \(f,v_f) -> do
                 v_f' <- inlineV env v_f 
                 return (f, v_f')
             e2' <- inlineE env e2
             pure $ mkLetRec fs' e2' key
-        (SAssume, (cond,e)) -> do
+        EOther SAssume (cond, e) -> do
             Just av <- atomOfValue <$> inlineA env cond 
             mkAssume av <$> inlineE env e <*> pure key
-        (SBranch, (e1, e2)) -> mkBranch <$> inlineE env e1 <*> inlineE env e2 <*> pure key
-        (SFail, _) -> return $ Exp l arg sty key
-        (SOmega, _) -> return $ Exp l arg sty key
+        EOther SBranch (e1, e2) -> mkBranch <$> inlineE env e1 <*> inlineE env e2 <*> pure key
+        EOther SFail _ -> pure e
+        EOther SOmega _ -> pure e
                             
         
 straightE :: MonadId m => Exp -> Type -> (LExp -> m Exp) -> m Exp
