@@ -85,6 +85,7 @@ library
                        Language.DMoCHi.ML.MLParser,
                        Language.DMoCHi.ML.MLLexer,
                        Language.DMoCHi.ML.PredicateAbstraction,
+                       Language.DMoCHi.ML.AbstractSemantics,
                        Language.DMoCHi.ML.TypeCheck,
                        Language.DMoCHi.ML.SymbolicExec,
                        Language.DMoCHi.ML.InteractiveCEGen,

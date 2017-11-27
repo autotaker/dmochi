@@ -100,8 +100,18 @@ mkBin op v1 v2 =
         SEq  -> genHFormula (HFormula SBinary (BinArg SEq v1 v2) TBool) (SMT.mkEqIValue iv1 iv2)
         SLt  -> genHFormula (HFormula SBinary (BinArg SLt v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLt v1' v2')
         SLte -> genHFormula (HFormula SBinary (BinArg SLte v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLe v1' v2')
-        SAnd -> genHFormula (HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkAnd [v1', v2'])
-        SOr  -> genHFormula (HFormula SBinary (BinArg SOr  v1 v2) TBool) (SMT.ASTValue <$> Z3.mkOr [v1', v2'])
+        SAnd -> case (v1, v2) of
+            (HFormula SLiteral (CBool True) _ _ _, _) -> return v2
+            (_, HFormula SLiteral (CBool True) _ _ _) -> return v1
+            (HFormula SLiteral (CBool False) _ _ _, _) -> return v1
+            (_, HFormula SLiteral (CBool False) _ _ _) -> return v2
+            _ -> genHFormula (HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkAnd [v1', v2'])
+        SOr  -> case (v1, v2) of
+            (HFormula SLiteral (CBool True) _ _ _, _) -> return v1
+            (_, HFormula SLiteral (CBool True) _ _ _) -> return v2
+            (HFormula SLiteral (CBool False) _ _ _, _) -> return v2
+            (_, HFormula SLiteral (CBool False) _ _ _) -> return v1
+            _ -> genHFormula (HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkOr [v1', v2'])
 
 mkUni :: HFormulaFactory m => SUniOp op -> HFormula -> m HFormula
 mkUni op v1@(HFormula _ _ sty _ _) = 

@@ -82,7 +82,7 @@ exprP :: M.Map String TId -> Parser Atom
 exprP env = it where
     it = buildExpressionParser opTable termP <?> "value"
     opTable = [ [prefix "-" (mkUni SNeg), prefix "+" id, prefix' "not" (mkUni SNot)]
-              , [binary "*" scalar AssocNone]
+              , [binary "*" (mkBin SMul) AssocLeft, binary "/" (mkBin SDiv) AssocLeft]
               , [binary "+" (mkBin SAdd) AssocLeft, binary "-" (mkBin SSub) AssocLeft]
               , [binary "=" (mkBin SEq)  AssocNone, 
                  binary "<>" (\a b -> mkUni SNot $ mkBin SEq a b) AssocNone,
@@ -96,9 +96,6 @@ exprP env = it where
     binary name fun assoc = Infix (reservedOp name >> pure fun) assoc
     prefix name fun       = Prefix (reservedOp name >> pure fun)
     prefix' name fun      = Prefix (reserved name >> pure fun)
-    scalar :: Atom -> Atom -> Atom
-    scalar (Atom SLiteral (CInt c) _) t = foldl1 (mkBin SAdd) [ t | _ <- [1..c]]
-    scalar _ _ = error "exprP: scalar: non-linear term is unsupported"
     termP = mkVar <$> (fmap (env M.!) identifier) <* optional (parens (pure ()))
         <|> mkLiteral . CInt <$> natural 
         <|> mkLiteral (CBool True) <$ reserved "true" 

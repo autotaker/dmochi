@@ -9,6 +9,7 @@ import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.IncSaturationPre
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.SMT as SMT
+import qualified Language.DMoCHi.ML.AbstractSemantics as AbsSemantics
 
 -- import Control.Monad
 import           Control.Monad.Fix
@@ -785,6 +786,7 @@ saturate typeMap prog = do
             if any (\iota -> itermBody iota == IFail) tys
             then do
                 bs <- mkIFail >>= execWriterT . extractor root M.empty
+                AbsSemantics.genConstraints bs (mainTerm prog)
                 return (True, (tys, Just bs))
             else do
                 return (False, (tys, Nothing))
