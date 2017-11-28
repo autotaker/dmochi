@@ -786,7 +786,8 @@ saturate typeMap prog = do
             if any (\iota -> itermBody iota == IFail) tys
             then do
                 bs <- mkIFail >>= execWriterT . extractor root M.empty
-                AbsSemantics.genConstraints bs (mainTerm prog)
+                hcs <- AbsSemantics.genConstraints bs (mainTerm prog)
+                liftIO $ print hcs
                 return (True, (tys, Just bs))
             else do
                 return (False, (tys, Nothing))
