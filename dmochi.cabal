@@ -76,6 +76,7 @@ library
                        Language.DMoCHi.ML.Syntax.PNormal,
                        Language.DMoCHi.ML.Syntax.PType,
                        Language.DMoCHi.ML.Syntax.HFormula,
+                       Language.DMoCHi.ML.Syntax.CEGAR,
                        Language.DMoCHi.ML.Syntax.IType,
                        Language.DMoCHi.ML.SMT,
                        Language.DMoCHi.ML.DesugarSynonym,
