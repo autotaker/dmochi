@@ -20,7 +20,7 @@ elimCastFunDef :: TypeMap -> Env -> (UniqueKey, [TId], Exp) -> PType -> FreshIO 
 elimCastFunDef tbl env (ident,ys,e) sigma = 
     (,,) ident ys <$> elimCastTerm tbl env' e retTy'
         where
-        PFun _ (xs,ty_xs,_) retTy = sigma 
+        PFun _ (xs,ty_xs,_,_) retTy = sigma 
         subst = M.fromList $ zip xs ys
         ty_ys = map (substPType subst) ty_xs
         env' = foldr (uncurry M.insert) env (zip ys ty_ys)
@@ -42,7 +42,7 @@ elimCastValue tbl env v@(Value l arg sty key) sigma = case (l,arg) of
                 PInt -> return v
                 PBool -> return v
                 _ | sigma == typeOfAtom env av -> return v
-                PFun ty (xs,_,_) _ -> do
+                PFun ty (xs,_,_,_) _ -> do
                     let TFun _ ty_r = ty
                     (f, cnstr_f) <- case l of
                         SVar -> return (arg, id)
@@ -81,7 +81,7 @@ elimCastLet tbl env x e1@(LExp l arg sty key1) e2 key tau =
             e1' <- cast <$> elimCastValue tbl env v r_ty'
             e2' <- elimCastTerm tbl env' e2 tau
             return $ mkLet x e1' e2' key
-        Right tau1@(r, r_ty, _) = case M.lookup key1 tbl of 
+        Right tau1@(r, r_ty, _,_) = case M.lookup key1 tbl of 
             Nothing -> error $ show key1
             Just v -> v
         exprCase :: LExp -> FreshIO c Exp
@@ -103,7 +103,7 @@ elimCastLet tbl env x e1@(LExp l arg sty key1) e2 key tau =
             e2' <- elimCastTerm tbl env' e2 tau
             return $ mkLet x e1 e2' key
         (SApp, (f,vs))     -> do
-            let PFun _ (ys, ys_ty, _) (r, r_ty, _) = env M.! f
+            let PFun _ (ys, ys_ty, _,_) (r, r_ty, _,_) = env M.! f
                 subst = M.fromList $ zip ys vs
                 ys_ty' = map (substVPType subst) ys_ty
             vs' <- zipWithM (elimCastValue tbl env) vs ys_ty' 
@@ -124,7 +124,7 @@ elimCastTerm tbl env (Exp l arg sty key) tau =
     let valueCase :: Value -> FreshIO c Exp
         valueCase v = cast <$> elimCastValue tbl env v r_ty'
             where
-            (r, r_ty, _) = tau 
+            (r, r_ty, _, _) = tau 
             r_ty' = substVPType (M.singleton r v) r_ty
     in case (l,arg) of
     (SLiteral, _) -> valueCase (Value l arg sty key)
@@ -162,7 +162,7 @@ elimCast tbl prog = do
                     (_,_,e') <- elimCastFunDef tbl env (key,xs,e) (env M.! f)
                     return (f, key, xs, e')
     r <- TId TInt <$> identify "main"
-    e <- elimCastTerm tbl env (mainTerm prog) (r, PInt, [])
+    e <- elimCastTerm tbl env (mainTerm prog) (r, PInt, [], undefined)
     return $ Program fs e
     
 

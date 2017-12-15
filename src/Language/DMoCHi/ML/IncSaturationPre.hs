@@ -475,6 +475,7 @@ pushQuery q = modify' $ \(que, nodes) ->
     then (que, nodes)
     else (pushQueue q que, S.insert ident nodes)
 
+{-
 flatten :: Value -> [Atom] -> [Atom]
 flatten (Value l arg sty _) xs = 
     case (l, arg) of
@@ -491,6 +492,7 @@ decompose x l = case getType x of
     TFun _ _  -> l
     TInt -> x : l
     TBool -> x : l
+    -}
 
 scopeOfAtom :: M.Map TId [Atom] -> Atom -> [Atom]
 scopeOfAtom env (Atom l arg _) = 

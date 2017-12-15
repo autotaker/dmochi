@@ -153,9 +153,9 @@ toSort (PPair _ t1 t2) = B.Tuple [toSort t1, toSort t2]
 toSort (PFun _ tx tr) = toSortArg tx B.:-> toSortTerm tr
 
 toSortTerm :: TermType -> B.Sort
-toSortTerm (_, ty, ps) = B.Tuple [toSort ty, B.Tuple [ B.Bool | _ <- ps ]]
+toSortTerm (_, ty, ps, _) = B.Tuple [toSort ty, B.Tuple [ B.Bool | _ <- ps ]]
 toSortArg :: ArgType -> B.Sort
-toSortArg (_, tys, ps) = B.Tuple [B.Tuple $ map toSort tys, B.Tuple [B.Bool | _ <- ps]]
+toSortArg (_, tys, ps, _) = B.Tuple [B.Tuple $ map toSort tys, B.Tuple [B.Bool | _ <- ps]]
 
 toSymbol :: ML.TId -> PType -> B.Symbol
 toSymbol (ML.TId _ x) ty = B.Symbol (toSort ty) (show x)
@@ -198,7 +198,7 @@ abstValue tbl env cs pv v@(ML.Value l arg _ key) ty = case (l,arg) of
         _ -> error "abstValue"
 
 abstTerm :: forall m. (MonadId m, MonadLogger m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
-abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) = 
+abstTerm tbl env cs pv (ML.Exp l arg sty key) tau@(r,ty,qs, _) = 
     let valueCase :: ML.Value -> m B.Term
         valueCase v = do
             let subst = M.singleton r v
@@ -220,20 +220,20 @@ abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) =
                 let Left ty_f = tbl M.! (getUniqueKey v_f)
                 t_f <- abstValue tbl env' cs pv v_f ty_f
                 return (toSymbol f ty_f, t_f)
-            B.f_letrec fs' <$> abstTerm tbl env' cs pv e2 (r,ty,qs)
+            B.f_letrec fs' <$> abstTerm tbl env' cs pv e2 tau
         (ML.SLet, (x,(ML.LExp l1 arg1 sty1 key1),e2)) -> 
             let atomCase :: ML.Atom -> m B.Term
                 atomCase av = do
                     let ty_x = typeOfAtom env av
                     ex <- abstValue tbl env cs pv (ML.castWith key1 av) ty_x
-                    e' <- abstTerm tbl (M.insert x ty_x env) (addEq x av cs) pv e2 (r,ty,qs)
+                    e' <- abstTerm tbl (M.insert x ty_x env) (addEq x av cs) pv e2 tau
                     return $ B.f_let (toSymbol x ty_x) ex e'
                 exprCase :: ML.Exp -> m B.Term
                 exprCase e1 = do
-                    let Right (y,ty_y,ps) = tbl M.! key1
+                    let Right tau1@(y,ty_y,ps, _) = tbl M.! key1
                     let sx = show $ ML.name x
-                    x_pair <- B.freshSym (sx ++ "_pair") (toSortTerm (y,ty_y,ps))
-                    B.f_let x_pair <$> abstTerm tbl env cs pv e1 (y,ty_y,ps) <*> do
+                    x_pair <- B.freshSym (sx ++ "_pair") (toSortTerm tau1)
+                    B.f_let x_pair <$> abstTerm tbl env cs pv e1 tau1 <*> do
                         let x_body  = B.f_proj 0 2 (B.V x_pair)
                             x_preds = B.f_proj 1 2 (B.V x_pair)
                             n = length ps
@@ -241,7 +241,7 @@ abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) =
                             env' = M.insert x (substPType (M.singleton y x) ty_y) env
                         B.f_let (toSymbol x ty_y) x_body <$>                                        -- let x = abst(cs,pv,t1,tau1)
                             (B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral $ ML.CBool True)) <*> -- assume phi;
-                                abstTerm tbl env' cs pv' e2 (r,ty,qs))                              -- abst(cs,pv',t,tau)
+                                abstTerm tbl env' cs pv' e2 tau)                              -- abst(cs,pv',t,tau)
             in case l1 of
                 ML.SLiteral -> atomCase (ML.Atom l1 arg1 sty1)
                 ML.SVar     -> atomCase (ML.Atom l1 arg1 sty1)
@@ -249,14 +249,14 @@ abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) =
                 ML.SBinary   -> atomCase (ML.Atom l1 arg1 sty1)
                 ML.SApp -> do
                     let (f,vs) = arg1
-                    let PFun _ (ys,ty_ys,ps) (r',ty_r',qs') = env M.! f
+                    let PFun _ (ys,ty_ys,ps, _) (r',ty_r',qs', pred_tmpl') = env M.! f
                     let subst = M.fromList $ zip ys vs
                     let ty_ys' = map (substVPType subst) ty_ys
                     let sx = show $ ML.name x 
                     arg_body  <- B.T <$> zipWithM (abstValue tbl env cs pv) vs ty_ys'
                     arg_preds <- abstFormulae cs pv (map (substVFormula subst) ps)
                     let f' = toSymbol f (env M.! f)
-                    x' <- B.freshSym (sx ++ "_pair") (toSortTerm (r',ty_r',qs'))
+                    x' <- B.freshSym (sx ++ "_pair") (toSortTerm (r',ty_r',qs', pred_tmpl'))
                     let x_body  = B.f_proj 0 2 (B.V x')
                         x_preds = B.f_proj 1 2 (B.V x')
                         n = length qs'
@@ -267,10 +267,10 @@ abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) =
                     B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .           -- let x = f <body, preds> in
                       B.f_let (toSymbol x ty_r') x_body <$>                               -- let v = x.fst
                         (B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral (ML.CBool True))) <*>          -- assume phi; // avoid incosinsitent states
-                            abstTerm tbl (M.insert x ty_r'' env) cs pv' e2 (r,ty,qs))     -- abst(cs,pv',t,tau)
+                            abstTerm tbl (M.insert x ty_r'' env) cs pv' e2 tau)     -- abst(cs,pv',t,tau)
                 ML.SRand -> 
                     B.f_let (toSymbol x PInt) (B.T []) <$>
-                        abstTerm tbl (M.insert x PInt env) cs pv e2 (r,ty,qs)
+                        abstTerm tbl (M.insert x PInt env) cs pv e2 tau
                 ML.SLambda -> exprCase (ML.Exp l1 arg1 sty1 key1)
                 ML.SPair -> exprCase (ML.Exp l1 arg1 sty1 key1)
                 ML.SBranch -> exprCase (ML.Exp l1 arg1 sty1 key1)
@@ -278,27 +278,27 @@ abstTerm tbl env cs pv (ML.Exp l arg sty key) (r,ty,qs) =
                 ML.SOmega -> error "abstTerm: Omega is not supported"
         (ML.SAssume,(v,e)) -> do
             e_v <- abstValue tbl env cs pv (ML.cast v) PBool
-            B.f_assume e_v <$> abstTerm tbl env (v : cs) pv e (r,ty,qs)
+            B.f_assume e_v <$> abstTerm tbl env (v : cs) pv e tau
         (ML.SFail, _) -> do
-            fail <- B.freshSym "fail" (toSortTerm (r,ty,qs))
+            fail <- B.freshSym "fail" (toSortTerm tau)
             return $ B.Fail fail
         (ML.SOmega, _) -> do
-            fail <- B.freshSym "omega" (toSortTerm (r,ty,qs))
+            fail <- B.freshSym "omega" (toSortTerm tau)
             return $ B.Omega fail
         (ML.SBranch, (t1,t2)) -> do
-            B.f_branch_label <$> abstTerm tbl env cs pv t1 (r,ty,qs)
-                             <*> abstTerm tbl env cs pv t2 (r,ty,qs)
+            B.f_branch_label <$> abstTerm tbl env cs pv t1 tau
+                             <*> abstTerm tbl env cs pv t2 tau
 
 addEq :: ML.TId -> ML.Atom -> Constraints -> Constraints
 addEq y v cs = (ML.mkBin ML.SEq (ML.mkVar y) v) :cs
 
 abstFunDef :: (MonadId m, MonadLogger m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> (UniqueKey,[ML.TId],ML.Exp) -> Maybe PType -> m (B.Term, PType)
 abstFunDef tbl env cs pv (ident,xs,t1) mpty = do
-    let ty_f@(PFun _ (ys,ty_ys,ps) rty) = 
+    let ty_f@(PFun _ arg_ty@(ys,ty_ys,ps,_) rty) = 
             case mpty of
                 Just pty -> pty
                 Nothing -> let Left pty = tbl M.! ident in pty
-    x_pair <- B.freshSym "arg" (toSortArg (ys,ty_ys,ps))
+    x_pair <- B.freshSym "arg" (toSortArg arg_ty)
     e <- B.Lam x_pair <$> do
         let x_body  = B.f_proj 0 2 (B.V x_pair)
             x_preds = B.f_proj 1 2 (B.V x_pair)
@@ -334,7 +334,7 @@ abstProg tbl (ML.Program fs t0) = measure #elapsed_time $ do
         return (f',e_f)
     e0 <- do
         r <- ML.TId ML.TInt <$> identify "main"
-        abstTerm tbl env [] [] t0 (r,PInt,[])
+        abstTerm tbl env [] [] t0 (r,PInt,[], undefined)
     liftIO SMT.getSMTCount >>= \count -> update (access #number_smt_calls ?~ count)
     return $ B.Program ds e0
 

@@ -119,7 +119,7 @@ calcContextV env scopeEnv (Value l arg _ key) pty scope =
             calcContextV env scopeEnv v1 pty1 scope
             calcContextV env scopeEnv v2 pty2 scope
         (SLambda, (xs, e)) -> do
-            let PFun _ (ys, ty_ys, ps) tau = pty
+            let PFun _ (ys, ty_ys, ps, _) tau = pty
                 subst = M.fromList (zip ys xs)
                 ty_ys' = map (substPType subst) ty_ys
                 ps'    = map (substFormula subst) ps
@@ -139,7 +139,7 @@ calcContextE env scopeEnv (Exp l arg sty key) tau scope =
     -- scope does not cointain the return variable
     let valueCase :: Value -> R () 
         valueCase v = do
-            let (r, rty, ps) = tau
+            let (r, rty, ps, _) = tau
             let subst = M.singleton r v
                 rty' = substVPType subst rty
                 ps' = map (substVFormula subst) ps
@@ -167,7 +167,7 @@ calcContextE env scopeEnv (Exp l arg sty key) tau scope =
                     calcContextE env' scopeEnv' e2 tau scope
                 exprCase e1 = do
                     ctx <- ask
-                    let Right tau1@(y, ty_y, ps) = ctxTypeMap ctx ! key1
+                    let Right tau1@(y, ty_y, ps, _) = ctxTypeMap ctx ! key1
                         subst = M.singleton y x
                         ps'   = map (substFormula subst) ps
                         ty_x  = substPType subst ty_y
@@ -187,11 +187,11 @@ calcContextE env scopeEnv (Exp l arg sty key) tau scope =
                 (SUnary, _)   -> atomCase (Atom l1 arg1 sty1)
                 (SApp, (f, vs)) -> do
                     let PFun _ argTy retTy = env ! f
-                        (ys, ptys, ps) = argTy
+                        (ys, ptys, ps, _ ) = argTy
                         subst = M.fromList $ zip ys vs
                         ptys' = map (substVPType subst) ptys
                         ps'   = map (substVFormula subst) ps
-                        (r, rty, qs) = retTy
+                        (r, rty, qs, _) = retTy
                         subst' = M.insert r (cast (PNormal.mkVar x)) subst
                         qs' = map (substVFormula subst') qs
                         rty' = substVPType subst' rty
@@ -777,7 +777,7 @@ saturate typeMap prog = do
     let doit :: R (Bool, ([ITermType], Maybe [Bool]))
         doit = do
             SMT.initSMTContext
-            calcContextE M.empty M.empty (mainTerm prog) (TId TInt (reserved "main"), PInt, []) []
+            calcContextE M.empty M.empty (mainTerm prog) (TId TInt (reserved "main"), PInt, [], undefined) []
             _ <- calcFVE (mainTerm prog)
             pprintContext prog >>= logPretty "saturate" LevelDebug "Abstraction Annotated Program" . PPrinted 
             (root, _) <- mkLiteral (CBool True) >>= \fml0 -> calcExp M.empty fml0 (mainTerm prog)

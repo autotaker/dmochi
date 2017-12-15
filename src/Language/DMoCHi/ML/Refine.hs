@@ -511,7 +511,7 @@ substSValue subst _sv = case _sv of
 -- penv :: i -> (xs,fml) s.t. P_{i} = \xs. fml
 -- env : mapping from variables in the formula to values in PType 
 refineTermType :: IM.IntMap ([Id], ML.Atom) -> M.Map (Id.Id String) ML.Atom -> RPostType -> PAbst.TermType -> PAbst.TermType
-refineTermType penv env (RPostType r rty fml) (abst_r, abst_rty, abst_fml) = (abst_r, abst_rty', abst_fml')
+refineTermType penv env (RPostType r rty fml) (abst_r, abst_rty, abst_fml, pred_tmpl) = (abst_r, abst_rty', abst_fml', pred_tmpl)
     where
     env' = extendEnv r (ML.mkVar abst_r) env
     abst_rty' = refinePType penv env' rty abst_rty
@@ -528,12 +528,12 @@ refinePType penv env (RPair rty1 rty2) (PAbst.PPair ty pty1 pty2) =
 refinePType penv env (RFun fassoc) (PAbst.PFun ty pty_x0 pty_r0) = pty'
     where
     pty' = uncurry (PAbst.PFun ty) $ foldl' f (pty_x0, pty_r0) (IM.elems fassoc)
-    f ((abst_xs, abst_ptys, abst_fml), pty_r) as = pre `seq` abst_ptys' `seq` (pty_x', pty_r')
+    f ((abst_xs, abst_ptys, abst_fml, pred_tmpl), pty_r) as = pre `seq` abst_ptys' `seq` (pty_x', pty_r')
         where
         env'  = foldr (uncurry extendEnv) env (zip (argNames as) (map ML.mkVar abst_xs))
         pre   = refineLFormula penv env' (preCond as)
         abst_ptys' = zipWith (refinePType penv env') (argTypes as) abst_ptys
-        pty_x' = (abst_xs, abst_ptys', PAbst.updateFormula pre abst_fml)
+        pty_x' = (abst_xs, abst_ptys', PAbst.updateFormula pre abst_fml, pred_tmpl)
         pty_r' = refineTermType penv env' (resType as) pty_r
 refinePType _ _ _ _ = error "refinePType: unexpected pattern"
 

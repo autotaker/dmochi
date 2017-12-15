@@ -25,7 +25,7 @@ instance HasType PType where
     getType (PPair sty _ _) = sty
 
 mkPFun :: ArgType -> TermType -> PType
-mkPFun argTy@(xs,_,_) termTy@(TId ty_r _,_,_) = PFun (TFun ty_xs ty_r) argTy termTy
+mkPFun argTy@(xs,_,_,_) termTy@(TId ty_r _,_,_,_) = PFun (TFun ty_xs ty_r) argTy termTy
     where
     ty_xs = map getType xs
 mkPPair :: PType -> PType -> PType
@@ -40,8 +40,10 @@ type Constraints = [Formula]
 type Formula = Atom
 type Id = TId
 
-type TermType = (Id, PType, [Formula])
-type ArgType = ([Id],[PType],[Formula])
+type PredTemplate = (UniqueKey, [Atom])
+
+type TermType = (Id, PType, [Formula], PredTemplate)
+type ArgType = ([Id],[PType],[Formula], PredTemplate)
 
 type TypeMap = M.Map UniqueKey (Either PType TermType)
 type ScopeMap = M.Map UniqueKey [Id]
@@ -49,7 +51,7 @@ type ScopeMap = M.Map UniqueKey [Id]
 instance Eq PType where
     PInt == PInt = True
     PBool == PBool = True
-    (PFun ty_1 (xs_1,xsty_1,ps_1) (r_1,rty_1,qs_1)) == (PFun ty_2 (xs_2,xsty_2,ps_2) (r_2,rty_2,qs_2)) =
+    (PFun ty_1 (xs_1,xsty_1,ps_1,_) (r_1,rty_1,qs_1,_)) == (PFun ty_2 (xs_2,xsty_2,ps_2,_) (r_2,rty_2,qs_2,_)) =
         ty_1 == ty_2 && 
         ps_1 == map (substFormula subst1) ps_2 &&
         qs_1 == map (substFormula subst2) qs_2 &&
@@ -64,12 +66,12 @@ instance Eq PType where
 
 
 pprintTermType :: TermType -> Doc
-pprintTermType (TId _ name,pty_x,fml) = braces $ 
+pprintTermType (TId _ name,pty_x,fml,_) = braces $ 
     pPrint name <+> colon <+> (pprintPType 0 pty_x) <+>
     text "|" <+> (hsep $ punctuate comma $ map pPrint fml)
 
 pprintPTypeArg :: ArgType -> Doc
-pprintPTypeArg (xs,pty_xs,fml) =
+pprintPTypeArg (xs,pty_xs,fml,_) =
     braces $ 
         hsep (punctuate comma $ zipWith (\(TId _ name_x) pty_x -> pPrint name_x <+> colon <+> (pprintPType 0 pty_x)) xs pty_xs) <+>
         text "|" <+> (hsep $ punctuate comma $ map pPrint fml)
@@ -89,10 +91,19 @@ pprintPType assoc (PFun _ x_tup r_tup) =
 instance Pretty PType where
     pPrint = pprintPType 0
 
+substPredTemplate :: M.Map Id Id -> PredTemplate -> PredTemplate
+substPredTemplate subst (key, vs) = (key, map (substFormula subst) vs)
+
+substVPredTemplate :: M.Map Id Value -> PredTemplate -> PredTemplate
+substVPredTemplate subst (key, vs) = (key, map (substVFormula subst) vs)
+
 substTermType :: M.Map Id Id -> TermType -> TermType
-substTermType subst (x,pty,ps) = (x, substPType subst' pty, map (substFormula subst') ps)
+substTermType subst (x,pty,ps,info) = (x, pty', ps', info')
     where
     subst' = M.delete x subst
+    pty' = substPType subst' pty
+    ps' = map (substFormula subst') ps
+    info' = substPredTemplate subst' info
 
 substPType :: M.Map Id Id -> PType -> PType
 substPType subst = substVPType (fmap (cast . mkVar) subst)
@@ -102,15 +113,17 @@ substVPType _ PInt = PInt
 substVPType _ PBool = PBool
 substVPType subst (PPair t t1 t2) = 
     PPair t (substVPType subst t1) (substVPType subst t2)
-substVPType subst (PFun ty (xs,ty_xs,ps) (r,ty_r,qs)) = 
-    PFun ty (xs,ty_xs',ps') (r,ty_r',qs')
+substVPType subst (PFun ty (xs,ty_xs,ps,tmpl_arg) (r,ty_r,qs, tmpl_ret)) = 
+    PFun ty (xs,ty_xs',ps', tmpl_arg') (r,ty_r',qs', tmpl_ret')
     where
     subst1 = foldr M.delete subst xs
     subst2 = M.delete r subst1
     ty_xs' = map (substVPType subst1) ty_xs
     ps' = map (substVFormula subst1) ps
+    tmpl_arg' = substVPredTemplate subst1 tmpl_arg
     ty_r' = substVPType subst2 ty_r
     qs' = map (substVFormula subst2) qs
+    tmpl_ret' = substVPredTemplate subst2 tmpl_ret
 
 substFormula :: M.Map Id Id -> Formula -> Formula
 substFormula subst = substVFormula (fmap (cast . mkVar) subst)
@@ -175,6 +188,23 @@ typeOfAtom env = go where
             SNot -> PBool
             SNeg -> PInt
 
+flatten :: Value -> [Atom] -> [Atom]
+flatten (Value l arg sty _) xs = 
+    case (l, arg) of
+        (SPair, (v1, v2)) -> flatten v1 (flatten v2 xs)
+        (SVar, _)         -> Atom l arg sty : xs
+        (SLiteral, _)     -> Atom l arg sty : xs
+        (SBinary, _)      -> Atom l arg sty : xs
+        (SUnary, _)       -> Atom l arg sty : xs
+        (SLambda, _)  -> xs
+
+decompose :: Atom -> [Atom] -> [Atom]
+decompose x l = case getType x of
+    TPair _ _ -> decompose (mkUni SFst x) (decompose (mkUni SSnd x) l)
+    TFun _ _  -> l
+    TInt -> x : l
+    TBool -> x : l
+
 initTypeMap :: forall m. MonadId m => Program -> m (TypeMap,ScopeMap)
 initTypeMap (Program fs t0) = do
     es <- execWriterT $ do
@@ -194,7 +224,7 @@ initTypeMap (Program fs t0) = do
                 (SLet, (x, (LExp l1 arg1 sty1 key1), e2)) -> do
                     gather (Proxy :: Proxy LExp) fv l1 arg1
                     let genType :: WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
-                        genType = genTermType sty1 >>= \ty -> tell (DL.singleton (key1, Right ty, fv))
+                        genType = genTermType fv sty1 >>= \ty -> tell (DL.singleton (key1, Right ty, fv))
                     (case l1 of
                         SLiteral -> pure ()
                         SVar     -> pure ()
@@ -211,7 +241,7 @@ initTypeMap (Program fs t0) = do
                 (SLetRec, (fs, e2)) -> do
                     let fv' = map fst fs ++ fv
                     forM_ fs $ \(_, v) -> do
-                        ty <- genPType (getType v) 
+                        ty <- genPType fv (getType v) 
                         tell (DL.singleton (getUniqueKey v, Left ty, fv'))
                         gatherV fv' v
                     gatherE fv' e2
@@ -223,29 +253,38 @@ initTypeMap (Program fs t0) = do
                 (SRand, _) -> return ()
             gatherF fv (TId sty _, key, xs, e) = do
                 gatherE (xs ++ fv) e
-                ty <- genPType sty 
-                tell (DL.singleton (key,Left ty, fv))
+                ty <- genPType fv sty 
+                tell (DL.singleton (key, Left ty, fv))
         let fv = map (\(f,_,_,_) -> f) fs
         mapM_ (gatherF fv) fs
         gatherE fv t0
     let (es1,es2) = unzip [ ((i,v1),(i,v2)) | (i, v1, v2) <- DL.toList es ]
     return (M.fromList es1, M.fromList es2)
 
-genTermType :: MonadId m => Type -> m TermType
-genTermType s = do
+genPredTemplate :: MonadId m => [TId] -> m PredTemplate
+genPredTemplate xs = do
+    key <- freshKey
+    let scope = foldr (decompose . mkVar) [] xs
+    return (key, scope)
+
+genTermType :: MonadId m => [TId] -> Type -> m TermType
+genTermType scope s = do
     r <- TId s <$> identify "r"
-    pty <- genPType s
-    return (r,pty,[])
-genPType :: MonadId m => Type -> m PType
-genPType TInt = return PInt
-genPType TBool = return PBool
-genPType ty@(TPair t1 t2) = PPair ty <$> genPType t1 <*> genPType t2
-genPType ty@(TFun ts t2) = do
+    pty <- genPType (r:scope) s
+    predTempl <- genPredTemplate (r:scope)
+    return (r,pty,[],predTempl)
+
+genPType :: MonadId m => [TId] -> Type -> m PType
+genPType _ TInt = return PInt
+genPType _ TBool = return PBool
+genPType scope ty@(TPair t1 t2) = PPair ty <$> genPType scope t1 <*> genPType scope t2
+genPType scope ty@(TFun ts t2) = do
     xs <- mapM (\t1 -> TId t1 <$> identify "x") ts
-    r <- TId t2 <$> identify "r"
-    ty_xs <- mapM genPType ts
-    ty_r <- genPType t2
-    return $ PFun ty (xs, ty_xs, []) (r, ty_r, [])
+    let scope' = xs ++ scope
+    ty_xs <- mapM (genPType scope') ts
+    rty <- genTermType scope' t2
+    predTempl <- genPredTemplate scope'
+    return $ PFun ty (xs, ty_xs, [], predTempl) rty
 
 updateFormula :: Formula -> [Formula] -> [Formula]
 updateFormula phi@(Atom l arg _ ) fml = case (l,arg) of
@@ -267,20 +306,18 @@ mergePType PInt PInt = PInt
 mergePType PBool PBool = PBool
 mergePType (PPair ty1 pty_fst1 pty_snd1) (PPair ty2 pty_fst2 pty_snd2) 
     | ty1 == ty2 = PPair ty1 (mergePType pty_fst1 pty_fst2) (mergePType pty_snd1 pty_snd2)
-mergePType (PFun ty1 (xs_1,xsty_1,ps_1) (r_1,rty_1,qs_1)) 
-           (PFun ty2 (xs_2,xsty_2,ps_2) (r_2,rty_2,qs_2))
-    | ty1 == ty2 = PFun ty1 (xs_1,xsty, ps) (r_1,rty,qs)
+mergePType (PFun ty1 (xs_1,xsty_1,ps_1, pred_tmpl_arg) tau_1)
+           (PFun ty2 (xs_2,xsty_2,ps_2, _            ) tau_2)
+    | ty1 == ty2 = PFun ty1 (xs_1,xsty, ps, pred_tmpl_arg) tau
         where
         subst1 = M.fromList (zip xs_2 xs_1)
-        subst2 = M.insert r_2 r_1 subst1
         xsty = zipWith mergePType xsty_1 (map (substPType subst1) xsty_2)
         ps = foldr (updateFormula . substFormula subst1) ps_1 ps_2
-        rty = mergePType rty_1 (substPType subst2 rty_2)
-        qs = foldr (updateFormula . substFormula subst2) qs_1 qs_2 
+        tau = mergeTermType tau_1 tau_2
 mergePType _ _ = error "mergePType: sort mismatch"   
 
 mergeTermType :: TermType -> TermType -> TermType
-mergeTermType (r_1,rty_1,qs_1) (r_2,rty_2,qs_2) = (r_1,rty,qs)
+mergeTermType (r_1,rty_1,qs_1, pred_tmpl) (r_2,rty_2,qs_2,_) = (r_1,rty,qs, pred_tmpl)
     where
     subst = M.singleton r_2 r_1
     rty = mergePType rty_1 (substPType subst rty_2)
