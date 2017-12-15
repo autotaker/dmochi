@@ -10,9 +10,9 @@ import qualified Data.DList  as DL
 import           Data.List (foldl')
 import           Data.Hashable
 import           Text.PrettyPrint.HughesPJClass
-import Debug.Trace
+-- import Debug.Trace
 
-import           Language.DMoCHi.ML.Syntax.PNormal hiding(Label)
+import           Language.DMoCHi.ML.Syntax.CEGAR hiding(Label)
 import           Language.DMoCHi.Common.Id 
 import           Language.DMoCHi.Common.Util
 
@@ -79,71 +79,54 @@ addFunc :: Func -> W ()
 addFunc e = tell (DL.empty, pure e)
 
 genCTerm :: Env -> Label -> Exp -> W ()
-genCTerm env l (Exp tag arg sty key) =
-    let valueCase :: Value -> W ()
-        valueCase v = do
+genCTerm env l e =
+    case expView e of
+        EValue v _ -> do
             lv <- genCValue env v
             addEdge $ ELabel l lv
-    in case (tag, arg) of
-        (SLiteral, _) -> valueCase (Value tag arg sty key)
-        (SVar,_)      -> valueCase (Value tag arg sty key)
-        (SBinary,_)   -> valueCase (Value tag arg sty key)
-        (SUnary,_)    -> valueCase (Value tag arg sty key)
-        (SPair,_)     -> valueCase (Value tag arg sty key)
-        (SLambda,_)   -> valueCase (Value tag arg sty key)
-        (SLet,(x, LExp l1 arg1 sty1 key1, e2)) -> 
-            let defaultCase e1 = do
-                    let l_x = labelOfId x
-                        env' = M.insert x l_x env
-                    genCTerm env  l_x e1
-                    genCTerm env' l   e2
-                atomCase av = do
+        EOther SLet (x, e1, _, e2) -> 
+            case lexpView e1 of
+                LAtom av -> do
                     let lv = labelOfAtom env av
                         env' = M.insert x lv env
                     genCTerm env' l e2
-            in case (l1, arg1) of
-                (SLiteral, _) -> atomCase (Atom l1 arg1 sty1)
-                (SVar, _)     -> atomCase (Atom l1 arg1 sty1)
-                (SBinary, _)  -> atomCase (Atom l1 arg1 sty1)
-                (SUnary, _)   -> atomCase (Atom l1 arg1 sty1)
-                (SPair, _)    -> defaultCase (Exp l1 arg1 sty1 key1)
-                (SLambda, _)  -> defaultCase (Exp l1 arg1 sty1 key1)
-                (SFail, _)    -> defaultCase (Exp l1 arg1 sty1 key1)
-                (SOmega, _)   -> defaultCase (Exp l1 arg1 sty1 key1)
-                (SBranch, _)  -> defaultCase (Exp l1 arg1 sty1 key1)
-                (SApp, (f,vs))-> do
+                LOther SBranch (e_l, e_r) -> do
+                    let l_x = labelOfId x
+                        env' = M.insert x l_x env
+                    genCTerm env l_x e_l
+                    genCTerm env l_x e_r
+                    genCTerm env' l e2
+                LOther SApp (f, _, vs) -> do
                     let LKey l_f  = env M.! f 
                         l_x  = labelOfId x 
                         env' = M.insert x l_x env
                     l_vs <- mapM (genCValue env) vs
                     addEdge $ EApp f l_f l_vs (labelOfId x)
                     genCTerm env' l e2
-                (SRand, _) -> do
+                LOther SRand _ -> do
                     let env' = M.insert x LBase env
                     genCTerm env' l e2
-        (SLetRec, (fs,e2)) -> do
+        EOther SLetRec (fs, e2) -> do
             let as = [ (f, LKey $ KFun (getUniqueKey v_f)) | (f,v_f) <- fs ]
             let env' = foldr (uncurry M.insert) env as
             forM_ fs $ \(_,v_f) -> do
                 let (key_f,xs,e_f) = case v_f of
-                        Value SLambda (xs,e_f) _ key_f -> (key_f, xs, e_f)
+                        Value SLambda (xs,_, e_f) _ key_f -> (key_f, xs, e_f)
                         _ -> error "unexpected"
                 genCFunDef env' (key_f,xs,e_f)
             genCTerm env' l e2
-        (SAssume, (_,e)) -> genCTerm env l e 
-        (SFail, _) -> return ()
-        (SOmega, _) -> return ()
-        (SBranch, (e1, e2)) -> genCTerm env l e1 >> genCTerm env l e2
+        EOther SAssume (_, e) -> genCTerm env l e
+        EOther SFail _ -> return ()
+        EOther SOmega _ -> return ()
+        EOther SBranch (e1,e2) -> genCTerm env l e1 >> genCTerm env l e2
 
 genCValue :: Env -> Value -> W Label
-genCValue env (Value tag arg sty key) =
-    case (tag, arg) of
-        (SLiteral, _) -> return $ labelOfAtom env (Atom tag arg sty)
-        (SVar, _)     -> return $ labelOfAtom env (Atom tag arg sty)
-        (SUnary, _)   -> return $ labelOfAtom env (Atom tag arg sty)
-        (SBinary, _)  -> return $ labelOfAtom env (Atom tag arg sty)
-        (SLambda, (xs,e)) -> LKey <$> genCFunDef env (key,xs,e)
-        (SPair, (v1,v2)) -> LPair <$> genCValue env v1 <*> genCValue env v2
+genCValue env v =
+    let key = getUniqueKey v in
+    case valueView v of
+        VAtom a -> return $ labelOfAtom env a
+        VOther SLambda (xs, _, e) -> LKey <$> genCFunDef env (key,xs,e)
+        VOther SPair (v1,v2) -> LPair <$> genCValue env v1 <*> genCValue env v2
 
 genCFunDef :: Env -> (UniqueKey, [TId], Exp) -> W Key
 genCFunDef env (ident,xs,e) = do
@@ -230,11 +213,8 @@ decompLabel LBase = []
 
 type FlowMap = M.Map TId [UniqueKey]
 flowAnalysis :: Program -> LoggingT IO FlowMap 
-flowAnalysis (Program fs e0) = do
-    let (cs,funcs) = (\(a,b) -> (DL.toList a, DL.toList b)) $ execWriter $ do
-            let env = M.fromList [ (f, LKey $ KFun key)  | (f, key, _, _) <- fs ]
-            mapM_ (\(_,key, xs, e) -> genCFunDef env (key,xs,e)) fs
-            genCTerm env LBase e0
+flowAnalysis (Program e0) = do
+    let (cs,funcs) = (\(a,b) -> (DL.toList a, DL.toList b)) $ execWriter $ genCTerm M.empty LBase e0
     logPretty "flow" LevelDebug "Constraints" cs
     let keys = S.toList $ S.fromList $ concat $ 
             map (\case 

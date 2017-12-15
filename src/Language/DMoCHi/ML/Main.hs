@@ -35,6 +35,7 @@ import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
+import qualified Language.DMoCHi.ML.ToCEGAR as CEGAR
 -- import qualified Language.DMoCHi.ML.ElimCast as PAbst
 import qualified Language.DMoCHi.ML.IncSaturation as IncSat
 import qualified Language.DMoCHi.ML.UnliftRec as IncSat
@@ -258,7 +259,7 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
             | incremental conf = 
                 measure #fusion $ do
                 unliftedProgram <- IncSat.unliftRec castFreeProgram
-                (_,res) <- lift $ zoom (access' #fusion_sat Dict.empty) $ mapTracerT lift $ IncSat.saturate curTypeMap unliftedProgram
+                (_,res) <- lift $ zoom (access' #fusion_sat Dict.empty) $ mapTracerT lift $ IncSat.saturate curTypeMap (CEGAR.convert curTypeMap unliftedProgram)
                 logPretty "fusion" LevelDebug "result" res
                 return (snd res)
             | otherwise = do

@@ -1,17 +1,27 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
-module Language.DMoCHi.ML.Syntax.CEGAR where
+module Language.DMoCHi.ML.Syntax.CEGAR(
+      Program(..)
+    , Exp(..), Value(..), Atom(..), LExp(..), Normalized, AbstInfo(..)
+    , LExpView(..), ExpView(..), ValueView(..), expView, valueView, lexpView
+    , mkBin, mkUni, mkLiteral, mkVar, mkPair, mkLambda 
+    , mkApp, mkLet, mkLetRec, mkAssume, mkBranch, mkBranchL, mkFail, mkOmega, mkRand
+    , Castable(..)
+    , module Language.DMoCHi.ML.Syntax.Type
+    , module Language.DMoCHi.ML.Syntax.Base )
+     where
 
 import Language.DMoCHi.Common.Id
 -- import Language.DMoCHi.Common.Util
 -- import qualified Data.Set as S
 import GHC.Exts(Constraint)
-import Language.DMoCHi.ML.Syntax.PNormal(Atom(..), UniArg, Castable(..))
+import Language.DMoCHi.ML.Syntax.PNormal(Atom(..), mkBin, mkUni, mkLiteral, mkVar, UniArg, Castable(..))
 import Language.DMoCHi.ML.Syntax.Type
+import Language.DMoCHi.ML.Syntax.PType(PredTemplate)
 import Language.DMoCHi.ML.Syntax.Base
 import Text.PrettyPrint.HughesPJClass
 
 data AbstInfo = AbstInfo { abstPredicates :: [Atom]              -- current predicates to be used
-                         , abstTemplate   :: (UniqueKey, [Atom]) -- represents P_k(a_1,...a_n) 
+                         , abstTemplate   :: PredTemplate -- represents P_k(a_1,...a_n) 
                          }
 
 newtype Program = Program { mainTerm :: Exp }
@@ -174,6 +184,15 @@ instance Castable Atom Value where
         SBinary -> Value l arg sty key
         SUnary -> Value l arg sty key
 
+instance Castable Atom LExp where
+    type Attr Atom LExp = UniqueKey
+    cast = castWith reservedKey
+    castWith key (Atom l arg sty) = case l of
+        SLiteral -> LExp l arg sty key
+        SVar     -> LExp l arg sty key
+        SBinary  -> LExp l arg sty key
+        SUnary   -> LExp l arg sty key
+
 instance Castable Value Exp where
     type Attr Value Exp = AbstInfo
     cast = undefined
@@ -229,6 +248,9 @@ instance Pretty LExp where
         LOther SRand () -> text "randint()"
         LOther SBranch (e1, e2) ->
             parens (pPrint e1) <+> text "<>" $+$ parens (pPrint e2)
+
+instance Pretty Program where
+    pPrint (Program e) = pPrint e
     
 instance Show Exp where
     show = render . pPrint 

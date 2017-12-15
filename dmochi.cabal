@@ -80,6 +80,7 @@ library
                        Language.DMoCHi.ML.Syntax.IType,
                        Language.DMoCHi.ML.SMT,
                        Language.DMoCHi.ML.DesugarSynonym,
+                       Language.DMoCHi.ML.ToCEGAR,
                        Language.DMoCHi.ML.TypeInfer,
                        Language.DMoCHi.ML.Alpha,
                        Language.DMoCHi.ML.Parser,

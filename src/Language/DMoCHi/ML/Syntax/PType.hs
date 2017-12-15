@@ -65,6 +65,8 @@ instance Eq PType where
     _ == _ = False
 
 
+dummyPredTemplate = (reservedKey, [])
+
 pprintTermType :: TermType -> Doc
 pprintTermType (TId _ name,pty_x,fml,_) = braces $ 
     pPrint name <+> colon <+> (pprintPType 0 pty_x) <+>

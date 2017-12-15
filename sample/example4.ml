@@ -6,4 +6,4 @@ let rec f p =
 let succ x = x + 1;;
 let x = read_int () in
 let r = f (succ, x) in
-assert(r <= x);;
+assert(r > x);;

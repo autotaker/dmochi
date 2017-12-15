@@ -1,13 +1,12 @@
 {-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances #-}
 module Language.DMoCHi.ML.IncSaturation(saturate,IncSat) where
-import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
+import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.IType
 import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.IncSaturationPre
-import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.SMT as SMT
 import qualified Language.DMoCHi.ML.AbstractSemantics as AbsSemantics
 
@@ -26,7 +25,7 @@ import           Text.PrettyPrint.HughesPJClass
 import           Debug.Trace
 import           Data.PolyDict(Dict)
 
-
+{-
 setFV :: UniqueKey -> S.Set TId -> R ()
 setFV key s = do
     ctx <- ask
@@ -106,131 +105,78 @@ calcFVL (LExp l arg sty key) = do
         (SFail, _) -> cont S.empty
         (SOmega, _) -> cont S.empty
         (SRand, _) -> cont S.empty
+        -}
 
-calcContextV :: M.Map TId PType -> M.Map TId [Atom] -> Value -> PType -> [Atom] -> R ()
-calcContextV env scopeEnv (Value l arg _ key) pty scope = 
-    case (l, arg) of
-        (SLiteral, _) -> return ()
-        (SVar, _)     -> return ()
-        (SUnary, _)   -> return ()
-        (SBinary, _) -> return ()
-        (SPair, (v1, v2)) -> do
-            let PPair _ pty1 pty2 = pty
-            calcContextV env scopeEnv v1 pty1 scope
-            calcContextV env scopeEnv v2 pty2 scope
-        (SLambda, (xs, e)) -> do
-            let PFun _ (ys, ty_ys, ps, _) tau = pty
-                subst = M.fromList (zip ys xs)
-                ty_ys' = map (substPType subst) ty_ys
-                ps'    = map (substFormula subst) ps
-                tau'   = substTermType subst tau
-                env'   = foldr (uncurry M.insert) env $ zip xs ty_ys'
-                scope_arg = foldr (decompose . PNormal.mkVar) scope xs
-                scopeEnv' = foldr (uncurry M.insert) scopeEnv [ (x, scope_arg) | x <- xs ]
+calcContextV :: Value  -> R ()
+calcContextV v = 
+    case valueView v of
+        VAtom _ -> return ()
+        VOther SPair (v1, v2) -> calcContextV v1 >> calcContextV v2
+        VOther SLambda (_, info, e) -> do
+            let ps'    = abstPredicates info
+                scope_arg = snd (abstTemplate info)
+                key = getUniqueKey v
             ctx <- ask
             ps' <- mapM toHFormula ps'
             scope_arg' <- mapM toHFormula scope_arg
-            liftIO $ H.insert (ctxArgTypeTbl ctx) key (ty_ys', ps', Scope scope_arg')
-            calcContextE env' scopeEnv' e tau' scope_arg
+            liftIO $ H.insert (ctxArgTypeTbl ctx) key (ps', Scope scope_arg')
+            calcContextE e
 
 -- env scopeEnv |- e : tau [scope]
-calcContextE :: M.Map TId PType -> M.Map TId [Atom] -> Exp -> TermType -> [Atom] -> R ()
-calcContextE env scopeEnv (Exp l arg sty key) tau scope =
+calcContextE ::  Exp -> R ()
+calcContextE e = 
+    let key = getUniqueKey e in
     -- scope does not cointain the return variable
-    let valueCase :: Value -> R () 
-        valueCase v = do
-            let (r, rty, ps, _) = tau
-            let subst = M.singleton r v
-                rty' = substVPType subst rty
-                ps' = map (substVFormula subst) ps
-                scope' = flatten v scope
-            calcContextV env scopeEnv v rty' scope'
+    case expView e of
+        EValue v info -> do
+            let ps' = abstPredicates info
+                scope' = snd $ abstTemplate info
+            calcContextV v 
             scope' <- mapM toHFormula scope'
             tbl <- ctxRtnTypeTbl <$> ask 
             ps' <- mapM toHFormula ps'
-            liftIO (H.insert tbl key (rty', ps', Scope scope'))
-    in case (l, arg) of
-        (SLiteral, _) -> valueCase (Value l arg sty key)
-        (SVar, _)     -> valueCase (Value l arg sty key)
-        (SUnary, _)   -> valueCase (Value l arg sty key)
-        (SBinary, _)  -> valueCase (Value l arg sty key)
-        (SPair, _)    -> valueCase (Value l arg sty key)
-        (SLambda, _)  -> valueCase (Value l arg sty key)
-        (SLet, (x, LExp l1 arg1 sty1 key1, e2)) -> 
-            let atomCase av = do
-                    let ty_x = typeOfAtom env av
-                        scope1 = scopeOfAtom scopeEnv av
-                    let env' = M.insert x ty_x env
-                        scopeEnv' = M.insert x scope1 scopeEnv
-                    scope1 <- mapM toHFormula scope1
-                    ask >>= \ctx -> liftIO $ H.insert (ctxRtnTypeTbl ctx) key (ty_x, [], Scope scope1)
-                    calcContextE env' scopeEnv' e2 tau scope
-                exprCase e1 = do
-                    ctx <- ask
-                    let Right tau1@(y, ty_y, ps, _) = ctxTypeMap ctx ! key1
-                        subst = M.singleton y x
-                        ps'   = map (substFormula subst) ps
-                        ty_x  = substPType subst ty_y
-                        env'  = M.insert x ty_x env
-                        scope1' = foldr (decompose . PNormal.mkVar) [] (M.keys env)
-                        scope1  = decompose (PNormal.mkVar x) scope1'
-                        scopeEnv' = M.insert x scope1 scopeEnv
-                    ps' <- mapM toHFormula ps'
-                    calcContextE env  scopeEnv e1 tau1 scope1'
-                    scope1 <- mapM toHFormula scope1
-                    liftIO $ H.insert (ctxRtnTypeTbl ctx) key (ty_x, ps', Scope scope1)
-                    calcContextE env' scopeEnv' e2 tau scope
-            in case (l1, arg1) of
-                (SLiteral, _) -> atomCase (Atom l1 arg1 sty1)
-                (SVar, _)     -> atomCase (Atom l1 arg1 sty1)
-                (SBinary, _)  -> atomCase (Atom l1 arg1 sty1)
-                (SUnary, _)   -> atomCase (Atom l1 arg1 sty1)
-                (SApp, (f, vs)) -> do
-                    let PFun _ argTy retTy = env ! f
-                        (ys, ptys, ps, _ ) = argTy
-                        subst = M.fromList $ zip ys vs
-                        ptys' = map (substVPType subst) ptys
-                        ps'   = map (substVFormula subst) ps
-                        (r, rty, qs, _) = retTy
-                        subst' = M.insert r (cast (PNormal.mkVar x)) subst
-                        qs' = map (substVFormula subst') qs
-                        rty' = substVPType subst' rty
-                        env' = M.insert x rty' env
-                        scope_f = scopeEnv M.! f
-                        scope_arg = foldr flatten scope_f vs
-                        scope_ret = decompose (PNormal.mkVar x) scope_arg
-                        scopeEnv' = M.insert x scope_ret scopeEnv
+            liftIO (H.insert tbl key (ps', Scope scope'))
+        EOther SLet (_, e1, info_ret, e2) -> 
+            let key1 = getUniqueKey e1 in
+            case lexpView e1 of
+                LAtom _ -> do
+                    ask >>= \ctx -> liftIO $ H.insert (ctxRtnTypeTbl ctx) key ([], Scope [])
+                    calcContextE e2
+                LOther SApp (_, info_arg, vs) -> do
+                    let ps' = abstPredicates info_arg
+                        qs' = abstPredicates info_ret
+                        scope_arg = snd (abstTemplate info_arg)
+                        scope_ret = snd (abstTemplate info_ret)
                     ctx <- ask
                     ps' <- mapM toHFormula ps'
                     qs' <- mapM toHFormula qs'
-                    zipWithM_ (\v ty_v -> calcContextV env scopeEnv v ty_v scope_arg) vs ptys'
+                    forM_ vs calcContextV
                     scope_arg <- mapM toHFormula $ scope_arg
                     scope_ret <- mapM toHFormula $ scope_ret
-                    liftIO (H.insert (ctxArgTypeTbl ctx) key  (ptys', ps', Scope scope_arg))
-                    liftIO (H.insert (ctxArgTypeTbl ctx) key1 (ptys', ps', Scope scope_arg))
-                    liftIO (H.insert (ctxRtnTypeTbl ctx) key  (rty', qs', Scope scope_ret))
-                    calcContextE env' scopeEnv' e2 tau scope
-                (SPair, _)   -> exprCase (Exp l1 arg1 sty1 key1)
-                (SLambda, _) -> exprCase (Exp l1 arg1 sty1 key1)
-                (SFail, _)   -> exprCase (Exp l1 arg1 sty1 key1)
-                (SOmega, _)  -> exprCase (Exp l1 arg1 sty1 key1)
-                (SRand, _)   -> do
-                    ask >>= \ctx -> liftIO (H.insert (ctxRtnTypeTbl ctx) key (PInt, [], Scope[]))
-                    calcContextE (M.insert x PInt env) (M.insert x [] scopeEnv) e2 tau scope
-                (SBranch, _) -> exprCase (Exp l1 arg1 sty1 key1)
-        (SLetRec, (fs, e2)) -> do
-            tbl <- ctxTypeMap <$> ask
-            let as = [ (f, ty_f) | (f,v_f) <- fs, 
-                                   let Left ty_f = tbl ! getUniqueKey v_f ]
-                scope_fs = foldr (decompose . PNormal.mkVar) [] (M.keys env)
-                env' = foldr (uncurry M.insert) env as
-                scopeEnv' = foldr (uncurry M.insert) scopeEnv [ (f, scope_fs) | (f,_) <- fs ]
-            forM_ fs $ \(f,v_f) -> calcContextV env' scopeEnv' v_f (env' ! f) scope_fs
-            calcContextE env' scopeEnv' e2 tau scope
-        (SAssume, (_, e)) -> calcContextE env scopeEnv e tau scope
-        (SBranch, (e1, e2)) -> calcContextE env scopeEnv e1 tau scope >> calcContextE env scopeEnv e2 tau scope
-        (SFail, _) -> return ()
-        (SOmega, _) -> return ()
+                    liftIO (H.insert (ctxArgTypeTbl ctx) key  (ps', Scope scope_arg))
+                    liftIO (H.insert (ctxArgTypeTbl ctx) key1 (ps', Scope scope_arg))
+                    liftIO (H.insert (ctxRtnTypeTbl ctx) key  (qs', Scope scope_ret))
+                    calcContextE e2
+                LOther SRand _   -> do
+                    ask >>= \ctx -> liftIO (H.insert (ctxRtnTypeTbl ctx) key ([], Scope[]))
+                    calcContextE e2
+                LOther SBranch (e_l, e_r) -> do
+                    ctx <- ask
+                    let ps'   = abstPredicates info_ret
+                        scope1  = snd (abstTemplate info_ret)
+                    ps' <- mapM toHFormula ps'
+                    calcContextE e_l
+                    calcContextE e_r
+                    scope1 <- mapM toHFormula scope1
+                    liftIO $ H.insert (ctxRtnTypeTbl ctx) key ( ps', Scope scope1)
+                    calcContextE  e2
+        EOther SLetRec (fs, e2) -> do
+            forM_ fs $ \(_,v_f) -> calcContextV v_f 
+            calcContextE e2 
+        EOther SAssume (_, e) -> calcContextE e
+        EOther SBranch (e1,e2) -> calcContextE e1 >> calcContextE e2
+        EOther SFail _ -> return ()
+        EOther SOmega _ -> return ()
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
 getFlow i = do
@@ -292,7 +238,7 @@ evalAtom cenv (Atom l arg _) =
 calcFromValue :: HFormula -> UniqueKey -> (IType, R IType, ValueExtractor, R ()) 
                  -> R ([ITermType], R [ITermType], TermExtractor, R ())
 calcFromValue fml key (theta, recalc, extract, destruct) = do
-    Just (_,ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+    Just (ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
     phi <- calcCondition fml ps
     let recalc' = recalc >>= (\theta -> (:[]) <$> mkITerm theta phi)
         extract' env (itermBody -> ITerm _ phi') 
@@ -317,9 +263,9 @@ calcPair env fml _node (v1,v2) = do
     ity <- mkIPair ty1 ty2
     return (ity, recalc, extract, destruct)
     
-calcLambda :: IEnv -> HFormula -> Node e -> UniqueKey -> ([TId], Exp) -> R (IType, R IType, ValueExtractor, R ())
-calcLambda env fml _node key (xs, e) = do
-    Just (_, ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
+calcLambda :: IEnv -> HFormula -> Node e -> UniqueKey -> ([TId], AbstInfo, Exp) -> R (IType, R IType, ValueExtractor, R ())
+calcLambda env fml _node key (xs, _abstInfo, e) = do
+    Just (ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
     tbl <- liftIO H.new
     reg <- ctxFlowReg <$> ask
     liftIO $ H.lookup reg key >>= \case
@@ -369,14 +315,11 @@ calcBranch env fml _node (e1, e2) = do
         destruct = destructor node1 >> destructor node2
     return (merge tys1 tys2, recalc, extract, destruct)
 
-calcLet :: IEnv -> HFormula -> ExpNode -> UniqueKey -> (TId, LExp, Exp) -> R ([ITermType], R [ITermType], TermExtractor, R ())
-calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) = 
-    (case l1 of
-        SLiteral -> atomCase (Atom l1 arg1 sty1)
-        SVar     -> atomCase (Atom l1 arg1 sty1)
-        SUnary   -> atomCase (Atom l1 arg1 sty1)
-        SBinary  -> atomCase (Atom l1 arg1 sty1)
-        SRand    -> do
+calcLet :: IEnv -> HFormula -> ExpNode -> UniqueKey -> (TId, LExp,AbstInfo, Exp) -> R ([ITermType], R [ITermType], TermExtractor, R ())
+calcLet env fml _node key (x, e1, _abstInfo, e2) = 
+    (case lexpView e1 of
+        LAtom a -> atomCase a
+        LOther SRand _ -> do
             env' <- (\ty -> M.insert x ty env) <$> mkIBase
             (node2, tys) <- calcExp env' fml e2 
             addDep (ident node2) _node
@@ -401,7 +344,7 @@ calcLet env fml _node key (x, e1@(LExp l1 arg1 sty1 _), e2) =
                     where cenv' = M.insert x (evalAtom cenv atom) cenv
             return (tys,  recalc, extract, destructor node2)
         genericCase = do
-            Just (_, ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+            Just (ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
             tbl <- liftIO H.new :: R (HashTable (IType, BFormula) ExpNode)
             let genericCalc :: [ITermType] -> R [ITermType]
                 genericCalc tys1 =  -- TODO: あるケースが参照されなくなったらdestructする
@@ -538,10 +481,10 @@ calcAssume env fml _node (a, e) = do
                 extract _ _ = error "assume(false) never returns values" in
             return ([], return [], extract, return ())
 
-calcApp :: IEnv -> HFormula -> LExpNode -> UniqueKey -> (TId, [Value]) -> R ([ITermType], R [ITermType], TermExtractor, R ())
-calcApp env fml _node key (f, vs) = do
+calcApp :: IEnv -> HFormula -> LExpNode -> UniqueKey -> (TId, AbstInfo, [Value]) -> R ([ITermType], R [ITermType], TermExtractor, R ())
+calcApp env fml _node key (f, _, vs) = do
     let ity_f = env ! f
-    Just (_, ps, _) <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key)
+    Just (ps, _) <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key)
     phi <- calcCondition fml ps
     (nodes,thetas) <- fmap unzip $ forM vs $ calcValue env fml 
     forM_ nodes $ \node -> addDep (ident node) _node
@@ -630,30 +573,30 @@ calcValue env fml value@(Value l arg sty key) =
         return (node, ity)
 
 calcExp :: IEnv -> HFormula -> Exp -> R (ExpNode, [ITermType])
-calcExp env fml exp@(Exp l arg sty key) = 
+calcExp env fml exp = 
     let fromValue :: (IType, R IType, ValueExtractor, R ()) -> R ([ITermType], R [ITermType], TermExtractor, R ())
         fromValue = calcFromValue fml key
         fromAtom atom = do
             ity <- genIType (calcAtom env atom)
             calcFromValue fml key (ity, return ity, flip evalAtom atom, return ())
+        key = getUniqueKey exp
     in mfix $ \ ~(_node, _tys) -> do
-        (itys,recalc, extract, destruct) <- case l of
-            SLiteral -> fromAtom (Atom l arg sty)
-            SVar     -> fromAtom (Atom l arg sty)
-            SBinary  -> fromAtom (Atom l arg sty)
-            SUnary   -> fromAtom (Atom l arg sty)
-            SPair    -> fromValue =<< calcPair env fml _node arg
-            SLambda  -> fromValue =<< calcLambda env fml _node key arg
-            SLet     -> calcLet env fml _node key arg
-            SLetRec  -> calcLetRec env fml _node arg
-            SAssume  -> calcAssume env fml _node arg
-            SBranch  -> calcBranch env fml _node arg
-            SFail    -> do
+        (itys,recalc, extract, destruct) <- case expView exp of
+            EValue v _info -> 
+                case valueView v of
+                    VAtom a -> fromAtom a
+                    VOther SPair arg -> fromValue =<< calcPair env fml _node arg
+                    VOther SLambda arg -> fromValue =<< calcLambda env fml _node key arg
+            EOther SLet arg -> calcLet env fml _node key arg
+            EOther SLetRec arg -> calcLetRec env fml _node arg
+            EOther SAssume arg -> calcAssume env fml _node arg
+            EOther SBranch arg -> calcBranch env fml _node arg
+            EOther SFail _ -> do
                 let extract _ (itermBody -> IFail) = return Nothing
                     extract _ _ = error "extract@SFail_calcExp: fail never returns values"
                 tfail <- mkIFail
                 return ([tfail], return [tfail], extract, return ())
-            SOmega   -> 
+            EOther SOmega _ -> 
                 let extract _ _ = error "extract@SOmega_calcExp: omega never returns value nor fails"
                 in return ([], return [], extract, return ())
         let extract' cenv iota = do
@@ -686,22 +629,24 @@ calcExp env fml exp@(Exp l arg sty key) =
         return (node, itys)
 
 calcLExp :: IEnv -> HFormula -> LExp -> R (LExpNode, [ITermType])
-calcLExp env fml lexp@(LExp l arg sty key) =  
-    let fromValue :: (IType, R IType, ValueExtractor, R ()) -> R ([ITermType], R [ITermType], TermExtractor, R ())
-        fromValue = calcFromValue fml key
-        fromAtom atom = do
-            ity <- genIType $ calcAtom env atom
-            calcFromValue fml key (ity, return ity, flip evalAtom atom, return ())
-    in mfix $ \ ~(_node, _tys) -> do
-        (itys,recalc, extract, destruct) <- case l of
-            SLiteral -> fromAtom (Atom l arg sty)
-            SVar     -> fromAtom (Atom l arg sty)
-            SBinary  -> fromAtom (Atom l arg sty)
-            SUnary   -> fromAtom (Atom l arg sty)
+calcLExp env fml lexp =  
+    let key = getUniqueKey lexp in
+    mfix $ \ ~(_node, _tys) -> do
+        (itys,recalc, extract, destruct) <- case lexpView lexp of
+            LAtom atom -> do
+                ity <- genIType $ calcAtom env atom
+                calcFromValue fml key (ity, return ity, flip evalAtom atom, return ())
+            LOther SBranch arg -> calcBranch env fml _node arg
+            LOther SApp arg -> calcApp env fml _node key arg
+            LOther SRand _ -> do
+                let extract _ _ = error "extract@SRand_calcExp: should never be called"
+                ity <- mkIBase
+                btrue <- mkBLeaf True
+                ty <- mkITerm ity btrue
+                return ([ty], return [ty], extract, return ())
+            {-
             SPair    -> fromValue =<< calcPair env fml _node arg
             SLambda  -> fromValue =<< calcLambda env fml _node key arg
-            SBranch  -> calcBranch env fml _node arg
-            SApp     -> calcApp env fml _node key arg
             SFail    -> do
                 let extract _ (itermBody -> IFail) = return Nothing
                     extract _ _ = error "extract@SFail_calcExp: fail never returns values"
@@ -710,12 +655,7 @@ calcLExp env fml lexp@(LExp l arg sty key) =
             SOmega   -> 
                 let extract _ _ = error "extract@SOmega_calcExp: omega never returns value nor fails"
                 in return ([], return [], extract, return ())
-            SRand    -> do
-                let extract _ _ = error "extract@SRand_calcExp: should never be called"
-                ity <- mkIBase
-                btrue <- mkBLeaf True
-                ty <- mkITerm ity btrue
-                return ([ty], return [ty], extract, return ())
+                -}
         itypeRef <- liftIO $ newIORef itys
         alive <- liftIO $ newIORef True
         let destruct' = (destruct :: R ()) >> liftIO (writeIORef alive False)
@@ -777,9 +717,9 @@ saturate typeMap prog = do
     let doit :: R (Bool, ([ITermType], Maybe [Bool]))
         doit = do
             SMT.initSMTContext
-            calcContextE M.empty M.empty (mainTerm prog) (TId TInt (reserved "main"), PInt, [], undefined) []
-            _ <- calcFVE (mainTerm prog)
-            pprintContext prog >>= logPretty "saturate" LevelDebug "Abstraction Annotated Program" . PPrinted 
+            calcContextE (mainTerm prog) 
+            -- _ <- calcFVE (mainTerm prog)
+            logPretty "saturate" LevelDebug "Abstraction Annotated Program" (PPrinted (pPrint prog))
             (root, _) <- mkLiteral (CBool True) >>= \fml0 -> calcExp M.empty fml0 (mainTerm prog)
             updateLoop
             tys <- liftIO $ readIORef (types root)

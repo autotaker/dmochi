@@ -35,77 +35,56 @@ etaAtom a =
             mkLambda ys e_body <$> freshKey
 
 normalizeV :: forall m. MonadId m => Value -> m Value
-normalizeV (Value l arg sty key) = 
-    let atomCase :: Atom -> m Value
-        atomCase atom = etaAtom atom in
-    case (l, arg) of
-        (SLiteral, _) -> atomCase (Atom l arg sty)
-        (SVar, _)     -> atomCase (Atom l arg sty)
-        (SBinary, _)  -> atomCase (Atom l arg sty)
-        (SUnary, _)   -> atomCase (Atom l arg sty)
-        (SPair, (v1, v2)) -> do
+normalizeV v = 
+    let key = getUniqueKey v in
+    case valueView v of
+        VAtom atom -> etaAtom atom
+        VOther SPair (v1, v2) -> do
             v1' <- normalizeV v1
             v2' <- normalizeV v2
             return $ mkPair v1' v2' key
-        (SLambda, (xs, e)) -> do
+        VOther SLambda (xs, e) -> do
             e' <- normalizeT e
             return $ mkLambda xs e' key
     
 normalizeL :: forall m. MonadId m => LExp -> m LExp
-normalizeL (LExp l arg sty key) = 
-    let valueCase :: Value -> m LExp
-        valueCase value = cast <$> normalizeV value in
-    case (l, arg) of
-        (SLiteral, _) -> valueCase (Value l arg sty key)
-        (SVar, _)     -> valueCase (Value l arg sty key)
-        (SBinary, _)  -> valueCase (Value l arg sty key)
-        (SUnary, _)   -> valueCase (Value l arg sty key)
-        (SPair, _)    -> valueCase (Value l arg sty key)
-        (SLambda, _)  -> valueCase (Value l arg sty key)
-        (SApp, (f, vs)) -> do
+normalizeL exp =
+    let key = getUniqueKey exp
+        sty = getType exp
+    in case lexpView exp of
+        LValue (valueView -> VAtom _) -> return exp
+        LValue value -> cast <$> normalizeV value
+        LOther SApp (f, vs) -> do
             vs' <- mapM normalizeV vs
             return $ mkApp f vs' key
-        (SBranch, (e1, e2)) -> do
+        LOther SBranch (e1, e2) -> do
             e1' <- normalizeT e1
             e2' <- normalizeT e2
             return $ mkBranchL e1' e2' key
-        (SFail, _) -> return $ mkFailL sty key
-        (SOmega, _) -> return $ mkOmegaL sty key
-        (SRand, _) -> return $ mkRand key
+        LOther SFail _ -> return $ mkFailL sty key
+        LOther SOmega _ -> return $ mkOmegaL sty key
+        LOther SRand _ -> return $ mkRand key
 
 normalizeT :: forall m. MonadId m => Exp ->  m Exp
-normalizeT (Exp l arg sty key) = 
-    let valueCase :: Value -> m Exp
-        valueCase value = cast <$> normalizeV value in
-    case (l, arg) of
-        (SLiteral, _) -> valueCase (Value l arg sty key)
-        (SVar, _)     -> valueCase (Value l arg sty key)
-        (SBinary, _)  -> valueCase (Value l arg sty key)
-        (SUnary, _)   -> valueCase (Value l arg sty key)
-        (SPair, _)    -> valueCase (Value l arg sty key)
-        (SLambda, _)  -> valueCase (Value l arg sty key)
-        {-
-        (SApp, (f, vs)) -> do
-            vs' <- mapM normalizeV vs
-            return $ mkApp f vs' key
-        (SRand, _) -> return $ mkRand key
-            -}
-        (SLet, (x, e1, e2)) -> do
+normalizeT exp = 
+    let key = getUniqueKey exp
+        sty = getType exp in
+    case expView exp of
+        EValue v -> cast <$> normalizeV v
+        EOther SLet (x, e1, e2) -> do
             e1' <- normalizeL e1
             e2' <- normalizeT e2
             return $ mkLet x e1' e2' key
-        (SLetRec, (ds, e)) -> do
+        EOther SLetRec (ds, e) -> do
             ds' <- mapM (\(f, v) -> (f,) <$> normalizeV v) ds
             e' <- normalizeT e
             return $ mkLetRec ds' e' key
-        (SAssume, (a, e)) -> do
+        EOther SAssume (a, e) -> do
             e' <- normalizeT e
             return $ mkAssume a e' key
-        (SBranch, (e1, e2)) -> do
+        EOther SBranch (e1, e2) -> do
             e1' <- normalizeT e1
             e2' <- normalizeT e2
             return $ mkBranch e1' e2' key
-        (SFail, _) -> return $ mkFail sty key
-        (SOmega, _) -> return $ mkOmega sty key
-
-    
+        EOther SFail _ -> return $ mkFail sty key
+        EOther SOmega _ -> return $ mkOmega sty key

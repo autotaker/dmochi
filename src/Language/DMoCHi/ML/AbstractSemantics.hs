@@ -2,7 +2,7 @@ module Language.DMoCHi.ML.AbstractSemantics(genConstraints) where
 
 import qualified Data.Map as M
 import qualified Data.HashTable.IO as H
-import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin,mkVar,mkLiteral)
+import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin,mkVar,mkLiteral)
 import           Language.DMoCHi.Common.Id hiding(Id)
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import           Language.DMoCHi.ML.IncSaturationPre
@@ -16,12 +16,14 @@ data AValue = ABase Type
             | APair AValue AValue 
             | ACls { _clsEnv :: Env
                    , _clsConstraint :: Constraint
-                   , _clsBody :: (UniqueKey, [TId], Exp) }
+                   , _clsBody :: (UniqueKey, [TId], AbstInfo, Exp) }
 
-data Meta = Pre UniqueKey | Post UniqueKey
+data Meta = Pre UniqueKey | Post UniqueKey | Unique UniqueKey
 instance Show Meta where
     show (Pre key)  = show key ++ "_pre" 
     show (Post key) = show key ++ "_post" 
+    show (Unique key) = show key
+
 
 type Env = M.Map TId AValue
 type Constraint = (HFormula, [Predicate])
@@ -30,12 +32,12 @@ type Trace = [Bool]
 type M a = StateT ([Bool], [Horn.Clause], Int) R a
 
 formatPredicate :: Meta -> Int -> String
-formatPredicate meta i = printf "p_%s_[%d:0]" (show meta) i
+formatPredicate meta i = printf "p_%s[%d:0]" (show meta) i
 
 genConstraints :: Trace -> Exp -> R Horn.HCCS
 genConstraints trace e = do
     v_true <- mkLiteral (CBool True)
-    ([], cs, _) <- execStateT (calcExp M.empty (v_true, []) (getUniqueKey e) e) (trace, [], 0)
+    ([], cs, _) <- execStateT (calcExp M.empty (v_true, []) e) (trace, [], 0)
     return (Horn.HCCS (reverse cs))
 
 genClause :: Constraint -> Predicate -> M ()
@@ -86,13 +88,11 @@ toHornTerm = go [] where
         let (x1, x2) = decomposePairName x in
         if b then sub bs x1 else sub bs x2
 
-
 consumeBranch :: M Bool
 consumeBranch = do
     (a:as, b, c) <- get
     put (as, b, c)
     return a
-
 
 newPGen :: Meta -> M (Scope -> Predicate)
 newPGen meta = do
@@ -118,93 +118,85 @@ calcValue :: Env -> Constraint -> Value -> AValue
 calcValue env c v =
     case valueView v of
         VAtom a -> calcAtom env a
-        VOther SLambda (xs, e) -> ACls env c (getUniqueKey v, xs, e)
+        VOther SLambda (xs, info, e) -> ACls env c (getUniqueKey v, xs, info, e)
         VOther SPair (v1, v2) -> APair (calcValue env c v1) (calcValue env c v2)
 
-calcLExp :: Env -> Constraint -> UniqueKey -> LExp  -> M (Maybe (AValue, BFormula, Scope -> Predicate))
-calcLExp env (fml, preds) meta e =
-    let key = getUniqueKey e in
-    case lexpView e of
-        LValue v -> do
-            Just (_, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
-            phi <- lift (calcCondition fml ps)
-            let av = calcValue env (fml, preds) v
-            pGen <- newPGen (Post meta)
-            genClause (fml, preds) (pGen scope)
-            return (Just (av, phi, pGen))
-        LOther SApp (f, vs) -> do
-            Just (_, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
-            let ACls env1 (fml1, preds1) (key1, xs, e1) = env M.! f
-            pGenArg <- newPGen (Pre meta)
-            Just (_, ps', scope') <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key1
-            let env1' = foldr (uncurry M.insert) env1 $ zip xs (map (calcValue env (fml, preds)) vs)
-                preds1' = pGenArg scope' : preds1
-            genClause (fml, preds) (pGenArg scope)
-            phi <- lift (calcCondition fml ps)
-            fml1' <- lift $ mkBin SAnd fml1 =<< fromBFormula ps' phi
-            calcExp env1' (fml1', preds1') meta e1
-        LOther SRand _ -> error "unexpected pattern"
-        {-
-            Just (_, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
-            phi <- lift (calcCondition fml ps)
-            let av = ABase TInt
-            pGen <- newPGen
-            genClause (fml, preds) (pGen scope)
-            return (Just (av, phi, pGen))
-            -}
-        LOther SBranch (e1, e2) -> do
-            b <- consumeBranch
-            case b of
-                True  -> calcExp env (fml, preds) meta e1
-                False -> calcExp env (fml, preds) meta e2
-        LOther SFail _ -> genFailClause (fml, preds) >> return Nothing
-        LOther SOmega _ -> error "diverged"
-            
-calcExp :: Env -> Constraint -> UniqueKey -> Exp -> M (Maybe (AValue, BFormula, (Scope -> Predicate)))
-calcExp env (fml, preds) meta e = 
+calcExp :: Env -> Constraint -> Exp -> M (Maybe (AValue, BFormula, (Scope -> Predicate)))
+calcExp env (fml, preds) e = 
     let key = getUniqueKey e in
     case expView e of
-        EValue v -> do
-            Just (_, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+        EValue v info -> do
+            Just (ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
             phi <- lift (calcCondition fml ps)
             let av = calcValue env (fml, preds) v
-            pGen <- newPGen (Post meta)
+            pGen <- newPGen (Unique (fst (abstTemplate info)))
             genClause (fml, preds) (pGen scope)
             return (Just (av, phi, pGen))
-        EOther SLet (x, e1, e2) -> do
+        EOther SLet (x, e1, info, e2) -> do
+            let genericCase r1 = do
+                    Just (ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+                    case r1 of
+                        Just (av, bfml, pGen') -> do
+                            fml' <- lift $ mkBin SAnd fml =<< fromBFormula ps bfml
+                            let env' = M.insert x av env
+                                preds' = pGen' scope : preds
+                            calcExp env' (fml', preds') e2
+                        Nothing -> return Nothing
             case lexpView e1 of
-                LValue (valueView -> VAtom a) -> do
+                LAtom a -> do
                     let av = calcAtom env a
                         env' = M.insert x av env
                     -- x == v
                     fml' <- lift $ do
                         vx <- mkVar x
                         toHFormula a >>= mkBin SEq vx >>= mkBin SAnd fml
-                    calcExp env' (fml', preds) meta e2
+                    calcExp env' (fml', preds) e2
                 LOther SRand _ -> do
                     let env' = M.insert x (ABase TInt) env
-                    calcExp env' (fml, preds) meta e2
-                _ -> do
-                    r1 <- calcLExp env (fml, preds) key e1
-                    Just (_, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
-                    case r1 of
-                        Just (av, bfml, pGen') -> do
-                            fml' <- lift $ mkBin SAnd fml =<< fromBFormula ps bfml
-                            let env' = M.insert x av env
-                                preds' = pGen' scope : preds
-                            calcExp env' (fml', preds') meta e2
-                        Nothing -> return Nothing
+                    calcExp env' (fml, preds) e2
+                LOther SApp (f, info_arg, vs) -> do
+                    Just (ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) (getUniqueKey e1)
+                    let ACls env1 (fml1, preds1) (key1, xs, _, e1) = env M.! f
+                    pGenArg <- newPGen (Unique (fst (abstTemplate info_arg)))
+                    Just (ps', scope') <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key1
+                    let env1' = foldr (uncurry M.insert) env1 $ zip xs (map (calcValue env (fml, preds)) vs)
+                        preds1' = pGenArg scope' : preds1
+                    genClause (fml, preds) (pGenArg scope)
+                    phi <- lift (calcCondition fml ps)
+                    fml1' <- lift $ mkBin SAnd fml1 =<< fromBFormula ps' phi
+                    calcExp env1' (fml1', preds1') e1 >>= genericCase
+                LOther SBranch (e_l, e_r) -> do
+                    b <- consumeBranch
+                    case b of
+                        True -> calcExp env (fml, preds) e_l >>= genericCase
+                        False -> calcExp env (fml, preds) e_r >>= genericCase
         EOther SLetRec (fs, e1) -> do
             let env' = foldr (uncurry M.insert) env [ (f, calcValue env' (fml, preds) v) | (f,v) <- fs ]
-            calcExp env' (fml, preds) meta e1
+            calcExp env' (fml, preds) e1
         EOther SAssume (cond, e1) -> do
             fml' <- lift $ mkBin SAnd fml =<< toHFormula cond
-            calcExp env (fml', preds) meta e1
+            calcExp env (fml', preds) e1
         EOther SBranch (e1, e2) -> do
             b <- consumeBranch
             case b of
-                True -> calcExp env (fml, preds) meta e1
-                False -> calcExp env (fml, preds) meta e2
+                True -> calcExp env (fml, preds) e1
+                False -> calcExp env (fml, preds) e2
         EOther SFail _ -> genFailClause (fml, preds) >> return Nothing
         EOther SOmega _ -> error "diverged"
 
+
+{-
+refinePType :: IM.IntMap [([Id], Atom)]  -> PType -> PType
+refinePType _ PInt = PInt 
+refinePType _ PBool = PBool
+refinePType subst (PPair _ p1 p2) = mkPPair (refinePType subst p1) (refinePType subst p2)
+refinePType subst (PFun _ argTy@(xs, ptys_xs, ps, (key, args)) tau) =
+    let tau' = refineTermType subst tau
+    case IM.lookup key subst of
+        Nothing -> mkPFun argTy tau'
+        Just [] -> mkPFun argTy tau'
+        Just fmls -> 
+            foldl (\acc (args_i, fml) -> 
+                let fml' = substFormula (zip args_i args)
+
+ -}           

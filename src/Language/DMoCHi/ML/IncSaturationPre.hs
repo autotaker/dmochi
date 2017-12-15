@@ -1,13 +1,13 @@
 {-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances, RecordWildCards #-}
 module Language.DMoCHi.ML.IncSaturationPre where
-import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
+import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkUni, mkVar, mkLiteral)
+import           Language.DMoCHi.ML.Syntax.PNormal (Atom(..))
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.Flow
 import           Language.DMoCHi.ML.Syntax.IType
-import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 
 import           GHC.Generics (Generic)
 -- import           Data.Kind(Constraint)
@@ -42,8 +42,8 @@ data Context =
   , ctxNodeCounter   :: IORef Int
   , ctxNodeTbl       :: HashTable Int SomeNode
   , ctxNodeDepG      :: HashTable Int [SomeNode]
-  , ctxRtnTypeTbl    :: HashTable UniqueKey (PType, [HFormula], Scope) 
-  , ctxArgTypeTbl    :: HashTable UniqueKey ([PType], [HFormula], Scope) 
+  , ctxRtnTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
+  , ctxArgTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
   , ctxFreeVarTbl    :: HashTable UniqueKey (S.Set TId)
   , ctxHFormulaTbl   :: HFormulaTbl
   , ctxHFormulaSize  :: IORef Int
@@ -154,6 +154,7 @@ initContext typeMap prog = do
         return (Context {..})
 
 
+{-
 pprintContext :: Program -> R Doc
 pprintContext prog = do
     d_fs <- forM (functions prog) $ \(f,key,xs,e) -> do
@@ -262,6 +263,7 @@ pprintContext prog = do
                                         [] -> d_args <+> text "->"
                                         _  -> d_args $+$ text "|" <+> d_ps <+> text "->") <+> pPrint scope $+$
                         nest 4 d_e
+-}
 
 data CValue = CBase | CPair CValue CValue 
             | CRec CEnv TId (HashTable (TId, ArgType, ITermType) ValueNode)
@@ -475,24 +477,6 @@ pushQuery q = modify' $ \(que, nodes) ->
     then (que, nodes)
     else (pushQueue q que, S.insert ident nodes)
 
-{-
-flatten :: Value -> [Atom] -> [Atom]
-flatten (Value l arg sty _) xs = 
-    case (l, arg) of
-        (SPair, (v1, v2)) -> flatten v1 (flatten v2 xs)
-        (SVar, _)         -> Atom l arg sty : xs
-        (SLiteral, _)     -> Atom l arg sty : xs
-        (SBinary, _)      -> Atom l arg sty : xs
-        (SUnary, _)       -> Atom l arg sty : xs
-        (SLambda, _)  -> xs
-
-decompose :: Atom -> [Atom] -> [Atom]
-decompose x l = case getType x of
-    TPair _ _ -> decompose (PNormal.mkUni SFst x) (decompose (PNormal.mkUni SSnd x) l)
-    TFun _ _  -> l
-    TInt -> x : l
-    TBool -> x : l
-    -}
 
 scopeOfAtom :: M.Map TId [Atom] -> Atom -> [Atom]
 scopeOfAtom env (Atom l arg _) = 
