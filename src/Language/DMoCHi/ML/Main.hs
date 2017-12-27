@@ -83,8 +83,10 @@ data Flag = Help
           | Fusion
           | Incremental
           | Verbose
+          | CEGARMethod CEGARMethod
           deriving Eq
 data HCCSSolver = IT | GCH  deriving Eq
+data CEGARMethod = DepType | AbstSemantics deriving Eq
 
 data Config = Config { targetProgram :: FilePath
                      , hornOption :: String
@@ -95,6 +97,7 @@ data Config = Config { targetProgram :: FilePath
                      , foolThreshold :: Int
                      , fusion :: Bool
                      , incremental :: Bool
+                     , cegarMethod :: CEGARMethod
                      , verbose :: Bool
                      , interactive :: Bool }
 
@@ -114,6 +117,7 @@ defaultConfig path = Config { targetProgram = path
                             , fusion = False
                             , incremental = False
                             , verbose = False
+                            , cegarMethod = DepType
                             , interactive = False }
 
 run :: IO ()
@@ -138,11 +142,15 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
           , Option [] ["fusion"] (NoArg Fusion) "enable model checking fusion"
           , Option [] ["incremental"] (NoArg Incremental) "enable incremental saturation algorithm"
           , Option ['v'] ["verbose"] (NoArg Verbose) "set pretty level to verbose"
+          , Option [] ["cegar"] (ReqArg parseMethod "dep|abst") "Set CEGAR method (default = dep)"  
           , Option [] ["interactive"] (NoArg Interactive) "interactive counterexample generation" ]
     where
     parseSolver "it" = HCCS IT
     parseSolver "gch" = HCCS GCH
-    parseSolver s = error $ "Not Supported Parameter for --hccs: " ++ s
+    parseSolver s = error $ "Non Supported Parameter for --hccs: " ++ s
+    parseMethod "dep" = CEGARMethod DepType
+    parseMethod "abst" = CEGARMethod AbstSemantics
+    parseMethod s = error $ "Non Supported Parameter for --cegar: " ++ s
 
 parseArgs :: IO Config
 parseArgs = doit
@@ -164,6 +172,7 @@ parseArgs = doit
                      HCCS IT -> acc { hornOption = "-hccs it" }
                      HCCS GCH -> acc { hornOption = "-hccs gch" }
                      CEGARLimit l -> acc { cegarLimit = l }
+                     CEGARMethod m -> acc { cegarMethod = m }
                      AccErrTraces -> acc { accErrTraces = True }
                      ContextSensitive -> acc { accErrTraces = True, contextSensitive = True }
                      FoolTraces n -> acc { foolTraces = True, foolThreshold = n }
@@ -297,52 +306,55 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                         (trace,isFoolI) <- case interactive conf of
                             True -> Refine.interactiveCEGen normalizedProgram traceFile trace
                             False -> return (trace, Nothing)
-                        Refine.refineCGen normalizedProgram 
-                                          traceFile 
-                                          (contextSensitive conf) 
-                                          (foolThreshold conf) trace >>= \case
-                            Nothing -> return Unsafe
-                            Just (isFool,(clauses, assoc)) -> do
-                                let file_hcs = printf "%s_%d.hcs" path k
-                                --let file_hcs_smt2 = printf "%s_%d.smt2" path k
-                                let bf = case isFoolI of
-                                        Just b -> b
-                                        Nothing -> foolTraces conf && isFool
-                                if bf then do
-                                    logInfoNS "refinement" "Fool counterexample refinement"
-                                    let hcs' = clauses
-                                    liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
-                                    --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
-                                    let cmd = printf "%s -hccs it -print-hccs-solution %s %s > %s" 
-                                                     hccsSolver (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
-                                    liftIO $ callCommand cmd
-                                    parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-                                    --liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
-                                    let (rtyAssoc,rpostAssoc) = assoc
-                                    solution  <- case parseRes of
-                                        Left err -> throwError $ RefinementFailed err
-                                        Right p  -> return p
-                                    let typeMapFool' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMapFool
-                                    return $ Refine (typeMap, typeMapFool', hcs, rtyAssoc0, rpostAssoc0, trace)
-                                else do
-                                    let hcs' = if accErrTraces conf then clauses ++ hcs else clauses
-                                    let (rtyAssoc,rpostAssoc) = 
-                                            if accErrTraces conf then assoc <> (rtyAssoc0,rpostAssoc0)
-                                                                 else assoc
-                                    liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
-                                    --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
-                                    let opts = hornOption conf
-                                    let cmd = printf "%s %s -print-hccs-solution %s %s > %s" 
-                                                     hccsSolver opts (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
-                                    liftIO $ callCommand cmd
-                                    parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-                                    -- liftIO $ readFile (file_hcs ++ ".ans") >>= putStr 
-                                    solution  <- case parseRes of
-                                        Left err -> throwError $ RefinementFailed err
-                                        Right p  -> return p
-                                    let typeMap' | accErrTraces conf = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
-                                                 | otherwise         = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
-                                    return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc, trace)
+                        case cegarMethod conf of
+                            AbstSemantics -> throwError $ OtherError "Unsupported Method"
+                            DepType -> 
+                                Refine.refineCGen normalizedProgram 
+                                                  traceFile 
+                                                  (contextSensitive conf) 
+                                                  (foolThreshold conf) trace >>= \case
+                                    Nothing -> return Unsafe
+                                    Just (isFool,(clauses, assoc)) -> do
+                                        let file_hcs = printf "%s_%d.hcs" path k
+                                        --let file_hcs_smt2 = printf "%s_%d.smt2" path k
+                                        let bf = case isFoolI of
+                                                Just b -> b
+                                                Nothing -> foolTraces conf && isFool
+                                        if bf then do
+                                            logInfoNS "refinement" "Fool counterexample refinement"
+                                            let hcs' = clauses
+                                            liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
+                                            --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
+                                            let cmd = printf "%s -hccs it -print-hccs-solution %s %s > %s" 
+                                                             hccsSolver (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
+                                            liftIO $ callCommand cmd
+                                            parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
+                                            solution  <- case parseRes of
+                                                Left err -> throwError $ RefinementFailed err
+                                                Right p  -> return p
+                                            let (rtyAssoc,rpostAssoc) = assoc
+                                            let typeMapFool' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMapFool
+                                            return $ Refine (typeMap, typeMapFool', hcs, rtyAssoc0, rpostAssoc0, trace)
+                                        else do
+                                            let hcs' = if accErrTraces conf then clauses ++ hcs else clauses
+                                            let (rtyAssoc,rpostAssoc) = 
+                                                    if accErrTraces conf then assoc <> (rtyAssoc0,rpostAssoc0)
+                                                                         else assoc
+                                            liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
+                                            --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
+                                            let opts = hornOption conf
+                                            let cmd = printf "%s %s -print-hccs-solution %s %s > %s" 
+                                                             hccsSolver opts (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
+                                            liftIO $ callCommand cmd
+                                            parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
+                                            solution  <- case parseRes of
+                                                Left err -> throwError $ RefinementFailed err
+                                                Right p  -> return p
+                                            let typeMap' | accErrTraces conf = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
+                                                         | otherwise         = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
+                                            return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc, trace)
+
+                                
             case res of
                 Safe   -> do
                     update (access #result ?~ "Safe")

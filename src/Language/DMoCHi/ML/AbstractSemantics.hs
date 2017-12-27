@@ -1,6 +1,7 @@
-module Language.DMoCHi.ML.AbstractSemantics(genConstraints) where
+module Language.DMoCHi.ML.AbstractSemantics(genConstraints, refine) where
 
 import qualified Data.Map as M
+import qualified Data.IntMap as IM
 import qualified Data.HashTable.IO as H
 import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin,mkVar,mkLiteral)
 import           Language.DMoCHi.Common.Id hiding(Id)
@@ -8,6 +9,7 @@ import qualified Language.DMoCHi.ML.HornClause as Horn
 import           Language.DMoCHi.ML.IncSaturationPre
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.IType
+import           Language.DMoCHi.ML.Syntax.PType hiding(Env)
 import           Control.Monad.State.Strict
 import           Control.Monad.Reader
 import           Text.Printf
@@ -24,31 +26,58 @@ instance Show Meta where
     show (Post key) = show key ++ "_post" 
     show (Unique key) = show key
 
+instance HasUniqueKey Meta where
+    getUniqueKey (Pre key) = key
+    getUniqueKey (Post key) = key
+    getUniqueKey (Unique key) = key
+
 
 type Env = M.Map TId AValue
 type Constraint = (HFormula, [Predicate])
 data Predicate = Predicate Meta Int Scope
 type Trace = [Bool]
-type M a = StateT ([Bool], [Horn.Clause], Int) R a
+type M a = StateT RefineState R a
+
+data RefineState = 
+    RefineState { 
+        stTrace :: Trace 
+      , stClauses :: [Horn.Clause]
+      , stPIdEntries :: [(Int, UniqueKey)]
+      , stPIdCounter :: !Int 
+    }
+
+initState :: Trace -> Int -> RefineState
+initState tr c = RefineState {
+    stTrace = tr
+  , stClauses = []
+  , stPIdEntries = []
+  , stPIdCounter = c 
+  }
+
 
 formatPredicate :: Meta -> Int -> String
 formatPredicate meta i = printf "p_%s[%d:0]" (show meta) i
 
-genConstraints :: Trace -> Exp -> R Horn.HCCS
+genConstraints :: Trace -> Exp -> R (Horn.HCCS, [(Int, UniqueKey)])
 genConstraints trace e = do
     v_true <- mkLiteral (CBool True)
-    ([], cs, _) <- execStateT (calcExp M.empty (v_true, []) e) (trace, [], 0)
-    return (Horn.HCCS (reverse cs))
+    st <- execStateT (calcExp M.empty (v_true, []) e) (initState trace 0)
+    return (Horn.HCCS (reverse $ stClauses st), stPIdEntries st)
 
 genClause :: Constraint -> Predicate -> M ()
-genClause (fml, preds) (Predicate meta i (Scope vs)) = modify' (\(a,b,c) -> (a, Horn.Clause hd body : b, c))
+genClause (fml, preds) (Predicate meta i (Scope vs)) = 
+    modify' (\st -> st { stClauses = cls : stClauses st })
     where
     hd = Horn.PVar (formatPredicate meta i) (map toHornTerm vs)
     body = toHornTerm fml : map toHornPred preds
+    cls = Horn.Clause hd body
 
 genFailClause :: Constraint -> M ()
-genFailClause (fml, preds) = modify' (\(a,b,c) -> (a, Horn.Clause Horn.Bot body : b, c))
-    where body = toHornTerm fml : map toHornPred preds
+genFailClause (fml, preds) = 
+    modify' (\st -> st { stClauses = cls : stClauses st })
+    where 
+    body = toHornTerm fml : map toHornPred preds
+    cls = Horn.Clause Horn.Bot body
 
 decomposePairName :: TId -> (TId, TId)
 decomposePairName x = (x1, x2)
@@ -90,14 +119,17 @@ toHornTerm = go [] where
 
 consumeBranch :: M Bool
 consumeBranch = do
-    (a:as, b, c) <- get
-    put (as, b, c)
-    return a
+    st <- get
+    case stTrace st of
+        (a:as) -> put (st{ stTrace = as }) >> return a
+        _ -> error "no more branch"
 
 newPGen :: Meta -> M (Scope -> Predicate)
 newPGen meta = do
-    (a,b,c) <- get
-    put $! (a,b,) $! c + 1
+    st <- get
+    let c = stPIdCounter st
+    put $! st { stPIdCounter = c + 1 
+              , stPIdEntries = (c, getUniqueKey meta) : stPIdEntries st }
     return $ Predicate meta c
 
 calcAtom :: Env -> Atom -> AValue
@@ -132,7 +164,7 @@ calcExp env (fml, preds) e =
             pGen <- newPGen (Unique (fst (abstTemplate info)))
             genClause (fml, preds) (pGen scope)
             return (Just (av, phi, pGen))
-        EOther SLet (x, e1, info, e2) -> do
+        EOther SLet (x, e1, _info, e2) -> do
             let genericCase r1 = do
                     Just (ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
                     case r1 of
@@ -184,19 +216,40 @@ calcExp env (fml, preds) e =
         EOther SFail _ -> genFailClause (fml, preds) >> return Nothing
         EOther SOmega _ -> error "diverged"
 
+---- refinement
+refine :: [(Int,UniqueKey)] -> [(Int, [Id], Formula)]-> TypeMap -> TypeMap
+refine pId2key preds = fmap conv
+    where
+    conv (Left pty)  = Left (refinePType subst pty)
+    conv (Right tau) = Right (refineTermType subst tau)
+    g = IM.fromList pId2key
+    subst = M.fromListWith (++) [ (key, [(args,fml)]) | (pId, args, fml) <- preds, 
+                                                        let key = g IM.! pId ]
 
-{-
-refinePType :: IM.IntMap [([Id], Atom)]  -> PType -> PType
+    
+
+refinePredicates :: M.Map UniqueKey [([Id], Atom)] -> PredTemplate -> [Formula] -> [Formula]
+refinePredicates subst (key, args) ps =
+     case M.lookup key subst of
+        Nothing -> ps
+        Just fmls -> foldl (\acc (args_i, fml) ->
+                        let fml' = substAFormula (M.fromList (zip args_i args)) fml in
+                        updateFormula fml' acc) ps fmls
+            
+
+refinePType :: M.Map UniqueKey [([Id], Atom)]  -> PType -> PType
 refinePType _ PInt = PInt 
 refinePType _ PBool = PBool
-refinePType subst (PPair _ p1 p2) = mkPPair (refinePType subst p1) (refinePType subst p2)
-refinePType subst (PFun _ argTy@(xs, ptys_xs, ps, (key, args)) tau) =
-    let tau' = refineTermType subst tau
-    case IM.lookup key subst of
-        Nothing -> mkPFun argTy tau'
-        Just [] -> mkPFun argTy tau'
-        Just fmls -> 
-            foldl (\acc (args_i, fml) -> 
-                let fml' = substFormula (zip args_i args)
+refinePType subst (PPair _ p1 p2) = 
+    mkPPair (refinePType subst p1) (refinePType subst p2)
+refinePType subst (PFun _ (xs, ptys_xs, ps, predTempl) tau) =
+    mkPFun (xs, ptys_xs, ps', predTempl) tau'
+    where
+    tau' = refineTermType subst tau
+    ps' = refinePredicates subst predTempl ps
 
- -}           
+refineTermType :: M.Map UniqueKey [([Id], Atom)] -> TermType -> TermType
+refineTermType subst (r, rty, qs, predTempl) = (r, rty', qs', predTempl)
+    where
+    rty' = refinePType subst rty
+    qs' = refinePredicates subst predTempl qs

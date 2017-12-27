@@ -130,6 +130,18 @@ substVPType subst (PFun ty (xs,ty_xs,ps,tmpl_arg) (r,ty_r,qs, tmpl_ret)) =
 substFormula :: M.Map Id Id -> Formula -> Formula
 substFormula subst = substVFormula (fmap (cast . mkVar) subst)
 
+substAFormula :: M.Map Id Atom -> Formula -> Formula
+substAFormula subst = go
+    where
+    go atom@(Atom l arg _) = case (l, arg) of
+        (SVar, x) ->
+            case M.lookup x subst of
+                Just b -> b
+                Nothing -> atom
+        (SLiteral, _) -> atom
+        (SBinary, BinArg op v1 v2) -> mkBin op (go v1) (go v2)
+        (SUnary, UniArg op v1) -> mkUni op (go v1)
+
 substVFormula :: M.Map Id Value -> Formula -> Formula
 substVFormula subst = atomic . go where
     atomic v = case valueView v of
@@ -147,16 +159,7 @@ substVFormula subst = atomic . go where
         (SBinary, BinArg op v1 v2) ->  
             let !v1' = atomic $ go v1
                 !v2' = atomic $ go v2 in
-            case op of
-            SAdd -> cast $ mkBin op v1' v2'
-            SSub -> cast $ mkBin op v1' v2'
-            SDiv -> cast $ mkBin op v1' v2'
-            SMul -> cast $ mkBin op v1' v2'
-            SEq  -> cast $ mkBin op v1' v2'
-            SLt  -> cast $ mkBin op v1' v2'
-            SLte -> cast $ mkBin op v1' v2'
-            SAnd -> cast $ mkBin op v1' v2'
-            SOr  -> cast $ mkBin op v1' v2'
+            cast $ mkBin op v1' v2'
         (SUnary, UniArg op a) -> case op of
             SFst -> case go a of 
                 Value SPair (v1,_) _ _ -> v1

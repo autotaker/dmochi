@@ -1,5 +1,5 @@
 {-# Language FlexibleContexts, FlexibleInstances, UndecidableInstances, MultiParamTypeClasses #-}
-module Language.DMoCHi.Common.Id(UniqueKey, runFreshT, FreshT, Id, HasUniqueKey(..)
+module Language.DMoCHi.Common.Id(UniqueKey, unUniqueKey, runFreshT, FreshT, Id, HasUniqueKey(..)
                                 , MonadId(..), freshId, reserved, reservedKey, maybeReserved, fromReserved
                                 , getName
                                 , refresh, identify) where
