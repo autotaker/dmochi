@@ -1,25 +1,35 @@
-{-# LANGUAGE LambdaCase, BangPatterns, DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
+{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, RecordWildCards #-}
 module Language.DMoCHi.ML.Syntax.HFormula where
 
 import qualified Data.HashTable.IO as H
 import           Data.Hashable
 import           Text.PrettyPrint.HughesPJClass
 import           Data.Type.Equality
+import           Control.Monad.Reader
+import           Data.IORef
 import qualified Z3.Monad as Z3
+import qualified Z3.Base as Z3Base
 
--- import           Language.DMoCHi.Common.Id
+import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
+import           Language.DMoCHi.Common.Cache
 import           Language.DMoCHi.ML.Syntax.Type
 import           Language.DMoCHi.ML.Syntax.PType hiding(Env)
 import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
+import           Language.DMoCHi.ML.Syntax.BFormula
 -- import           Language.DMoCHi.ML.Flow
 import qualified Language.DMoCHi.ML.SMT as SMT
 
-type HashTable k v = H.BasicHashTable k v
 
 data HFormula where
     HFormula :: (WellFormed l HFormula arg, Supported l (Labels HFormula)) => 
-                SLabel l -> arg -> Type -> SMT.IValue -> Int -> HFormula
+                !(SLabel l) -> !arg -> Type -> SMT.IValue -> Int -> HFormula
+
+data HFormulaKey where 
+    HFormulaKey :: (WellFormed l HFormula arg, Supported l (Labels HFormula)) =>
+                    SLabel l -> arg -> HFormulaKey
+
+type instance Key HFormula = HFormulaKey
 
 getIdent :: HFormula -> Int
 getIdent (HFormula _ _ _ _ key) = key
@@ -32,6 +42,18 @@ type instance Labels HFormula  = '[ 'Literal, 'Var, 'Unary, 'Binary ]
 type instance BinOps HFormula = '[ 'Add, 'Sub, 'Div, 'Mul, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
 type instance UniOps HFormula = '[ 'Fst, 'Snd, 'Not, 'Neg ]
 
+instance HasType HFormulaKey where
+    getType (HFormulaKey l arg) =
+        case (l, arg) of
+            (SLiteral, CInt _) -> TInt
+            (SLiteral, CBool _) -> TBool
+            (SLiteral, CUnit)  -> error "unexpected pattern"
+            (SVar, x)    -> getType x
+            (SUnary, _)  -> getType arg
+            (SBinary, _) -> getType arg
+
+instance HasType HFormula where
+    getType (HFormula _ _ ty _ _) = ty
 
 instance Hashable (BinArg HFormula) where
     hashWithSalt salt (BinArg l v1 v2) = 
@@ -44,16 +66,16 @@ instance Hashable (UniArg HFormula) where
         salt `hashWithSalt` l 
              `hashWithSalt` getIdent v 
 
-instance Hashable HFormula where
-    hashWithSalt salt (HFormula l arg _ _ _) =
+instance Hashable HFormulaKey where
+    hashWithSalt salt (HFormulaKey l arg) =
         case l of
             SLiteral -> salt `hashWithSalt` (1 :: Int) `hashWithSalt` arg
             SVar     -> salt `hashWithSalt` (2 :: Int) `hashWithSalt` arg
             SBinary  -> salt `hashWithSalt` (3 :: Int) `hashWithSalt` arg
             SUnary   -> salt `hashWithSalt` (4 :: Int) `hashWithSalt` arg
 
-instance Eq HFormula where
-    (==) (HFormula l1 arg1 _ _ _) (HFormula l2 arg2 _ _ _) =
+instance Eq HFormulaKey where
+    (==) (HFormulaKey l1 arg1) (HFormulaKey l2 arg2) =
         case (l1,l2) of
             (SLiteral, SLiteral) -> arg1 == arg2
             (SLiteral, _) -> False
@@ -63,26 +85,121 @@ instance Eq HFormula where
                 case (arg1, arg2) of
                     (BinArg op1 v1 v2, BinArg op2 v3 v4) -> 
                         case testEquality op1 op2 of
-                            Just _ -> v1 === v3 && v2 === v4
+                            Just _ -> v1 == v3 && v2 == v4
                             Nothing -> False
             (SBinary, _) -> False
             (SUnary, SUnary) ->
                 case (arg1, arg2) of
                     (UniArg op1 v1, UniArg op2 v2) ->
                         case testEquality op1 op2 of
-                            Just _ -> v1 === v2
+                            Just _ -> v1 == v2
                             Nothing -> False
             (SUnary, _) -> False
 
+instance Eq HFormula where
+    (==) = (==) `on` getIdent  
+instance Ord HFormula where
+    compare = compare `on` getIdent
+
+{-
 infix 4 ===
 
 (===) :: HFormula -> HFormula -> Bool
 (===) = (==) `on` getIdent
+-}
 
-class Z3.MonadZ3 m => HFormulaFactory m where
-    genHFormula :: (SMT.IValue -> Int -> HFormula) -> m SMT.IValue -> m HFormula
- 
-mkBin :: (HFormulaFactory m, Supported op (BinOps HFormula))  => SBinOp op -> HFormula -> HFormula -> m HFormula
+{-
+instance HFormulaFactory m => HFormulaFactory (ReaderT r m) where
+    genHFormula a m
+    -}
+
+data Context = 
+    Context {
+        ctxHFormulaCache :: Cache HFormula 
+      , ctxBFormulaCache :: Cache BFormula
+      , ctxCheckSatCache :: HashTable (Int, Int) Bool
+      , ctxSMTSolver     :: Z3.Solver
+      , ctxSMTContext    :: Z3.Context
+      , ctxSMTCount      :: IORef Int
+      , ctxSMTCountHit   :: IORef Int
+    }
+
+newtype HFormulaT m a = HFormulaT { unHFRomulaT :: ReaderT Context m a }
+    deriving (Monad, Applicative, Functor, MonadFix, MonadIO, MonadLogger, MonadReader Context, MonadTrans, MonadId)
+
+runHFormulaT :: HFormulaT m a -> Context -> m a
+runHFormulaT (HFormulaT action) ctx = runReaderT action ctx
+
+newContext :: IO Context
+newContext = do
+    ctxHFormulaCache <- newCache
+    ctxBFormulaCache <- newCache
+    ctxCheckSatCache <- H.new
+    (ctxSMTSolver, ctxSMTContext) <- Z3Base.withConfig $ \cfg -> do
+        Z3.setOpts cfg Z3.stdOpts
+        ctx <- Z3Base.mkContext cfg
+        solver <- Z3Base.mkSolver ctx
+        return (solver, ctx)
+    ctxSMTCount <- newIORef 0
+    ctxSMTCountHit <- newIORef 0
+    return $ Context {..}
+
+
+
+    
+
+instance MonadIO m => Z3.MonadZ3 (HFormulaT m) where
+    getSolver = ctxSMTSolver <$> ask
+    getContext = ctxSMTContext <$> ask
+
+
+class (Z3.MonadZ3 m, BFormulaFactory m) => HFormulaFactory m where
+    getHFormulaCache :: m (Cache HFormula)
+    checkSat         :: HFormula -> HFormula -> m Bool
+
+instance MonadIO m => HFormulaFactory (HFormulaT m) where
+    getHFormulaCache = ctxHFormulaCache <$> ask
+    {-# INLINE checkSat #-}
+    checkSat p1 p2 = {- measureTime CheckSat $-} do
+        ctx <- ask
+        let key = (getIdent p1, getIdent p2)
+        res <- liftIO $ H.lookup (ctxCheckSatCache ctx) key
+        case res of
+            Just v -> do
+                liftIO $ modifyIORef' (ctxSMTCountHit ctx) succ 
+                return v
+            Nothing -> do 
+                liftIO $ modifyIORef' (ctxSMTCount ctx) succ 
+
+                v <- Z3.local $ do
+                    SMT.ASTValue cond <- getIValue <$> mkBin SAnd p1 p2  
+                    Z3.assert cond
+                    res <- Z3.check
+                    case res of
+                        Z3.Sat -> return True
+                        Z3.Unsat -> return False
+                        Z3.Undef -> liftIO $ putStrLn "Undef" >> return True
+                liftIO $ H.insert (ctxCheckSatCache ctx) key v
+                return v
+
+{-# INLINE genHFormula #-}
+genHFormula :: HFormulaFactory m => HFormulaKey -> m SMT.IValue -> m HFormula
+genHFormula key@(HFormulaKey l arg) m_iv = do
+    cache <- getHFormulaCache
+    genEntry cache key $ \i -> do
+        iv <- m_iv
+        return $ HFormula l arg (getType key) iv i
+
+type HFormulaTbl = HashTable HFormula HFormula
+
+
+instance MonadIO m => BFormulaFactory (HFormulaT m) where
+    getBFormulaCache = ctxBFormulaCache <$> ask
+
+
+{-# INLINE mkBin #-}
+mkBin :: (HFormulaFactory m, Supported op (BinOps HFormula))  => 
+         SBinOp op -> HFormula -> HFormula -> m HFormula
 mkBin op v1 v2 = 
     let iv1 = getIValue v1
         iv2 = getIValue v2
@@ -92,55 +209,57 @@ mkBin op v1 v2 =
             (HFormula SLiteral (CInt _) _ _ _, _ ) -> True
             (_, HFormula SLiteral (CInt _) _ _ _) -> True
             _ -> False
+        key = HFormulaKey SBinary (BinArg op v1 v2)
     in case op of
-        SAdd -> genHFormula (HFormula SBinary (BinArg SAdd v1 v2) TInt) (SMT.ASTValue <$> Z3.mkAdd [v1', v2']) 
-        SSub -> genHFormula (HFormula SBinary (BinArg SSub v1 v2) TInt) (SMT.ASTValue <$> Z3.mkSub [v1', v2'])
-        SDiv -> genHFormula (HFormula SBinary (BinArg SDiv v1 v2) TInt) (SMT.mkUDiv iv1 iv2)
-        SMul -> genHFormula (HFormula SBinary (BinArg SMul v1 v2) TInt) (SMT.mkUMul isLinear iv1 iv2)
-        SEq  -> genHFormula (HFormula SBinary (BinArg SEq v1 v2) TBool) (SMT.mkEqIValue iv1 iv2)
-        SLt  -> genHFormula (HFormula SBinary (BinArg SLt v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLt v1' v2')
-        SLte -> genHFormula (HFormula SBinary (BinArg SLte v1 v2) TBool) (SMT.ASTValue <$> Z3.mkLe v1' v2')
+        SAdd -> genHFormula key (SMT.ASTValue <$> Z3.mkAdd [v1', v2']) 
+        SSub -> genHFormula key (SMT.ASTValue <$> Z3.mkSub [v1', v2'])
+        SDiv -> genHFormula key (SMT.mkUDiv iv1 iv2)
+        SMul -> genHFormula key (SMT.mkUMul isLinear iv1 iv2)
+        SEq  -> genHFormula key (SMT.mkEqIValue iv1 iv2)
+        SLt  -> genHFormula key (SMT.ASTValue <$> Z3.mkLt v1' v2')
+        SLte -> genHFormula key (SMT.ASTValue <$> Z3.mkLe v1' v2')
         SAnd -> case (v1, v2) of
             (HFormula SLiteral (CBool True) _ _ _, _) -> return v2
             (_, HFormula SLiteral (CBool True) _ _ _) -> return v1
             (HFormula SLiteral (CBool False) _ _ _, _) -> return v1
             (_, HFormula SLiteral (CBool False) _ _ _) -> return v2
-            _ -> genHFormula (HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkAnd [v1', v2'])
+            _ -> genHFormula key (SMT.ASTValue <$> Z3.mkAnd [v1', v2'])
         SOr  -> case (v1, v2) of
             (HFormula SLiteral (CBool True) _ _ _, _) -> return v1
             (_, HFormula SLiteral (CBool True) _ _ _) -> return v2
             (HFormula SLiteral (CBool False) _ _ _, _) -> return v2
             (_, HFormula SLiteral (CBool False) _ _ _) -> return v1
-            _ -> genHFormula (HFormula SBinary (BinArg SAnd v1 v2) TBool) (SMT.ASTValue <$> Z3.mkOr [v1', v2'])
+            _ -> genHFormula key (SMT.ASTValue <$> Z3.mkOr [v1', v2'])
 
-mkUni :: HFormulaFactory m => SUniOp op -> HFormula -> m HFormula
-mkUni op v1@(HFormula _ _ sty _ _) = 
+{-# INLINE mkUni #-}
+mkUni :: (HFormulaFactory m, Supported op (UniOps HFormula)) => SUniOp op -> HFormula -> m HFormula
+mkUni op v1 = 
+    let key = HFormulaKey SUnary (UniArg op v1) in
     case op of
         SNeg -> 
             let SMT.ASTValue v1' = getIValue v1 in
-            genHFormula (HFormula SUnary (UniArg SNeg v1) TInt) (SMT.ASTValue <$> Z3.mkUnaryMinus v1')
+            genHFormula key (SMT.ASTValue <$> Z3.mkUnaryMinus v1')
         SNot -> 
             let SMT.ASTValue v1' = getIValue v1 in
-            genHFormula (HFormula SUnary (UniArg SNot v1) TBool) (SMT.ASTValue <$> Z3.mkNot v1')
-        SFst -> case sty of
-            TPair sty1 _ -> 
-                let SMT.IPair iv_fst _ = getIValue v1 in
-                genHFormula (HFormula SUnary (UniArg SFst v1) sty1) (pure iv_fst)
-            _ -> error "mkUni: Fst"
-        SSnd -> case sty of
-            TPair _ sty2 -> 
-                let SMT.IPair _ iv_snd = getIValue v1 in
-                genHFormula (HFormula SUnary (UniArg SSnd v1) sty2) (pure iv_snd)
-            _ -> error "mkUni: Snd"
+            genHFormula key (SMT.ASTValue <$> Z3.mkNot v1')
+        SFst -> 
+            let SMT.IPair iv_fst _ = getIValue v1 in
+            genHFormula key (pure iv_fst)
+        SSnd -> 
+            let SMT.IPair _ iv_snd = getIValue v1 in
+            genHFormula key (pure iv_snd)
 
+{-# INLINE mkLiteral #-}
 mkLiteral :: HFormulaFactory m => Lit -> m HFormula
-mkLiteral l@(CInt i)  = genHFormula (HFormula SLiteral l TInt) (SMT.ASTValue <$> Z3.mkInteger i)
-mkLiteral l@(CBool b) = genHFormula (HFormula SLiteral l TBool) (SMT.ASTValue <$> Z3.mkBool b)
+mkLiteral l@(CInt i)  = genHFormula (HFormulaKey SLiteral l) (SMT.ASTValue <$> Z3.mkInteger i)
+mkLiteral l@(CBool b) = genHFormula (HFormulaKey SLiteral l) (SMT.ASTValue <$> Z3.mkBool b)
 mkLiteral CUnit = error "unexpected pattern"
 
+{-# INLINE mkVar #-}
 mkVar :: HFormulaFactory m => TId -> m HFormula
-mkVar x@(TId sty name_x) = genHFormula (HFormula SVar x sty) (SMT.toIValueId sty (show name_x))
+mkVar x@(TId sty name_x) = genHFormula (HFormulaKey SVar x) (SMT.toIValueId sty (show name_x))
 
+{-# INLINE toHFormula #-}
 toHFormula :: HFormulaFactory m => Formula -> m HFormula
 toHFormula (Atom l arg _) = 
     case (l, arg) of
@@ -167,81 +286,37 @@ fromHFormula (HFormula l arg sty _ _) =
 instance Pretty HFormula where
     pPrintPrec plevel prec v = pPrintPrec plevel prec (fromHFormula v)
 
-{-
-data IType = IInt | IBool | IPair IType IType | IFun [([IType], BFormula, ITermType)]
-    deriving (Eq,Ord,Show, Generic)
-data ITermType = IFail | ITerm IType BFormula
-    deriving (Eq,Ord,Show, Generic)
 
-instance Hashable IType
-instance Hashable ITermType
+-- Function: calcCondition fml ps 
+-- assumption: fml is a satisfiable formula
+-- assertion: phi |- fromBFormula ps ret
+{-# INLINE calcCondition #-}
+calcCondition :: HFormulaFactory m => HFormula -> [HFormula] -> m BFormula
+calcCondition _fml _ps = {- measureTime CalcCondition $ -} do
+    phi <- go 1 _fml _ps
+    return phi
+    where
+    go _ _ [] = mkBLeaf True
+    go i fml (p:ps) = do
+        np <- mkUni SNot p
+        b1 <- checkSat fml p
+        b2 <- checkSat fml np
+        v1 <- if b1 then mkBin SAnd fml p >>= \fml' -> go (i + 1) fml' ps 
+                    else mkBLeaf False
+        v2 <- if b2 then mkBin SAnd fml np >>= \fml' -> go (i + 1) fml' ps 
+                    else mkBLeaf False
+        mkBNode i v1 v2
 
-instance Pretty IType where
-    pPrintPrec plevel prec ity =
-        case ity of
-            IInt  -> text "int"
-            IBool -> text "bool"
-            IPair ity1 ity2 -> maybeParens (prec > 0) d 
-                where
-                    d1 = pPrintPrec plevel 1 ity1
-                    d2 = pPrintPrec plevel 1 ity2
-                    d  = d1 <+> text "*" <+> d2
-            IFun ty_assoc -> 
-                braces $ vcat $ punctuate comma $ 
-                    map (\(ty_xs, fml, ty_ret) -> 
-                            let d_xs = hsep $ punctuate comma (map (pPrintPrec plevel 0) ty_xs)
-                                d_fml = text $ show fml
-                                d_ret = pPrintPrec plevel 0 ty_ret
-                            in braces (d_xs <+> text "|" <+> d_fml) <+> text "->" <+> d_ret) ty_assoc
-instance Pretty ITermType where
-    pPrintPrec _ _ IFail = text "fail"
-    pPrintPrec plevel _ (ITerm ty fml) = braces $ pPrintPrec plevel 0 ty <+> text "|" <+> text (show fml)
-
-subTypeOf :: IType -> IType -> Bool
-subTypeOf IInt IInt = True
-subTypeOf IInt _    = error "subTypeOf: sort mismatch"
-subTypeOf IBool IBool = True
-subTypeOf IBool _    = error "subTypeOf: sort mismatch"
-subTypeOf (IFun as1) (IFun as2) =
-    all (\(thetas_i, fml_i, iota_i) ->
-       any (\(thetas_j, fml_j, iota_j) ->
-           thetas_i == thetas_j && 
-           fml_i == fml_j && 
-           iota_i `subTermTypeOf` iota_j
-           ) as1
-       ) as2
-subTypeOf (IFun _) _ = error "subTypeOf: sort mismatch"
-subTypeOf (IPair ty1 ty2) (IPair ty3 ty4) = subTypeOf ty1 ty3 && subTypeOf ty2 ty4
-subTypeOf (IPair _ _) _ = error "subTypeOf: sort mismatch"
-
-subTermTypeOf :: ITermType -> ITermType -> Bool
-subTermTypeOf IFail IFail = True
-subTermTypeOf IFail _ = False
-subTermTypeOf (ITerm theta1 fml1) (ITerm theta2 fml2) =
-    fml1 == fml2 && subTypeOf theta1 theta2
-subTermTypeOf (ITerm _ _) _ = False
-
-data BFormula = BAnd BFormula BFormula | BOr BFormula BFormula | BVar Int | BConst Bool
-    deriving (Eq,Ord,Generic)
-instance Show BFormula where
-    showsPrec p (BVar i) = showsPrec p i
-    showsPrec _ (BConst True) = showString "true"
-    showsPrec _ (BConst False) = showString "false"
-    showsPrec p (BAnd b1 b2) = showParen (p > 2) $ showsPrec 2 b1 . showString " && " . showsPrec 2 b2
-    showsPrec p (BOr b1 b2)  = showParen (p > 1) $ showsPrec 1 b1 . showString " || " . showsPrec 1 b2
-
-instance Hashable BFormula
-
-mkBAnd, mkBOr :: BFormula -> BFormula -> BFormula
-mkBAnd (BConst True) b = b
-mkBAnd (BConst False) _ = BConst False
-mkBAnd b (BConst True) = b
-mkBAnd _ (BConst False) = BConst False
-mkBAnd b1 b2 = BAnd b1 b2
-
-mkBOr (BConst False) b = b
-mkBOr (BConst True) _ = BConst True
-mkBOr b (BConst False) = b
-mkBOr _ (BConst True) = BConst True
-mkBOr b1 b2 = BOr b1 b2
--}
+{-# INLINE fromBFormula #-}
+fromBFormula :: HFormulaFactory m => [HFormula] -> BFormula -> m HFormula
+fromBFormula ps fml = 
+    case body fml of
+        BLeaf b -> mkLiteral (CBool b)
+        BNode i p1 p2 -> do
+            v1 <- fromBFormula ps p1
+            v2 <- fromBFormula ps p2
+            let x = ps !! (i - 1)
+            nx <- mkUni SNot x
+            v1 <- mkBin SAnd x  v1
+            v2 <- mkBin SAnd nx v2
+            mkBin SOr v1 v2

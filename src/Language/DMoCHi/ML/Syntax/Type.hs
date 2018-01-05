@@ -4,7 +4,7 @@ import qualified Language.DMoCHi.Common.Id as Id
 import Text.PrettyPrint.HughesPJClass 
 import Data.Hashable
 import Language.DMoCHi.Common.Util
-import Language.DMoCHi.ML.Syntax.Base(prettyBind)
+import Language.DMoCHi.ML.Syntax.Base
 
 data TId = TId { _type :: !Type, name :: !(Id.Id String) }
 
@@ -60,6 +60,32 @@ class HasType m where
 
 instance HasType TId where
     getType = _type
+
+instance HasType (BinArg e) where
+    {-# INLINE getType #-}
+    getType (BinArg op _ _) =
+        case op of
+            SAdd -> TInt
+            SSub -> TInt
+            SMul -> TInt
+            SDiv -> TInt
+            SEq  -> TBool
+            SNEq -> TBool
+            SLt  -> TBool
+            SLte -> TBool
+            SGt  -> TBool
+            SGte -> TBool
+            SAnd -> TBool
+            SOr  -> TBool
+            
+instance HasType e => HasType (UniArg e) where
+    {-# INLINE getType #-}
+    getType (UniArg op (getType -> t1)) =
+        case op of
+            SFst -> let TPair tl _ = t1 in tl
+            SSnd -> let TPair _ tr = t1 in tr
+            SNot -> TBool
+            SNeg -> TInt
 
 pprintT :: Int -> Type -> Doc
 pprintT _ TInt = text "int"

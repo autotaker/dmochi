@@ -2,10 +2,12 @@
 module Language.DMoCHi.ML.IncSaturationPre where
 import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.PNormal (Atom(..))
-import           Language.DMoCHi.ML.Syntax.HFormula
+import           Language.DMoCHi.ML.Syntax.HFormula hiding(Context)
+import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
+import           Language.DMoCHi.Common.Cache
 import           Language.DMoCHi.ML.Flow
 import           Language.DMoCHi.ML.Syntax.IType
 
@@ -16,7 +18,7 @@ import           Control.Monad.Reader
 import           Control.Monad.Writer hiding((<>))
 import           Control.Monad.State.Strict
 import qualified Z3.Monad as Z3
-import qualified Z3.Base as Z3Base
+-- import qualified Z3.Base as Z3Base
 import           Data.IORef
 import           Data.Time
 --import           Data.Type.Equality
@@ -24,42 +26,27 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
 import           Data.Hashable
-import qualified Language.DMoCHi.ML.SMT as SMT
 import qualified Data.Sequence as Q
 import           Text.PrettyPrint.HughesPJClass
 import qualified Data.PolyDict as Dict
 import           Data.PolyDict(Dict,access)
 
-type HFormulaTbl = HashTable HFormula HFormula
-newtype Scope = Scope { unScope :: [HFormula] }
 
 data Context = 
   Context { 
     ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
   , ctxFlowReg :: HashTable UniqueKey [SomeNode]
-  , ctxTypeMap :: TypeMap
   , ctxFlowMap :: FlowMap
   , ctxNodeCounter   :: IORef Int
   , ctxNodeTbl       :: HashTable Int SomeNode
   , ctxNodeDepG      :: HashTable Int [SomeNode]
-  , ctxRtnTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
-  , ctxArgTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
+--  , ctxRtnTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
+--  , ctxArgTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
   , ctxFreeVarTbl    :: HashTable UniqueKey (S.Set TId)
-  , ctxHFormulaTbl   :: HFormulaTbl
-  , ctxHFormulaSize  :: IORef Int
-  , ctxBFormulaTbl   :: HashTable BFormulaBody BFormula
-  , ctxBFormulaSize  :: IORef Int
-  , ctxITypeTbl      :: HashTable ITypeBody IType
-  , ctxITypeSize     :: IORef Int
-  , ctxITermTbl      :: HashTable ITermTypeBody ITermType
-  , ctxITermSize     :: IORef Int
-  , ctxCheckSatCache :: HashTable (Int, Int) Bool
+  , ctxITypeCache    :: Cache IType
+  , ctxITermCache    :: Cache ITermType
   , ctxUpdated       :: IORef Bool
-  , ctxSMTCount      :: IORef Int
-  , ctxSMTCountHit   :: IORef Int
   , ctxTimer :: HashTable MeasureKey NominalDiffTime
-  , ctxSMTSolver :: Z3.Solver
-  , ctxSMTContext :: Z3.Context 
   }
 
 data MeasureKey = CheckSat | CalcCondition | Total | MSaturation | MExtraction
@@ -67,49 +54,38 @@ data MeasureKey = CheckSat | CalcCondition | Total | MSaturation | MExtraction
 
 instance Hashable MeasureKey 
 
-newtype R a = R { unR :: ReaderT Context (StateT (Queue UpdateQuery, S.Set Int) (LoggingT IO)) a }
+newtype R a = R { unR :: ReaderT Context (StateT (Queue UpdateQuery, S.Set Int) (HFormulaT (LoggingT IO))) a }
     deriving (Monad, Applicative, Functor, MonadFix, MonadIO,MonadLogger)
 
 instance MonadReader Context R where
     ask = R ask
     local f a = R (local f $ unR a)
 
+getHFormulaContext :: R HFormula.Context
+getHFormulaContext = R (lift ask)
+
 
 instance MonadState (Queue UpdateQuery, S.Set Int) R where
     get = R get
     put x = R (put x)
 
+instance BFormulaFactory R where
+    getBFormulaCache = ctxBFormulaCache <$> getHFormulaContext
+
 instance Z3.MonadZ3 R where
-    getSolver = ctxSMTSolver <$> ask
-    getContext = ctxSMTContext <$> ask
+    getSolver = R (lift $ lift $ Z3.getSolver)
+    getContext = R (lift $ lift $ Z3.getContext)
+
 
 instance HFormulaFactory R where
-    genHFormula generator m_iv = do
-        (_, _, v@(HFormula _ _ _ iv key)) <- mfix $ \ ~(ident, iv,_) ->  do
-            let key = generator iv ident
-            ctx <- ask
-            let tbl = ctxHFormulaTbl ctx
-            res <- liftIO $ H.lookup tbl key
-            case res of
-                Just v -> return (getIdent v, getIValue v, v)
-                Nothing -> do
-                    ident' <- liftIO $ readIORef (ctxHFormulaSize ctx)
-                    liftIO $ writeIORef (ctxHFormulaSize ctx) $! (ident'+1)
-                    liftIO $ H.insert tbl key key
-                    iv' <- m_iv
-                    return (ident', iv',key)
-        key `seq` iv `seq` return v
+    getHFormulaCache = R (lift $ lift $ getHFormulaCache)
+    checkSat a b = R (lift $ lift $ checkSat a b)
+
 
 instance ITypeFactory R where
-    getITypeTable   = ctxITypeTbl <$> ask
-    getITypeCounter = ctxITypeSize <$> ask
-    getITermTable   = ctxITermTbl <$> ask
-    getITermCounter = ctxITermSize <$> ask
-    getBFormulaTable   = ctxBFormulaTbl <$> ask
-    getBFormulaCounter = ctxBFormulaSize <$> ask
+    getITypeCache = ctxITypeCache <$> ask
+    getITermCache = ctxITermCache <$> ask
 
-instance Pretty Scope where
-    pPrint (Scope vs) = brackets $ hsep $ punctuate comma $ map pPrint vs 
 
 type PEnv = M.Map TId PType
 type IEnv = M.Map TId IType
@@ -119,151 +95,30 @@ type IEnv = M.Map TId IType
     Just v -> v
     Nothing -> error $ "no assoc found for key: " ++ show a
 
-initContext ::TypeMap -> Program -> LoggingT IO Context
-initContext typeMap prog = do
+initContext :: Program -> LoggingT IO Context
+initContext prog = do
     flowMap <- flowAnalysis prog
     liftIO $ do
+        {-
         (ctxSMTSolver, ctxSMTContext) <- Z3Base.withConfig $ \cfg -> do
             Z3.setOpts cfg Z3.stdOpts
             ctx <- Z3Base.mkContext cfg
             solver <- Z3Base.mkSolver ctx
-            return (solver, ctx)
+            return (solver, ctx) -}
         ctxFlowTbl     <- H.new
         ctxFlowReg     <- H.new
-        ctxTypeMap     <- pure typeMap
         ctxFlowMap     <- pure flowMap
         ctxNodeCounter <- newIORef 1
         ctxNodeTbl     <- H.new
         ctxNodeDepG    <- H.new
-        ctxRtnTypeTbl  <- H.new
-        ctxArgTypeTbl  <- H.new
+        -- ctxRtnTypeTbl  <- H.new
+        -- ctxArgTypeTbl  <- H.new
         ctxFreeVarTbl  <- H.new
-        ctxHFormulaTbl    <- H.new
-        ctxHFormulaSize   <- newIORef 0
-        ctxBFormulaTbl    <- H.new
-        ctxBFormulaSize   <- newIORef 0
-        ctxITypeTbl       <- H.new
-        ctxITypeSize      <- newIORef 0
-        ctxITermTbl       <- H.new
-        ctxITermSize      <- newIORef 0
-        ctxCheckSatCache  <- H.new
-        ctxUpdated        <- newIORef False
-        ctxSMTCount       <- newIORef 0
-        ctxSMTCountHit    <- newIORef 0
-        ctxTimer          <- H.new
+        ctxITypeCache  <- newCache
+        ctxITermCache  <- newCache
+        ctxUpdated     <- newIORef False
+        ctxTimer       <- H.new
         return (Context {..})
-
-
-{-
-pprintContext :: Program -> R Doc
-pprintContext prog = do
-    d_fs <- forM (functions prog) $ \(f,key,xs,e) -> do
-        Just (ty_xs, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
-        let d_args = vcat $ zipWith (\x ty_x -> parens $ pPrint (name x) 
-                                            <+> colon 
-                                            <+> pPrint ty_x) xs ty_xs
-            d_ps = hsep $ punctuate comma $ map pPrint ps
-        d_body <- pprintE e
-        return $ text "let" <+> pPrint (name f) <+> (case ps of [] -> d_args <+> pPrint scope <+> text "="
-                                                                _  -> d_args $+$ text "|" <+> d_ps <+> pPrint scope <+> text "=")
-                            $+$ (nest 4 d_body <> text ";;")
-    d_main <- pprintE (mainTerm prog)
-    return $ vcat d_fs $+$ d_main 
-    where 
-    pprintE :: Exp -> R Doc
-    pprintE (Exp l arg sty key) = 
-        let valueCase :: Value -> R Doc
-            valueCase v = do
-                d_v <- pprintV 0 v
-                Just (ty_r, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
-                return $ comment (ty_r, ps, scope) $+$ d_v
-        in case (l, arg) of
-            (SLiteral, _) -> valueCase (Value l arg sty key)
-            (SVar, _)     -> valueCase (Value l arg sty key)
-            (SUnary, _)   -> valueCase (Value l arg sty key)
-            (SBinary, _)  -> valueCase (Value l arg sty key)
-            (SPair, _)    -> valueCase (Value l arg sty key)
-            (SLambda, _)  -> valueCase (Value l arg sty key)
-            (SLet, (x, e1@(LExp l1 arg1 sty1 key1), e2)) ->
-                let exprCase d_e1 = do
-                        Just (ty_x, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
-                        d_e2 <- pprintE e2
-                        let d_ps = hsep $ punctuate comma $ map pPrint ps
-                        return $ 
-                            text "let" <+> pPrint (name x)
-                                       <+> (colon <+> pPrint ty_x <+> (case ps of [] -> empty
-                                                                                  _  -> text "|" <+> d_ps) <+> pPrint scope $+$
-                                            text "=" <+> d_e1) 
-                                       <+> text "in" 
-                                       $+$ d_e2
-                in case l1 of
-                    SLiteral -> exprCase (pPrint e1)
-                    SVar     -> exprCase (pPrint e1)
-                    SUnary   -> exprCase (pPrint e1)
-                    SBinary  -> exprCase (pPrint e1)
-                    SPair    -> pprintE (Exp l1 arg1 sty1 key1) >>= exprCase
-                    SLambda  -> pprintE (Exp l1 arg1 sty1 key1) >>= exprCase
-                    SBranch  -> pprintE (Exp l1 arg1 sty1 key1) >>= exprCase
-                    SFail    -> pprintE (Exp l1 arg1 sty1 key1) >>= exprCase
-                    SOmega   -> pprintE (Exp l1 arg1 sty1 key1) >>= exprCase
-                    SApp     -> do
-                        let (f, vs) = arg1
-                        Just (ty_vs, ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
-                        vs' <- mapM (pprintV 1) vs
-                        let d_e1 = pPrint (name f) <+> (case ps of [] -> d_vs
-                                                                   _  -> d_vs $+$ text "|" <+> d_ps) <+> pPrint scope
-                            d_vs = vcat $ zipWith (\d_v ty_v -> parens $ d_v
-                                                                     <+> text ":" 
-                                                                     <+> pPrint ty_v) vs' ty_vs
-                            d_ps = hsep $ punctuate comma $ map pPrint ps
-                        exprCase d_e1 
-                    SRand    -> exprCase (pPrint e1)
-            (SLetRec, (fs, e2)) -> do
-                d_fs <- forM fs $ \(f,v_f) -> do
-                    d_f <- pprintV 0 v_f
-                    return $ pPrint (name f) <+> text "=" <+> d_f
-                d_e2 <- pprintE e2
-                return $
-                    text "let rec" <+> 
-                        vcat (punctuate (text "and") d_fs)
-                        <+> text "in" $+$
-                    d_e2
-            (SAssume, (cond, e)) -> do
-                d_e <- pprintE e
-                return $ text "assume" <+> pPrintPrec prettyNormal 9 cond <> text ";" $+$ d_e
-            (SBranch, (e1, e2)) -> do
-                d_e1 <- pprintE e1
-                d_e2 <- pprintE e2
-                return $ parens d_e1 <+> text "<>" $+$ parens d_e2
-            (SFail, _) -> return $ text "Fail"
-            (SOmega, _) -> return $ text "Omega"
-    pprintV :: Rational -> Value -> R Doc
-    pprintV prec v@(Value l arg _ key) =
-        case (l, arg) of
-            (SLiteral, _) -> return $ pPrintPrec prettyNormal prec v
-            (SVar, _) -> return $  pPrintPrec prettyNormal prec v
-            (SBinary, _) -> return $ pPrintPrec prettyNormal prec v
-            (SUnary, _) -> return $ pPrintPrec prettyNormal prec v
-            (SPair, (v1, v2)) -> do
-                d_v1 <- pprintV 0 v1
-                d_v2 <- pprintV 0 v2
-                return $ parens $ d_v1 <> comma <+> d_v2
-            (SLambda, (xs, e)) -> do
-                Just (ty_xs, ps, scope) <- do
-                    m <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
-                    case m of Just v -> return (Just v)
-                              Nothing -> error (render (pPrint v))
-                d_e <- pprintE e
-                let d_args = vcat $ zipWith (\x ty_x -> parens $ pPrint (name x) 
-                                                    <+> colon 
-                                                    <+> pPrint ty_x) xs ty_xs
-                    d_ps = hsep $ punctuate comma $ map pPrint ps
-                return $ maybeParens (prec > 0) $ 
-                    text "fun" <+> (case ps of 
-                                        [] -> d_args <+> text "->"
-                                        _  -> d_args $+$ text "|" <+> d_ps <+> text "->") <+> pPrint scope $+$
-                        nest 4 d_e
--}
 
 data CValue = CBase | CPair CValue CValue 
             | CRec CEnv TId (HashTable (TId, ArgType, ITermType) ValueNode)
@@ -342,6 +197,7 @@ incrNodeCounter = ask >>= \ctx -> liftIO $ do
     writeIORef (ctxNodeCounter ctx) $! v+1
     return v
 
+{-
 -- Function: calcCondition fml ps 
 -- assumption: fml is a satisfiable formula
 -- assertion: phi |- fromBFormula ps ret
@@ -381,6 +237,7 @@ fromBFormula ps fml =
             v1 <- mkBin SAnd x  v1
             v2 <- mkBin SAnd nx v2
             mkBin SOr v1 v2
+            -}
 
 
 measureTime :: MeasureKey -> R a -> R a
@@ -409,22 +266,27 @@ type instance Dict.Assoc IncSat "time" = M.Map String NominalDiffTime
 getStatistics :: Context -> IO (Dict IncSat)
 getStatistics ctx = do
     nodeSize <- readIORef (ctxNodeCounter ctx)
+    {-
     hfmlSize <- readIORef (ctxHFormulaSize ctx)
     bfmlSize <- readIORef (ctxBFormulaSize ctx)
     itypSize <- readIORef (ctxITypeSize ctx)
     itrmSize <- readIORef (ctxITermSize ctx)
     smtCalls <- readIORef (ctxSMTCount ctx)
     smtHits  <- readIORef (ctxSMTCountHit ctx)
+    -}
     times <- M.fromList . map (\(a,b) -> (show a, b))<$> H.toList (ctxTimer ctx)
     return $ Dict.empty & access #graph_size ?~ nodeSize
+                       {-
                         & access #number_hformula ?~ hfmlSize
                         & access #number_bformula ?~ bfmlSize
                         & access #number_itype    ?~ itypSize
                         & access #number_iterm    ?~ itrmSize
                         & access #number_smt_call ?~ smtCalls
                         & access #number_smt_hit  ?~ smtHits
+                        -}
                         & access #time ?~ times
 
+{-
 checkSat :: HFormula -> HFormula -> R Bool
 checkSat p1 p2 = measureTime CheckSat $ do
     ctx <- ask
@@ -448,6 +310,7 @@ checkSat p1 p2 = measureTime CheckSat $ do
                     Z3.Undef -> liftIO $ putStrLn "Undef" >> return True
             liftIO $ H.insert (ctxCheckSatCache ctx) key v
             return v
+            -}
 
 genericPrint :: IEnv -> HFormula -> e -> IORef (SatType e) -> Int -> (e -> Doc) -> (SatType e -> Doc) -> IO Doc
 genericPrint env fml e tys_ref ident termPrinter typePrinter = do

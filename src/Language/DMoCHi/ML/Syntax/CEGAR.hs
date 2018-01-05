@@ -15,12 +15,13 @@ import Language.DMoCHi.Common.Id
 -- import qualified Data.Set as S
 import GHC.Exts(Constraint)
 import Language.DMoCHi.ML.Syntax.PNormal(Atom(..), mkBin, mkUni, mkLiteral, mkVar, UniArg, Castable(..))
+import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.PType(PredTemplate)
 import Language.DMoCHi.ML.Syntax.Base
 import Text.PrettyPrint.HughesPJClass
 
-data AbstInfo = AbstInfo { abstPredicates :: [Atom]              -- current predicates to be used
+data AbstInfo = AbstInfo { abstPredicates :: [HFormula.HFormula]              -- current predicates to be used
                          , abstTemplate   :: PredTemplate -- represents P_k(a_1,...a_n) 
                          }
 

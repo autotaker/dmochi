@@ -1,14 +1,15 @@
-{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances #-}
+{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving #-}
 module Language.DMoCHi.ML.IncSaturation(saturate,IncSat) where
 import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.HFormula
+import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import           Language.DMoCHi.ML.Syntax.IType
-import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.IncSaturationPre
+import           Language.DMoCHi.Common.Cache hiding(ident)
 import qualified Language.DMoCHi.ML.SMT as SMT
-import qualified Language.DMoCHi.ML.AbstractSemantics as AbsSemantics
+-- import qualified Language.DMoCHi.ML.AbstractSemantics as AbsSemantics
 
 -- import Control.Monad
 import           Control.Monad.Fix
@@ -107,6 +108,7 @@ calcFVL (LExp l arg sty key) = do
         (SRand, _) -> cont S.empty
         -}
 
+{-
 calcContextV :: Value  -> R ()
 calcContextV v = 
     case valueView v of
@@ -117,11 +119,12 @@ calcContextV v =
                 scope_arg = snd (abstTemplate info)
                 key = getUniqueKey v
             ctx <- ask
-            ps' <- mapM toHFormula ps'
             scope_arg' <- mapM toHFormula scope_arg
             liftIO $ H.insert (ctxArgTypeTbl ctx) key (ps', Scope scope_arg')
             calcContextE e
+            -}
 
+{-
 -- env scopeEnv |- e : tau [scope]
 calcContextE ::  Exp -> R ()
 calcContextE e = 
@@ -134,7 +137,6 @@ calcContextE e =
             calcContextV v 
             scope' <- mapM toHFormula scope'
             tbl <- ctxRtnTypeTbl <$> ask 
-            ps' <- mapM toHFormula ps'
             liftIO (H.insert tbl key (ps', Scope scope'))
         EOther SLet (_, e1, info_ret, e2) -> 
             let key1 = getUniqueKey e1 in
@@ -148,11 +150,9 @@ calcContextE e =
                         scope_arg = snd (abstTemplate info_arg)
                         scope_ret = snd (abstTemplate info_ret)
                     ctx <- ask
-                    ps' <- mapM toHFormula ps'
-                    qs' <- mapM toHFormula qs'
                     forM_ vs calcContextV
-                    scope_arg <- mapM toHFormula $ scope_arg
-                    scope_ret <- mapM toHFormula $ scope_ret
+                    scope_arg <- mapM toHFormula scope_arg
+                    scope_ret <- mapM toHFormula scope_ret
                     liftIO (H.insert (ctxArgTypeTbl ctx) key  (ps', Scope scope_arg))
                     liftIO (H.insert (ctxArgTypeTbl ctx) key1 (ps', Scope scope_arg))
                     liftIO (H.insert (ctxRtnTypeTbl ctx) key  (qs', Scope scope_ret))
@@ -164,7 +164,6 @@ calcContextE e =
                     ctx <- ask
                     let ps'   = abstPredicates info_ret
                         scope1  = snd (abstTemplate info_ret)
-                    ps' <- mapM toHFormula ps'
                     calcContextE e_l
                     calcContextE e_r
                     scope1 <- mapM toHFormula scope1
@@ -177,6 +176,7 @@ calcContextE e =
         EOther SBranch (e1,e2) -> calcContextE e1 >> calcContextE e2
         EOther SFail _ -> return ()
         EOther SOmega _ -> return ()
+        -}
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
 getFlow i = do
@@ -210,11 +210,11 @@ calcAtom env (Atom l arg _) = case (l, arg) of
     (SLiteral, CInt _)  -> IBase
     (SLiteral, CBool _) -> IBase
     (SLiteral, CUnit) -> IBase
-    (SVar, x) -> ityBody $ env ! x
+    (SVar, x) -> body $ env ! x
     (SBinary, BinArg _ _ _) -> IBase
     (SUnary, UniArg op v) -> case op of
-        SFst -> (\(IPair i1 _) -> ityBody i1) $ calcAtom env v
-        SSnd -> (\(IPair _ i2) -> ityBody i2) $ calcAtom env v
+        SFst -> (\(IPair i1 _) -> body i1) $ calcAtom env v
+        SSnd -> (\(IPair _ i2) -> body i2) $ calcAtom env v
         SNeg -> IBase
         SNot -> IBase
 
@@ -235,13 +235,12 @@ evalAtom cenv (Atom l arg _) =
                 SNeg -> CBase
                 SNot -> CBase
 
-calcFromValue :: HFormula -> UniqueKey -> (IType, R IType, ValueExtractor, R ()) 
+calcFromValue :: HFormula -> [HFormula] -> (IType, R IType, ValueExtractor, R ()) 
                  -> R ([ITermType], R [ITermType], TermExtractor, R ())
-calcFromValue fml key (theta, recalc, extract, destruct) = do
-    Just (ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+calcFromValue fml ps (theta, recalc, extract, destruct) = do
     phi <- calcCondition fml ps
     let recalc' = recalc >>= (\theta -> (:[]) <$> mkITerm theta phi)
-        extract' env (itermBody -> ITerm _ phi') 
+        extract' env (body -> ITerm _ phi') 
             | phi == phi' = return $ Just (extract env)
             | otherwise = error "extract@calcFromValue: condition mismatch"
         extract' _ _ = error "values never fail"
@@ -265,7 +264,7 @@ calcPair env fml _node (v1,v2) = do
     
 calcLambda :: IEnv -> HFormula -> Node e -> UniqueKey -> ([TId], AbstInfo, Exp) -> R (IType, R IType, ValueExtractor, R ())
 calcLambda env fml _node key (xs, _abstInfo, e) = do
-    Just (ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key
+    let ps = abstPredicates _abstInfo
     tbl <- liftIO H.new
     reg <- ctxFlowReg <$> ask
     liftIO $ H.lookup reg key >>= \case
@@ -315,8 +314,8 @@ calcBranch env fml _node (e1, e2) = do
         destruct = destructor node1 >> destructor node2
     return (merge tys1 tys2, recalc, extract, destruct)
 
-calcLet :: IEnv -> HFormula -> ExpNode -> UniqueKey -> (TId, LExp,AbstInfo, Exp) -> R ([ITermType], R [ITermType], TermExtractor, R ())
-calcLet env fml _node key (x, e1, _abstInfo, e2) = 
+calcLet :: IEnv -> HFormula -> ExpNode -> (TId, LExp,AbstInfo, Exp) -> R ([ITermType], R [ITermType], TermExtractor, R ())
+calcLet env fml _node  (x, e1, _abstInfo, e2) = 
     (case lexpView e1 of
         LAtom a -> atomCase a
         LOther SRand _ -> do
@@ -344,11 +343,12 @@ calcLet env fml _node key (x, e1, _abstInfo, e2) =
                     where cenv' = M.insert x (evalAtom cenv atom) cenv
             return (tys,  recalc, extract, destructor node2)
         genericCase = do
-            Just (ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+            --Just (ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+            let ps = abstPredicates _abstInfo
             tbl <- liftIO H.new :: R (HashTable (IType, BFormula) ExpNode)
             let genericCalc :: [ITermType] -> R [ITermType]
                 genericCalc tys1 =  -- TODO: あるケースが参照されなくなったらdestructする
-                    fmap concatMerge $ forM tys1 $ \tau -> case itermBody tau of
+                    fmap concatMerge $ forM tys1 $ \tau -> case body tau of
                         IFail -> (:[]) <$> mkIFail
                         ITerm ity phi -> do
                             liftIO (H.lookup tbl (ity,phi)) >>= \case
@@ -369,15 +369,15 @@ calcLet env fml _node key (x, e1, _abstInfo, e2) =
             tys <- genericCalc tys1
             let recalc = (liftIO $ readIORef $ types node1) >>= genericCalc
                 extract, extractCont :: TermExtractor
-                extract cenv iota@(itermBody -> IFail) = do
+                extract cenv iota@(body -> IFail) = do
                     tys1 <- liftIO $ readIORef $ types node1
-                    if any (\tau -> IFail == itermBody tau) tys1
+                    if any (\tau -> IFail == body tau) tys1
                     then extractor node1 cenv iota
                     else extractCont cenv iota
                 extract cenv iota = extractCont cenv iota
                 extractCont cenv iota = go =<< (liftIO $ readIORef $ types node1)
                     where
-                    go (iota1: tys1) = case itermBody iota1 of
+                    go (iota1: tys1) = case body iota1 of
                         ITerm ity phi -> liftIO (H.lookup tbl (ity, phi)) >>= \case
                             Nothing -> go tys1 
                             Just node2 -> do
@@ -425,7 +425,7 @@ calcLetRec env fml _node (fs, e) = do
             updated <- liftIO $ newIORef False
             env1 <- fmap M.fromList $ zipWithM (\node (f,_) -> do
                     ity_cur <- liftIO $ readIORef (types node)
-                    let assocs = case ityBody ity_cur of
+                    let assocs = case body ity_cur of
                             IFun v -> v
                             _ -> error $ "expect function type: " ++ show ity_cur
                     forM_ assocs $ \(thetas, phi, iota) -> 
@@ -481,10 +481,11 @@ calcAssume env fml _node (a, e) = do
                 extract _ _ = error "assume(false) never returns values" in
             return ([], return [], extract, return ())
 
-calcApp :: IEnv -> HFormula -> LExpNode -> UniqueKey -> (TId, AbstInfo, [Value]) -> R ([ITermType], R [ITermType], TermExtractor, R ())
-calcApp env fml _node key (f, _, vs) = do
+calcApp :: IEnv -> HFormula -> LExpNode -> (TId, AbstInfo, [Value]) -> R ([ITermType], R [ITermType], TermExtractor, R ())
+calcApp env fml _node (f, _abstInfo, vs) = do
     let ity_f = env ! f
-    Just (ps, _) <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key)
+    let ps = abstPredicates _abstInfo
+    -- Just (ps, _) <- ask >>= \ctx -> liftIO (H.lookup (ctxArgTypeTbl ctx) key)
     phi <- calcCondition fml ps
     (nodes,thetas) <- fmap unzip $ forM vs $ calcValue env fml 
     forM_ nodes $ \node -> addDep (ident node) _node
@@ -574,25 +575,25 @@ calcValue env fml value@(Value l arg sty key) =
 
 calcExp :: IEnv -> HFormula -> Exp -> R (ExpNode, [ITermType])
 calcExp env fml exp = 
-    let fromValue :: (IType, R IType, ValueExtractor, R ()) -> R ([ITermType], R [ITermType], TermExtractor, R ())
-        fromValue = calcFromValue fml key
-        fromAtom atom = do
+    let fromValue = calcFromValue fml 
+        fromAtom ps atom = do
             ity <- genIType (calcAtom env atom)
-            calcFromValue fml key (ity, return ity, flip evalAtom atom, return ())
+            calcFromValue fml ps (ity, return ity, flip evalAtom atom, return ())
         key = getUniqueKey exp
     in mfix $ \ ~(_node, _tys) -> do
         (itys,recalc, extract, destruct) <- case expView exp of
             EValue v _info -> 
+                let ps = abstPredicates _info in
                 case valueView v of
-                    VAtom a -> fromAtom a
-                    VOther SPair arg -> fromValue =<< calcPair env fml _node arg
-                    VOther SLambda arg -> fromValue =<< calcLambda env fml _node key arg
-            EOther SLet arg -> calcLet env fml _node key arg
+                    VAtom a -> fromAtom ps a
+                    VOther SPair arg -> fromValue ps =<< calcPair env fml _node arg
+                    VOther SLambda arg -> fromValue ps =<< calcLambda env fml _node key arg
+            EOther SLet arg -> calcLet env fml _node arg
             EOther SLetRec arg -> calcLetRec env fml _node arg
             EOther SAssume arg -> calcAssume env fml _node arg
             EOther SBranch arg -> calcBranch env fml _node arg
             EOther SFail _ -> do
-                let extract _ (itermBody -> IFail) = return Nothing
+                let extract _ (body -> IFail) = return Nothing
                     extract _ _ = error "extract@SFail_calcExp: fail never returns values"
                 tfail <- mkIFail
                 return ([tfail], return [tfail], extract, return ())
@@ -630,14 +631,16 @@ calcExp env fml exp =
 
 calcLExp :: IEnv -> HFormula -> LExp -> R (LExpNode, [ITermType])
 calcLExp env fml lexp =  
-    let key = getUniqueKey lexp in
     mfix $ \ ~(_node, _tys) -> do
         (itys,recalc, extract, destruct) <- case lexpView lexp of
-            LAtom atom -> do
-                ity <- genIType $ calcAtom env atom
-                calcFromValue fml key (ity, return ity, flip evalAtom atom, return ())
+            LAtom _ -> error "impossible"
+            {-
+                do
+                    ity <- genIType $ calcAtom env atom
+                    calcFromValue fml key (ity, return ity, flip evalAtom atom, return ())
+                    -}
             LOther SBranch arg -> calcBranch env fml _node arg
-            LOther SApp arg -> calcApp env fml _node key arg
+            LOther SApp arg -> calcApp env fml _node arg
             LOther SRand _ -> do
                 let extract _ _ = error "extract@SRand_calcExp: should never be called"
                 ity <- mkIBase
@@ -648,7 +651,7 @@ calcLExp env fml lexp =
             SPair    -> fromValue =<< calcPair env fml _node arg
             SLambda  -> fromValue =<< calcLambda env fml _node key arg
             SFail    -> do
-                let extract _ (itermBody -> IFail) = return Nothing
+                let extract _ (body -> IFail) = return Nothing
                     extract _ _ = error "extract@SFail_calcExp: fail never returns values"
                 tfail <- mkIFail
                 return ([tfail], return [tfail], extract, return ())
@@ -711,27 +714,27 @@ updateLoop = popQuery >>= \case
                         updateLoop
                     False -> updateLoop
 
-saturate :: TypeMap -> Program -> TracerT (Dict IncSat) (LoggingT IO) (Bool, ([ITermType], Maybe [Bool]))
-saturate typeMap prog = do
-    ctx <- lift $ initContext typeMap prog
+saturate :: HFormula.Context -> Program -> TracerT (Dict IncSat) (LoggingT IO) (Bool, ([ITermType], Maybe [Bool]))
+saturate hctx prog = do
+    ctx <- lift $ initContext prog
     let doit :: R (Bool, ([ITermType], Maybe [Bool]))
         doit = do
             SMT.initSMTContext
-            calcContextE (mainTerm prog) 
+            -- calcContextE (mainTerm prog) 
             -- _ <- calcFVE (mainTerm prog)
             logPretty "saturate" LevelDebug "Abstraction Annotated Program" (PPrinted (pPrint prog))
             (root, _) <- mkLiteral (CBool True) >>= \fml0 -> calcExp M.empty fml0 (mainTerm prog)
             updateLoop
             tys <- liftIO $ readIORef (types root)
-            if any (\iota -> itermBody iota == IFail) tys
+            if any (\iota -> body iota == IFail) tys
             then do
                 bs <- mkIFail >>= execWriterT . extractor root M.empty
-                hcs <- AbsSemantics.genConstraints bs (mainTerm prog)
-                liftIO $ print hcs
+                --hcs <- AbsSemantics.genConstraints bs (mainTerm prog)
+                -- liftIO $ print hcs
                 return (True, (tys, Just bs))
             else do
                 return (False, (tys, Nothing))
-    res <- lift $ evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)
+    res <- lift $ runHFormulaT (evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)) hctx
     dict <- liftIO $ getStatistics ctx
     update (id .~ dict)
     return res

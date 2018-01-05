@@ -2,23 +2,29 @@ module Language.DMoCHi.ML.AbstractSemantics(genConstraints, refine) where
 
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
-import qualified Data.HashTable.IO as H
 import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin,mkVar,mkLiteral)
 import           Language.DMoCHi.Common.Id hiding(Id)
+import           Language.DMoCHi.Common.Util
 import qualified Language.DMoCHi.ML.HornClause as Horn
-import           Language.DMoCHi.ML.IncSaturationPre
+--import           Language.DMoCHi.ML.IncSaturationPre
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.IType
 import           Language.DMoCHi.ML.Syntax.PType hiding(Env)
 import           Control.Monad.State.Strict
-import           Control.Monad.Reader
+import           Text.PrettyPrint.HughesPJClass
 import           Text.Printf
 
 data AValue = ABase Type 
             | APair AValue AValue 
             | ACls { _clsEnv :: Env
                    , _clsConstraint :: Constraint
-                   , _clsBody :: (UniqueKey, [TId], AbstInfo, Exp) }
+                   , _clsAbstInfo :: AbstInfo
+                   , _clsBody :: ([TId], AbstInfo, Exp) }
+
+data AbstractSemantics
+newtype Scope = Scope [Atom]
+instance Pretty Scope where
+    pPrint (Scope vs) = brackets $ hsep $ punctuate comma $ map pPrint vs 
 
 data Meta = Pre UniqueKey | Post UniqueKey | Unique UniqueKey
 instance Show Meta where
@@ -36,47 +42,47 @@ type Env = M.Map TId AValue
 type Constraint = (HFormula, [Predicate])
 data Predicate = Predicate Meta Int Scope
 type Trace = [Bool]
-type M a = StateT RefineState R a
+type M a = StateT RefineState (HFormulaT (FreshIO AbstractSemantics)) a
 
 data RefineState = 
     RefineState { 
         stTrace :: Trace 
       , stClauses :: [Horn.Clause]
       , stPIdEntries :: [(Int, UniqueKey)]
-      , stPIdCounter :: !Int 
     }
 
-initState :: Trace -> Int -> RefineState
-initState tr c = RefineState {
+initState :: Trace ->  RefineState
+initState tr = RefineState {
     stTrace = tr
   , stClauses = []
   , stPIdEntries = []
-  , stPIdCounter = c 
   }
 
 
 formatPredicate :: Meta -> Int -> String
 formatPredicate meta i = printf "p_%s[%d:0]" (show meta) i
 
-genConstraints :: Trace -> Exp -> R (Horn.HCCS, [(Int, UniqueKey)])
-genConstraints trace e = do
-    v_true <- mkLiteral (CBool True)
-    st <- execStateT (calcExp M.empty (v_true, []) e) (initState trace 0)
-    return (Horn.HCCS (reverse $ stClauses st), stPIdEntries st)
+genConstraints :: Context -> Trace -> Exp -> FreshIO AbstractSemantics (Horn.HCCS, [(Int, UniqueKey)])
+genConstraints ctx trace e = runHFormulaT doit ctx 
+    where
+    doit = do
+        v_true <- mkLiteral (CBool True)
+        st <- execStateT (calcExp M.empty (v_true, []) e) (initState trace)
+        return (Horn.HCCS (reverse $ stClauses st), stPIdEntries st)
 
 genClause :: Constraint -> Predicate -> M ()
 genClause (fml, preds) (Predicate meta i (Scope vs)) = 
     modify' (\st -> st { stClauses = cls : stClauses st })
     where
     hd = Horn.PVar (formatPredicate meta i) (map toHornTerm vs)
-    body = toHornTerm fml : map toHornPred preds
+    body = toHornTerm (fromHFormula fml) : map toHornPred preds
     cls = Horn.Clause hd body
 
 genFailClause :: Constraint -> M ()
 genFailClause (fml, preds) = 
     modify' (\st -> st { stClauses = cls : stClauses st })
     where 
-    body = toHornTerm fml : map toHornPred preds
+    body = toHornTerm (fromHFormula fml) : map toHornPred preds
     cls = Horn.Clause Horn.Bot body
 
 decomposePairName :: TId -> (TId, TId)
@@ -89,10 +95,10 @@ decomposePairName x = (x1, x2)
 toHornPred :: Predicate -> Horn.Term
 toHornPred (Predicate meta i (Scope vs)) = Horn.Pred (formatPredicate meta i) (map toHornTerm vs)
     
-toHornTerm :: HFormula -> Horn.Term
+toHornTerm :: Formula -> Horn.Term
 toHornTerm = go [] where
-    go :: [Bool] -> HFormula -> Horn.Term
-    go meta (HFormula l arg _ _ _) = 
+    go :: [Bool] -> Formula -> Horn.Term
+    go meta (Atom l arg _) = 
         case (l, arg) of
             (SLiteral, CBool b) -> Horn.Bool b
             (SLiteral, CInt i) -> Horn.Int i
@@ -127,9 +133,8 @@ consumeBranch = do
 newPGen :: Meta -> M (Scope -> Predicate)
 newPGen meta = do
     st <- get
-    let c = stPIdCounter st
-    put $! st { stPIdCounter = c + 1 
-              , stPIdEntries = (c, getUniqueKey meta) : stPIdEntries st }
+    c <- freshInt
+    put $! st { stPIdEntries = (c, getUniqueKey meta) : stPIdEntries st }
     return $ Predicate meta c
 
 calcAtom :: Env -> Atom -> AValue
@@ -150,23 +155,24 @@ calcValue :: Env -> Constraint -> Value -> AValue
 calcValue env c v =
     case valueView v of
         VAtom a -> calcAtom env a
-        VOther SLambda (xs, info, e) -> ACls env c (getUniqueKey v, xs, info, e)
+        VOther SLambda (xs, info, e) -> ACls env c info ({-getUniqueKey v,-} xs, info, e)
         VOther SPair (v1, v2) -> APair (calcValue env c v1) (calcValue env c v2)
 
 calcExp :: Env -> Constraint -> Exp -> M (Maybe (AValue, BFormula, (Scope -> Predicate)))
 calcExp env (fml, preds) e = 
-    let key = getUniqueKey e in
     case expView e of
         EValue v info -> do
-            Just (ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+            let ps = abstPredicates info
+                scope = Scope $ snd $ abstTemplate info
             phi <- lift (calcCondition fml ps)
             let av = calcValue env (fml, preds) v
             pGen <- newPGen (Unique (fst (abstTemplate info)))
             genClause (fml, preds) (pGen scope)
             return (Just (av, phi, pGen))
-        EOther SLet (x, e1, _info, e2) -> do
+        EOther SLet (x, e1, info, e2) -> do
             let genericCase r1 = do
-                    Just (ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
+                    let ps = abstPredicates info
+                        scope = Scope $ snd $ abstTemplate info
                     case r1 of
                         Just (av, bfml, pGen') -> do
                             fml' <- lift $ mkBin SAnd fml =<< fromBFormula ps bfml
@@ -187,10 +193,13 @@ calcExp env (fml, preds) e =
                     let env' = M.insert x (ABase TInt) env
                     calcExp env' (fml, preds) e2
                 LOther SApp (f, info_arg, vs) -> do
-                    Just (ps, scope) <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) (getUniqueKey e1)
-                    let ACls env1 (fml1, preds1) (key1, xs, _, e1) = env M.! f
+                    let ps = abstPredicates info_arg
+                        scope = Scope $ snd $ abstTemplate info_arg
+                    let ACls env1 (fml1, preds1) info_arg' (xs, _, e1) = env M.! f
                     pGenArg <- newPGen (Unique (fst (abstTemplate info_arg)))
-                    Just (ps', scope') <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key1
+                    let ps' = abstPredicates info_arg'
+                        scope' = Scope $ snd $ abstTemplate info_arg'
+                    -- Just (ps', scope') <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key1
                     let env1' = foldr (uncurry M.insert) env1 $ zip xs (map (calcValue env (fml, preds)) vs)
                         preds1' = pGenArg scope' : preds1
                     genClause (fml, preds) (pGenArg scope)
