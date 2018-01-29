@@ -1,5 +1,5 @@
 module MainSpec(spec) where
-import Language.DMoCHi.ML.Main(verify, Config(..), defaultConfig)
+import Language.DMoCHi.ML.Main(verify, Config(..), defaultConfig, CEGARMethod(..))
 
 import System.FilePath
 import Test.Hspec.Core.Spec
@@ -10,7 +10,7 @@ test :: FilePath -> Spec
 test testCase = 
     describe ("Test: " ++ testCase) $ do
         it "fusion successfully ends" $ do
-            let conf = (defaultConfig testCase){ fusion = True, incremental = True }
+            let conf = (defaultConfig testCase){ fusion = True, incremental = True, cegarMethod = AbstSemantics }
             (v1, _) <- verify conf
             let right (Left _) = False
                 right (Right _) = True

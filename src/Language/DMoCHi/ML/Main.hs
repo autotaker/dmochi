@@ -1,15 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Language.DMoCHi.ML.Main(run, verify, Config(..), defaultConfig) where
+module Language.DMoCHi.ML.Main(run, verify, Config(..), defaultConfig, CEGARMethod(..)) where
 import System.Environment
 import System.IO
-import System.Process(callCommand)
 import System.Exit
 import System.Console.GetOpt
 import Control.Monad.Except
 import Data.Monoid
 import Data.List(isSuffixOf)
+import Data.IORef
 import Data.Maybe(fromMaybe)
-import Text.Parsec(ParseError)
 import Text.PrettyPrint.HughesPJClass hiding((<>))
 import Text.Printf
 import qualified Data.Text as Text
@@ -36,6 +35,7 @@ import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
+import qualified Language.DMoCHi.ML.AbstractSemantics as AbstSem
 import qualified Language.DMoCHi.ML.ToCEGAR as CEGAR
 -- import qualified Language.DMoCHi.ML.ElimCast as PAbst
 import qualified Language.DMoCHi.ML.IncSaturation as IncSat
@@ -50,11 +50,10 @@ import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 
 import qualified Language.DMoCHi.ML.HornClause as Horn
-import qualified Language.DMoCHi.ML.HornClauseParser as Horn
 
 data MainError = NoInputSpecified
                | ParseFailed String
-               | RefinementFailed ParseError
+               | RefinementFailed Horn.SolverError
                | AlphaFailed AlphaError
                | IllTyped Typed.TypeError 
                | CEGARLimitExceeded
@@ -206,14 +205,20 @@ type instance Assoc CEGAR "abst" = Dict PAbst.Abst
 type instance Assoc CEGAR "fusion" = NominalDiffTime
 type instance Assoc CEGAR "fusion_sat" = Dict IncSat.IncSat
 type instance Assoc CEGAR "modelchecking" = Dict Boolean
+type instance Assoc CEGAR "abstractsemantics" = Dict AbstSem.AbstractSemantics
 
 
 verify :: Config -> IO (Either MainError (CEGARResult ()), Dict Main)
 verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_ level -> level >= LevelInfo)) $ runFreshT $ ioTracerT Dict.empty $ measure #total $ runExceptT $ do
     -- ExceptT MainError (FreshT (TracerT c (LoggingT IO))) a
-    hccsSolver <- liftIO getHCCSSolver
-    -- parsing
     let path = targetProgram conf
+    
+    hccsSolverPath <- liftIO getHCCSSolver
+    let defaultSolver = Horn.rcamlSolver hccsSolverPath "-hccs it" path
+        gchSolver     = Horn.rcamlSolver hccsSolverPath "-hccs gch" path
+        currentSolver = Horn.rcamlSolver hccsSolverPath (hornOption conf) path
+
+    -- parsing
     let prettyPrint :: Pretty a => Text.Text -> String -> a -> ExceptT MainError (FreshIO c) ()
         prettyPrint header title body = logPretty header LevelDebug title body
             {-
@@ -264,15 +269,19 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
     
     hContext <- liftIO HFormula.newContext
 
+    {- TODO: Fix this BAD HACK -}
+    currentProgramRef <- liftIO $ newIORef undefined
+
     (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
     let mc k curTypeMap castFreeProgram 
             | incremental conf = 
                 measure #fusion $ do
-                unliftedProgram <- IncSat.unliftRec castFreeProgram
-                cegarProgram <- liftIO $ CEGAR.convert hContext curTypeMap unliftedProgram
-                (_,res) <- lift $ zoom (access' #fusion_sat Dict.empty) $ mapTracerT lift $ IncSat.saturate hContext cegarProgram
-                logPretty "fusion" LevelDebug "result" res
-                return (snd res)
+                    unliftedProgram <- IncSat.unliftRec castFreeProgram
+                    cegarProgram <- liftIO $ CEGAR.convert hContext curTypeMap unliftedProgram
+                    liftIO $ writeIORef currentProgramRef cegarProgram
+                    (_,res) <- lift $ zoom (access' #fusion_sat Dict.empty) $ mapTracerT lift $ IncSat.saturate hContext cegarProgram
+                    logPretty "fusion" LevelDebug "result" res
+                    return (snd res)
             | otherwise = do
                 boolProgram <- lift $ zoom (access' #abst Dict.empty) $ PAbst.abstProg curTypeMap castFreeProgram
                 prettyPrint "modelchecking" "Converted Program" boolProgram
@@ -296,7 +305,6 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                 -- liftIO $ putStrLn "Predicate Abstracion"
                 -- liftIO $ PAbst.printTypeMap typeMap
                 let curTypeMap = PAbst.mergeTypeMap typeMap typeMapFool
-
                 --castFreeProgram <- lift $ PAbst.elimCast curTypeMap normalizedProgram
                 --prettyPrint "cegar" "Elim cast" castFreeProgram
 
@@ -309,7 +317,13 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                             True -> Refine.interactiveCEGen normalizedProgram traceFile trace
                             False -> return (trace, Nothing)
                         case cegarMethod conf of
-                            AbstSemantics -> throwError $ OtherError "Unsupported Method"
+                            AbstSemantics -> do
+                                -- AbstSem.genConstraints hContext trace 
+                                prog <- liftIO $ readIORef currentProgramRef
+                                typeMap' <- mapExceptT (zoom (access' #abstractsemantics Dict.empty)) 
+                                          $ withExceptT RefinementFailed 
+                                          $ AbstSem.refine hContext currentSolver k trace curTypeMap prog
+                                return $ Refine (typeMap', typeMapFool, [], [], [], trace)
                             DepType -> 
                                 Refine.refineCGen normalizedProgram 
                                                   traceFile 
@@ -317,7 +331,6 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                                                   (foolThreshold conf) trace >>= \case
                                     Nothing -> return Unsafe
                                     Just (isFool,(clauses, assoc)) -> do
-                                        let file_hcs = printf "%s_%d.hcs" path k
                                         --let file_hcs_smt2 = printf "%s_%d.smt2" path k
                                         let bf = case isFoolI of
                                                 Just b -> b
@@ -325,15 +338,9 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                                         if bf then do
                                             logInfoNS "refinement" "Fool counterexample refinement"
                                             let hcs' = clauses
-                                            liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
-                                            --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
-                                            let cmd = printf "%s -hccs it -print-hccs-solution %s %s > %s" 
-                                                             hccsSolver (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
-                                            liftIO $ callCommand cmd
-                                            parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-                                            solution  <- case parseRes of
-                                                Left err -> throwError $ RefinementFailed err
-                                                Right p  -> return p
+                                            solution <- mapExceptT lift 
+                                                      $ withExceptT RefinementFailed 
+                                                      $ defaultSolver (Horn.HCCS hcs') k
                                             let (rtyAssoc,rpostAssoc) = assoc
                                             let typeMapFool' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMapFool
                                             return $ Refine (typeMap, typeMapFool', hcs, rtyAssoc0, rpostAssoc0, trace)
@@ -342,16 +349,11 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                                             let (rtyAssoc,rpostAssoc) = 
                                                     if accErrTraces conf then assoc <> (rtyAssoc0,rpostAssoc0)
                                                                          else assoc
-                                            liftIO $ writeFile file_hcs $ show (Horn.HCCS hcs')
+                                            
+                                            solution <- mapExceptT lift 
+                                                      $ withExceptT RefinementFailed 
+                                                      $ currentSolver (Horn.HCCS hcs') k
                                             --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
-                                            let opts = hornOption conf
-                                            let cmd = printf "%s %s -print-hccs-solution %s %s > %s" 
-                                                             hccsSolver opts (file_hcs ++ ".ans") file_hcs (file_hcs ++ ".log")
-                                            liftIO $ callCommand cmd
-                                            parseRes <- liftIO $ Horn.parseSolution (file_hcs ++ ".ans")
-                                            solution  <- case parseRes of
-                                                Left err -> throwError $ RefinementFailed err
-                                                Right p  -> return p
                                             let typeMap' | accErrTraces conf = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
                                                          | otherwise         = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
                                             return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc, trace)

@@ -1,5 +1,4 @@
-{-# LANGUAGE GADTs #-}
-module Language.DMoCHi.ML.HornClauseParser where
+module Language.DMoCHi.ML.HornClause.Parser where
 import Text.Parsec
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Expr
@@ -9,7 +8,9 @@ import Language.DMoCHi.ML.Syntax.PNormal
 import qualified Language.DMoCHi.Common.Id as Id 
 import qualified Data.Map as M
 
-parseSolution :: FilePath -> IO (Either ParseError [(Int,[TId],Atom)])
+
+type Predicate = (Int, [TId], Atom)
+parseSolution :: FilePath -> IO (Either ParseError (Maybe [Predicate]))
 parseSolution = parseFromFile mainP
 
 
@@ -53,8 +54,9 @@ semiSep = P.semiSep lexer
 commaSep :: Parser a -> Parser [a]
 commaSep = P.commaSep lexer
 
-mainP :: Parser [(Int,[TId],Atom)]
-mainP = string "solution:" >> whiteSpace >> many defP <* eof
+mainP :: Parser (Maybe [(Int,[TId],Atom)])
+mainP = (string "solution:" >> whiteSpace >> (Just <$> many defP) <* eof) 
+    <|> (string "no solution." >> whiteSpace >> pure Nothing <* eof)
 
 predP :: Parser Int
 predP = do

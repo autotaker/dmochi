@@ -1,16 +1,18 @@
-module Language.DMoCHi.ML.AbstractSemantics(genConstraints, refine) where
+module Language.DMoCHi.ML.AbstractSemantics(genConstraints, refine,AbstractSemantics) where
 
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
 import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin,mkVar,mkLiteral)
 import           Language.DMoCHi.Common.Id hiding(Id)
 import           Language.DMoCHi.Common.Util
+import           Data.PolyDict(Dict)
 import qualified Language.DMoCHi.ML.HornClause as Horn
 --import           Language.DMoCHi.ML.IncSaturationPre
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.IType
 import           Language.DMoCHi.ML.Syntax.PType hiding(Env)
 import           Control.Monad.State.Strict
+import           Control.Monad.Except
 import           Text.PrettyPrint.HughesPJClass
 import           Text.Printf
 
@@ -22,6 +24,7 @@ data AValue = ABase Type
                    , _clsBody :: ([TId], AbstInfo, Exp) }
 
 data AbstractSemantics
+
 newtype Scope = Scope [Atom]
 instance Pretty Scope where
     pPrint (Scope vs) = brackets $ hsep $ punctuate comma $ map pPrint vs 
@@ -42,7 +45,7 @@ type Env = M.Map TId AValue
 type Constraint = (HFormula, [Predicate])
 data Predicate = Predicate Meta Int Scope
 type Trace = [Bool]
-type M a = StateT RefineState (HFormulaT (FreshIO AbstractSemantics)) a
+type M a = StateT RefineState (HFormulaT (FreshIO (Dict AbstractSemantics))) a
 
 data RefineState = 
     RefineState { 
@@ -62,7 +65,10 @@ initState tr = RefineState {
 formatPredicate :: Meta -> Int -> String
 formatPredicate meta i = printf "p_%s[%d:0]" (show meta) i
 
-genConstraints :: Context -> Trace -> Exp -> FreshIO AbstractSemantics (Horn.HCCS, [(Int, UniqueKey)])
+
+
+
+genConstraints :: Context -> Trace -> Exp -> FreshIO (Dict AbstractSemantics) (Horn.HCCS, [(Int, UniqueKey)])
 genConstraints ctx trace e = runHFormulaT doit ctx 
     where
     doit = do
@@ -226,15 +232,21 @@ calcExp env (fml, preds) e =
         EOther SOmega _ -> error "diverged"
 
 ---- refinement
-refine :: [(Int,UniqueKey)] -> [(Int, [Id], Formula)]-> TypeMap -> TypeMap
-refine pId2key preds = fmap conv
+refine :: Context -> Horn.Solver -> Int -> Trace -> TypeMap -> Program -> 
+          ExceptT Horn.SolverError (FreshIO (Dict AbstractSemantics)) TypeMap
+refine ctx solver cegarId trace typeMap prog = do
+    (hccs, pId2key) <- lift (genConstraints ctx trace (mainTerm prog))
+    preds <- mapExceptT lift $ solver hccs cegarId
+    return $ refineTypeMap pId2key preds typeMap
+
+refineTypeMap :: [(Int,UniqueKey)] -> [(Int, [Id], Formula)]-> TypeMap -> TypeMap
+refineTypeMap  pId2key preds = fmap conv
     where
     conv (Left pty)  = Left (refinePType subst pty)
     conv (Right tau) = Right (refineTermType subst tau)
     g = IM.fromList pId2key
     subst = M.fromListWith (++) [ (key, [(args,fml)]) | (pId, args, fml) <- preds, 
                                                         let key = g IM.! pId ]
-
     
 
 refinePredicates :: M.Map UniqueKey [([Id], Atom)] -> PredTemplate -> [Formula] -> [Formula]
@@ -252,10 +264,11 @@ refinePType _ PBool = PBool
 refinePType subst (PPair _ p1 p2) = 
     mkPPair (refinePType subst p1) (refinePType subst p2)
 refinePType subst (PFun _ (xs, ptys_xs, ps, predTempl) tau) =
-    mkPFun (xs, ptys_xs, ps', predTempl) tau'
+    mkPFun (xs, ptys_xs', ps', predTempl) tau'
     where
     tau' = refineTermType subst tau
     ps' = refinePredicates subst predTempl ps
+    ptys_xs' = map (refinePType subst) ptys_xs
 
 refineTermType :: M.Map UniqueKey [([Id], Atom)] -> TermType -> TermType
 refineTermType subst (r, rty, qs, predTempl) = (r, rty', qs', predTempl)

@@ -48,6 +48,7 @@ type ArgType = ([Id],[PType],[Formula], PredTemplate)
 type TypeMap = M.Map UniqueKey (Either PType TermType)
 type ScopeMap = M.Map UniqueKey [Id]
 
+
 instance Eq PType where
     PInt == PInt = True
     PBool == PBool = True
