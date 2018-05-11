@@ -31,15 +31,18 @@ import           Text.PrettyPrint.HughesPJClass
 import qualified Data.PolyDict as Dict
 import           Data.PolyDict(Dict,access)
 
+type NodeId = Int
 
 data Context = 
   Context { 
     ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
-  , ctxFlowReg :: HashTable UniqueKey [SomeNode]
+  , ctxFlowReg :: HashTable UniqueKey [NodeId]
   , ctxFlowMap :: FlowMap
   , ctxNodeCounter   :: IORef Int
-  , ctxNodeTbl       :: HashTable Int SomeNode
-  , ctxNodeDepG      :: HashTable Int [SomeNode]
+  , ctxNodeTbl       :: HashTable NodeId SomeNode
+  -- dependency graph, nodes in ctxNodeDepG (ident n) should be updated if node n is updated
+  , ctxNodeDepG      :: HashTable NodeId [NodeId]
+  
 --  , ctxRtnTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
 --  , ctxArgTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
   , ctxFreeVarTbl    :: HashTable UniqueKey (S.Set TId)
@@ -63,7 +66,6 @@ instance MonadReader Context R where
 
 getHFormulaContext :: R HFormula.Context
 getHFormulaContext = R (lift ask)
-
 
 instance MonadState (Queue UpdateQuery, S.Set Int) R where
     get = R get
@@ -99,12 +101,6 @@ initContext :: Program -> LoggingT IO Context
 initContext prog = do
     flowMap <- flowAnalysis prog
     liftIO $ do
-        {-
-        (ctxSMTSolver, ctxSMTContext) <- Z3Base.withConfig $ \cfg -> do
-            Z3.setOpts cfg Z3.stdOpts
-            ctx <- Z3Base.mkContext cfg
-            solver <- Z3Base.mkSolver ctx
-            return (solver, ctx) -}
         ctxFlowTbl     <- H.new
         ctxFlowReg     <- H.new
         ctxFlowMap     <- pure flowMap
@@ -157,8 +153,9 @@ data Node e where
             , term       :: e
             } -> Node e
 
-nodeId :: Node e -> Int
+nodeId :: Node e -> NodeId
 nodeId (Node { ident = ident }) = ident
+
 
 instance Eq SomeNode where
     (SomeNode n1) == (SomeNode n2) = nodeId n1 == nodeId n2
@@ -183,15 +180,14 @@ type ExpNode = Node Exp
 type LExpNode = Node LExp
 
 
-data UpdateQuery where
-     UpdateQuery :: QueryType -> (Node e) -> UpdateQuery
+data UpdateQuery = UpdateQuery QueryType NodeId
 
 data QueryType = QFlow | QEdge
 
-queryId :: UpdateQuery -> Int
-queryId (UpdateQuery _ node) = nodeId node
+queryId :: UpdateQuery -> NodeId
+queryId (UpdateQuery _ i) = i
 
-incrNodeCounter :: R Int
+incrNodeCounter :: R NodeId
 incrNodeCounter = ask >>= \ctx -> liftIO $ do
     v <- readIORef (ctxNodeCounter ctx)
     writeIORef (ctxNodeCounter ctx) $! v+1
@@ -349,3 +345,31 @@ scopeOfAtom env (Atom l arg _) =
         (SUnary, UniArg _ a1) ->  scopeOfAtom env a1
         (SBinary, _) -> []
 
+genNode :: (NodeId -> R (Node e)) -> R (Node e)
+genNode constr = do
+    i <- incrNodeCounter
+    n <- constr i
+    tbl <- ctxNodeTbl <$> ask
+    liftIO $ H.insert tbl i (SomeNode n)
+    return n
+
+getNode :: NodeId -> R SomeNode
+getNode i = do
+    tbl <- ctxNodeTbl <$> ask
+    liftIO (H.lookup tbl i) >>= \case
+        Just v -> return v
+        Nothing -> error $ "getNode: This node id " ++ (show i) ++ " is not registered!"
+
+addDep :: Int -> NodeId -> R ()
+addDep !v i = do
+    tbl <- ctxNodeDepG <$> ask 
+    liftIO $ 
+        H.lookup tbl v >>= \case
+            Nothing -> H.insert tbl v [i]
+            Just l  -> H.insert tbl v (i:l)
+
+getTypes :: Node e -> R (SatType e)
+getTypes (Node { types = types }) = liftIO $ readIORef types
+
+setTypes :: Node e -> SatType e -> R ()
+setTypes (Node { types = types }) ty = liftIO $ writeIORef types ty
