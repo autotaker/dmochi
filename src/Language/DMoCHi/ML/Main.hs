@@ -42,12 +42,14 @@ import qualified Language.DMoCHi.ML.IncSaturation as IncSat
 import qualified Language.DMoCHi.ML.UnliftRec as IncSat
 import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
+import qualified Language.DMoCHi.ML.SymbolicExec as SExec
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
 import qualified Language.DMoCHi.ML.EtaNormalize as Eta
 import qualified Language.DMoCHi.ML.ConstPropagation as ConstProp
 import qualified Language.DMoCHi.ML.TailOptimization as TailOpt
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
+import qualified Language.DMoCHi.ML.SMT as SMT
 
 import qualified Language.DMoCHi.ML.HornClause as Horn
 
@@ -318,12 +320,20 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                             False -> return (trace, Nothing)
                         case cegarMethod conf of
                             AbstSemantics -> do
-                                -- AbstSem.genConstraints hContext trace 
                                 prog <- liftIO $ readIORef currentProgramRef
-                                typeMap' <- mapExceptT (zoom (access' #abstractsemantics Dict.empty)) 
+                                res <- mapExceptT (zoom (access' #abstractsemantics Dict.empty)) 
                                           $ withExceptT RefinementFailed 
-                                          $ AbstSem.refine hContext currentSolver k trace curTypeMap prog
-                                return $ Refine (typeMap', typeMapFool, [], [], [], trace)
+                                          $ fmap Just (AbstSem.refine hContext currentSolver k trace curTypeMap prog)
+                                          `catchError` (\err -> do
+                                              (_, log, _compTree) <- SExec.symbolicExec normalizedProgram trace
+                                              let cs = map SExec.fromSValue $ SExec.logCnstr log
+                                              isFeasible <- liftIO $ SMT.sat cs
+                                              if isFeasible
+                                                  then return Nothing
+                                                  else throwError err)
+                                case res of
+                                    Just typeMap' -> return $ Refine (typeMap', typeMapFool, [], [], [], trace)
+                                    Nothing -> return Unsafe
                             DepType -> 
                                 Refine.refineCGen normalizedProgram 
                                                   traceFile 
