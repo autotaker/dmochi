@@ -110,8 +110,10 @@ inlineV env v =
         VOther SLambda (xs, e) -> mkLambda xs <$> inlineE env e <*> pure key
 
 inlineE :: forall m. MonadId m => Env -> Exp -> m Exp
-inlineE env e@(Exp _ _ sty key) =
-    case expView e of
+inlineE env e =
+    let sty = getType e
+        key = getUniqueKey e
+    in case expView e of
         EValue v -> cast <$> inlineV env v
         EOther SLet (x, e1, e2) ->
             let defaultCase :: LExp -> m Exp

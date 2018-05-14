@@ -168,22 +168,8 @@ calcBranch env fml pId (e1, e2) = do
 
 calcLet :: IEnv -> HFormula -> Int -> (TId, LExp,AbstInfo, Exp) -> R ([ITermType], R [ITermType], TermExtractor, R ())
 calcLet env fml pId  (x, e1, _abstInfo, e2) = 
-    (case lexpView e1 of
-        LAtom a -> atomCase a
-        LOther SRand _ -> do
-            env' <- (\ty -> M.insert x ty env) <$> mkIBase
-            node2 <- calcExp env' fml e2 
-            tys <- getTypes node2
-            addDep (ident node2) pId 
-            let recalc :: R [ITermType]
-                recalc = liftIO $ readIORef $ types node2
-                extract cenv iota = extractor node2 cenv' iota 
-                    where cenv' = M.insert x CBase cenv
-            return (tys,  recalc, extract, destructor node2)
-        _        -> genericCase)
-    where 
-        atomCase :: Atom -> R ([ITermType], R [ITermType], TermExtractor, R ())
-        atomCase atom = do
+    case lexpView e1 of
+        LAtom atom -> do 
             vx <- mkVar x
             fml' <- toHFormula atom >>= mkBin SEq vx >>= mkBin SAnd fml
             ity <- genIType (calcAtom env atom)
@@ -196,7 +182,17 @@ calcLet env fml pId  (x, e1, _abstInfo, e2) =
                 extract cenv iota = extractor node2 cenv' iota 
                     where cenv' = M.insert x (evalAtom cenv atom) cenv
             return (tys,  recalc, extract, destructor node2)
-        genericCase = do
+        LOther SRand _ -> do
+            env' <- (\ty -> M.insert x ty env) <$> mkIBase
+            node2 <- calcExp env' fml e2 
+            tys <- getTypes node2
+            addDep (ident node2) pId 
+            let recalc :: R [ITermType]
+                recalc = liftIO $ readIORef $ types node2
+                extract cenv iota = extractor node2 cenv' iota 
+                    where cenv' = M.insert x CBase cenv
+            return (tys,  recalc, extract, destructor node2)
+        LOther _  _  -> do
             --Just (ps, _) <- ask >>= \ctx -> liftIO $ H.lookup (ctxRtnTypeTbl ctx) key
             let ps = abstPredicates _abstInfo
             tbl <- liftIO H.new :: R (HashTable (IType, BFormula) ExpNode)

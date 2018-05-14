@@ -256,7 +256,7 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
         prettyPrint "preprocess" "Unreachable Code Elimination" _normalizedProgram
 
 
-        _normalizedProgram <- lift $Eta.normalize _normalizedProgram
+        _normalizedProgram <- lift $ Eta.normalize _normalizedProgram
         prettyPrint "preprocess" "Eta normalization" _normalizedProgram
         
         -- const propagation
