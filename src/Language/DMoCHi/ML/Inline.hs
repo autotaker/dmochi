@@ -160,26 +160,31 @@ inlineE env e =
         EOther SAssume (cond, e) -> do
             VAtom av <- valueView <$> inlineA env cond 
             mkAssume av <$> inlineE env e <*> pure key
-        EOther SBranch (e1, e2) -> mkBranch <$> inlineE env e1 <*> inlineE env e2 <*> pure key
+        EOther SBranch (e1, e2) -> 
+            mkBranch <$> inlineE env e1 
+                     <*> inlineE env e2 
+                     <*> pure key
         EOther SFail _ -> pure e
         EOther SOmega _ -> pure e
                             
         
 straightE :: MonadId m => Exp -> Type -> (LExp -> m Exp) -> m Exp
-straightE (Exp l arg sty key) ty_cont cont =  -- ty_cont is the type of answer expression
-    case (l, arg) of
-        (SLiteral, _) -> cont (LExp l arg sty key)
-        (SVar, _)     -> cont (LExp l arg sty key)
-        (SBinary, _)  -> cont (LExp l arg sty key)
-        (SUnary, _)   -> cont (LExp l arg sty key)
-        (SLambda, _)  -> cont (LExp l arg sty key)
-        (SPair, _)    -> cont (LExp l arg sty key)
-        (SLet, (x, e1, e2)) -> mkLet x e1 <$> straightE e2 ty_cont cont <*> pure key
-        (SLetRec, (fs, e2)) -> mkLetRec fs <$> straightE e2 ty_cont cont <*> pure key
-        (SAssume, (cond,e)) -> mkAssume cond <$> straightE e ty_cont cont <*> pure key
-        (SBranch, (e1, e2)) -> cont (mkBranchL e1 e2 key)
-        (SFail, _) -> pure $ mkFail ty_cont key
-        (SOmega, _) -> pure $ mkOmega ty_cont key
+straightE e ty_cont cont =  -- ty_cont is the type of answer expression
+    let key = getUniqueKey e in
+    case expView e of
+        EValue v -> cont (cast v)
+        EOther SLet (x, e1, e2) -> 
+            mkLet x e1 <$> straightE e2 ty_cont cont 
+                       <*> pure key
+        EOther SLetRec (fs, e2) -> 
+            mkLetRec fs <$> straightE e2 ty_cont cont 
+                        <*> pure key
+        EOther SAssume (cond,e) -> 
+            mkAssume cond <$> straightE e ty_cont cont 
+                          <*> pure key
+        EOther SBranch (e1, e2) -> cont (mkBranchL e1 e2 key)
+        EOther SFail _ -> pure $ mkFail ty_cont key
+        EOther SOmega _ -> pure $ mkOmega ty_cont key
 
 inline :: InlineLimit -> Program -> FreshLogging Program
 inline _limit prog = doit
