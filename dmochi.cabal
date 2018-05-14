@@ -96,7 +96,7 @@ library
                        Language.DMoCHi.ML.InteractiveCEGen,
                        Language.DMoCHi.ML.Refine,
                        Language.DMoCHi.ML.Inline,
-                       Language.DMoCHi.ML.ElimCast,
+--                       Language.DMoCHi.ML.ElimCast,
                        Language.DMoCHi.ML.ConstPropagation,
                        Language.DMoCHi.ML.TailOptimization,
                        Language.DMoCHi.ML.UnliftRec,
