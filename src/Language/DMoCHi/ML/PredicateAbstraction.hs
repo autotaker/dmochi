@@ -1,4 +1,4 @@
-module Language.DMoCHi.ML.PredicateAbstraction where
+module Language.DMoCHi.ML.PredicateAbstraction(abstProg, Abst) where
 import Control.Monad
 import Control.Monad.Writer
 import qualified Data.Map as M
@@ -114,7 +114,8 @@ toSortArg (_, tys, ps, _) = B.Tuple [B.Tuple $ map toSort tys, B.Tuple [B.Bool |
 toSymbol :: ML.TId -> PType -> B.Symbol
 toSymbol (ML.TId _ x) ty = B.Symbol (toSort ty) (show x)
 
-abstAValue :: (MonadIO m, MonadLogger m, MonadId m) => Env -> Constraints -> PVar -> ML.Atom-> PType -> m B.Term
+abstAValue :: (MonadIO m, MonadLogger m, MonadId m) 
+            => Env -> Constraints -> PVar -> ML.Atom-> PType -> m B.Term
 abstAValue env cs pv = go 
     where 
     go v@(ML.Atom l arg _) ty = case (l,arg) of
@@ -141,25 +142,26 @@ abstAValue env cs pv = go
                 B.f_proj 1 2 <$> go v (mkPPair ty1 ty)
             ML.SNot -> B.Not <$> go v PBool
             ML.SNeg -> return $ B.T []
-abstValue :: (MonadIO m, MonadLogger m, MonadId m) => TypeMap -> Env -> Constraints -> PVar -> ML.Value -> PType -> m B.Term
+abstValue :: (MonadIO m, MonadLogger m, MonadId m) 
+            => TypeMap -> Env -> Constraints -> PVar -> ML.Value -> PType -> m B.Term
 abstValue tbl env cs pv v ty = 
     case ML.valueView v of
         ML.VAtom av -> abstAValue env cs pv av ty
         ML.VOther ML.SLambda (xs, e) -> 
-            fst <$> abstFunDef tbl env cs pv (getUniqueKey v, xs, e) (Just ty)
+            abstFunDef tbl env cs pv (getUniqueKey v, xs, e) (Just ty)
         ML.VOther ML.SPair (v1, v2) -> 
             let PPair _ ty1 ty2 = ty in
             (\x y -> B.T [x,y]) <$> abstValue tbl env cs pv v1 ty1 
                                 <*> abstValue tbl env cs pv v2 ty2
 
-abstTerm :: forall m. (MonadId m, MonadLogger m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
-abstTerm tbl env cs pv e tau@(r,ty,qs, _) = 
+abstTerm :: forall m. (MonadId m, MonadLogger m, MonadIO m) 
+            => TypeMap -> Env -> Constraints -> PVar -> ML.Exp -> TermType -> m B.Term
+abstTerm tbl env cs pv e tau = 
     case ML.expView e of
         ML.EValue v -> do
-            let subst = M.singleton r v
-            let ty' = substVPType subst ty
-            e1 <- abstValue tbl env cs pv v ty'
-            e2 <- abstFormulae cs pv (map (substVFormula subst) qs)
+            let (ty, qs, _) = betaConv v tau
+            e1 <- abstValue tbl env cs pv v ty
+            e2 <- abstFormulae cs pv qs
             return $ B.T [e1,e2]
         ML.EOther ML.SLetRec (fs, e2) -> do
             let as = [ (f, ty_f) | (f,v_f) <- fs, let Left ty_f = tbl M.! (getUniqueKey v_f) ]
@@ -173,18 +175,21 @@ abstTerm tbl env cs pv e tau@(r,ty,qs, _) =
             let key1 = getUniqueKey e1
                 exprCase :: ML.Exp -> m B.Term
                 exprCase e1 = do
-                    let Right tau1@(y,ty_y,ps, _) = tbl M.! key1
+                    let Right tau1@(alphaConv x -> (ty_x,ps, _)) = tbl M.! key1
                     let sx = show $ ML.name x
                     x_pair <- B.freshSym (sx ++ "_pair") (toSortTerm tau1)
                     B.f_let x_pair <$> abstTerm tbl env cs pv e1 tau1 <*> do
                         let x_body  = B.f_proj 0 2 (B.V x_pair)
                             x_preds = B.f_proj 1 2 (B.V x_pair)
                             n = length ps
-                            pv' = [ (B.f_proj i n x_preds, substFormula (M.singleton y x) fml) | (i,fml) <- zip [0..] ps ] ++ pv
-                            env' = M.insert x (substPType (M.singleton y x) ty_y) env
-                        B.f_let (toSymbol x ty_y) x_body <$>                                        -- let x = abst(cs,pv,t1,tau1)
-                            (B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral $ ML.CBool True)) <*> -- assume phi;
-                                abstTerm tbl env' cs pv' e2 tau)                              -- abst(cs,pv',t,tau)
+                            pv' = [ (B.f_proj i n x_preds, fml) | (i,fml) <- zip [0..] ps ] ++ pv
+                            env' = M.insert x ty_x env
+                        -- let x = abst(cs,pv,t1,tau1) in
+                        B.f_let (toSymbol x ty_x) x_body <$> 
+                            -- assume phi;
+                            (B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral $ ML.CBool True)) 
+                                        -- abst(cs,pv',t,tau)
+                                        <*> abstTerm tbl env' cs pv' e2 tau)               
             in case ML.lexpView e1 of
                 ML.LValue v -> case ML.valueView v of
                     ML.VAtom av -> do
@@ -195,25 +200,21 @@ abstTerm tbl env cs pv e tau@(r,ty,qs, _) =
                     ML.VOther ML.SLambda _ -> exprCase (ML.cast v)
                     ML.VOther ML.SPair _ -> exprCase (ML.cast v)
                 ML.LOther ML.SApp (f, vs) -> do
-                    let PFun _ (ys,ty_ys,ps, _) (r',ty_r',qs', pred_tmpl') = env M.! f
-                    let subst = M.fromList $ zip ys vs
-                    let ty_ys' = map (substVPType subst) ty_ys
-                    let sx = show $ ML.name x 
-                    arg_body  <- B.T <$> zipWithM (abstValue tbl env cs pv) vs ty_ys'
-                    arg_preds <- abstFormulae cs pv (map (substVFormula subst) ps)
+                    let ((ty_vs, ps, _), ret_ty) = appPType (env M.! f) vs
+                        (ty_x, qs, _) = alphaConv x ret_ty
+                        sx = show $ ML.name x 
+                    arg_body  <- B.T <$> zipWithM (abstValue tbl env cs pv) vs ty_vs
+                    arg_preds <- abstFormulae cs pv ps
                     let f' = toSymbol f (env M.! f)
-                    x' <- B.freshSym (sx ++ "_pair") (toSortTerm (r',ty_r',qs', pred_tmpl'))
+                    x' <- B.freshSym (sx ++ "_pair") (toSortTerm ret_ty)
                     let x_body  = B.f_proj 0 2 (B.V x')
                         x_preds = B.f_proj 1 2 (B.V x')
-                        n = length qs'
-                        subst1 = M.insert r' (ML.cast (ML.mkVar x)) subst
-                        pv' = [ (B.f_proj i n x_preds, 
-                                 substVFormula subst1 fml) | (i,fml) <- zip [0..] qs' ] ++ pv
-                        ty_r'' = substVPType subst1 ty_r'
-                    B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .           -- let x = f <body, preds> in
-                      B.f_let (toSymbol x ty_r') x_body <$>                               -- let v = x.fst
-                        (B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral (ML.CBool True))) <*>          -- assume phi; // avoid incosinsitent states
-                            abstTerm tbl (M.insert x ty_r'' env) cs pv' e2 tau)     -- abst(cs,pv',t,tau)
+                        n = length qs
+                        pv' = [ (B.f_proj i n x_preds, fml) | (i,fml) <- zip [0..] qs ] ++ pv
+                    B.f_let x' (B.f_app (B.V f') (B.T [arg_body, arg_preds])) .   -- let x = f <body, preds> in
+                      B.f_let (toSymbol x ty_x) x_body <$>                       -- let v = x.fst
+                        (B.f_assume <$> abstFormula cs pv' (ML.mkLiteral (ML.CBool True)) -- assume phi; // avoid incosinsitent states
+                                    <*> abstTerm tbl (M.insert x ty_x env) cs pv' e2 tau)     -- abst(cs,pv',t,tau)
                 ML.LOther ML.SRand _ -> 
                     B.f_let (toSymbol x PInt) (B.T []) <$>
                         abstTerm tbl (M.insert x PInt env) cs pv e2 tau
@@ -237,28 +238,24 @@ abstTerm tbl env cs pv e tau@(r,ty,qs, _) =
 addEq :: ML.TId -> ML.Atom -> Constraints -> Constraints
 addEq y v cs = (ML.mkBin ML.SEq (ML.mkVar y) v) :cs
 
-abstFunDef :: (MonadId m, MonadLogger m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> (UniqueKey,[ML.TId],ML.Exp) -> Maybe PType -> m (B.Term, PType)
+abstFunDef :: (MonadId m, MonadLogger m, MonadIO m) => TypeMap -> Env -> Constraints -> PVar -> (UniqueKey,[ML.TId],ML.Exp) -> Maybe PType -> m B.Term
 abstFunDef tbl env cs pv (ident,xs,t1) mpty = do
-    let ty_f@(PFun _ arg_ty@(ys,ty_ys,ps,_) rty) = 
-            case mpty of
+    let PFun _ arg_ty@(_,ty_xs,ps,_) rty = 
+            alphaConvFun xs $ case mpty of
                 Just pty -> pty
                 Nothing -> let Left pty = tbl M.! ident in pty
     x_pair <- B.freshSym "arg" (toSortArg arg_ty)
-    e <- B.Lam x_pair <$> do
+    B.Lam x_pair <$> do
         let x_body  = B.f_proj 0 2 (B.V x_pair)
             x_preds = B.f_proj 1 2 (B.V x_pair)
             n = length ps
-            subst = M.fromList $ zip ys xs
-            pv' = [ (B.f_proj i n x_preds, substFormula subst fml) | (i,fml) <- zip [0..] ps ] ++ pv
-            rty' = substTermType subst rty
-            ty_ys' = map (substPType subst) ty_ys
             arity = length xs
-        let env' = foldr (uncurry M.insert) env (zip xs ty_ys')
-        e' <- B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral $ ML.CBool True)) 
-                         <*> (abstTerm tbl env' cs pv' t1 rty')
-        return $ foldr (\(i,x,ty_y) -> 
-            B.f_let (toSymbol x ty_y) (B.f_proj i arity x_body)) e' (zip3 [0..] xs ty_ys')
-    return (e,ty_f)
+            pv' = [ (B.f_proj i n x_preds, fml) | (i,fml) <- zip [0..] ps ] ++ pv
+            env' = extendEnv env (zip xs ty_xs)
+        flip (foldr (\(i,x,ty_y) -> 
+            B.f_let (toSymbol x ty_y) (B.f_proj i arity x_body))) (zip3 [0..] xs ty_xs)
+            <$> (B.f_assume <$> (abstFormula cs pv' (ML.mkLiteral $ ML.CBool True)) 
+                            <*> (abstTerm tbl env' cs pv' t1 rty))
 
 pprintTypeMap :: TypeMap -> Doc
 pprintTypeMap tbl = braces $ vcat $ punctuate comma ds
@@ -275,7 +272,7 @@ abstProg tbl (ML.Program fs t0) = measure #elapsed_time $ do
     let env = M.fromList [ (f,ty)  | (f,key,_,_) <- fs, let Left ty = tbl M.! key ]
     ds <- forM fs $ \(f,key,xs,e) -> do
         let f' = toSymbol f (env M.! f)
-        (e_f,_) <- abstFunDef tbl env [] [] (key,xs,e) (Just $ env M.! f)
+        e_f <- abstFunDef tbl env [] [] (key,xs,e) (Just $ env M.! f)
         return (f',e_f)
     e0 <- do
         r <- ML.TId ML.TInt <$> identify "main"

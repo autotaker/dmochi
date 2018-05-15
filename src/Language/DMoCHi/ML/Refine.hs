@@ -20,7 +20,7 @@ import qualified Language.DMoCHi.ML.SMT as SMT
 import           Language.DMoCHi.ML.SymbolicExec
 import           Language.DMoCHi.Common.Id hiding( Id)
 import qualified Language.DMoCHi.Common.Id as Id
-import           Language.DMoCHi.Common.Util
+import           Language.DMoCHi.Common.Util hiding(extendEnv)
 
 
 -- Refinement types

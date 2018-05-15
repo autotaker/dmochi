@@ -507,11 +507,6 @@ convertA e@(Typed.Exp l arg _ _) =
         (SBinary, BinArg op e1 e2) -> mkBin op <$> convertA e1 
                                                <*> convertA e2 
         _ -> mkVar <$> convertVar e
-            {-
-            e' <- convertL e
-            r <- TId sty <$> identify "tmp"
-            shiftT $ \cont -> lift (mkLet r e' <$> cont (mkVar r) <*> freshKey)
-            -}
 
 convertV :: MonadId m => Typed.Exp -> ContT Exp m Value
 convertV e@(Typed.Exp l arg _ key) =

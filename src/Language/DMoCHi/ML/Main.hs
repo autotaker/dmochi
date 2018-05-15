@@ -37,7 +37,6 @@ import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.AbstractSemantics as AbstSem
 import qualified Language.DMoCHi.ML.ToCEGAR as CEGAR
--- import qualified Language.DMoCHi.ML.ElimCast as PAbst
 import qualified Language.DMoCHi.ML.IncSaturation as IncSat
 import qualified Language.DMoCHi.ML.UnliftRec as IncSat
 import qualified Language.DMoCHi.ML.Syntax.PType as PAbst

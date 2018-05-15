@@ -8,6 +8,7 @@ module Language.DMoCHi.Common.Util( rec
                                   , KnownSymbol
                                   , logPretty
                                   , PPrinted(..)
+                                  , extendEnv
                                   , module Control.Monad.Logger
                                   , module Control.Monad.CTrace
                                   , measureWithLens) where
@@ -25,6 +26,7 @@ import Language.DMoCHi.Common.Id
 import Text.PrettyPrint.HughesPJClass
 import Data.Text(pack)
 import Data.PolyDict
+import qualified Data.Map as M
 
 rec :: a -> ((a -> b) -> a -> b) -> b
 rec = flip fix
@@ -70,6 +72,8 @@ instance MonadFix m => MonadFix (LoggingT m) where
     mfix f = LoggingT $ \s -> mfix $ \v -> runLoggingT (f v) s
     {-# INLINE mfix #-}
 
+extendEnv :: Ord a => M.Map a b -> [(a, b)] -> M.Map a b
+extendEnv = foldr (uncurry M.insert)
 
 {-
 measureError :: (MonadIO m, MonadError e m) => String -> m a -> m a

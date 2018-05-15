@@ -21,23 +21,28 @@ import Language.DMoCHi.ML.Syntax.PType(PredTemplate)
 import Language.DMoCHi.ML.Syntax.Base
 import Text.PrettyPrint.HughesPJClass
 
-data AbstInfo = AbstInfo { abstPredicates :: [HFormula.HFormula]              -- current predicates to be used
-                         , abstTemplate   :: PredTemplate -- represents P_k(a_1,...a_n) 
-                         }
+data AbstInfo 
+ = AbstInfo { abstPredicates :: [HFormula.HFormula]  -- current predicates to be used
+            , abstTemplate   :: PredTemplate         -- represents P_k(a_1,...a_n) 
+            }
 
 newtype Program = Program { mainTerm :: Exp }
 
 data Exp where
-    Exp :: (Normalized l Exp arg, Supported l (Labels Exp), Meta l Exp info) => 
-            SLabel l -> arg -> !Type -> info -> !UniqueKey -> Exp
+    Exp :: (Normalized l Exp arg
+           , Supported l (Labels Exp)
+           , Meta l Exp info) 
+            => SLabel l -> arg -> !Type -> info -> !UniqueKey -> Exp
 
 data Value where
-    Value :: (Normalized l Value arg, Supported l (Labels Value)) => 
-            SLabel l -> arg -> !Type -> !UniqueKey -> Value
+    Value :: (Normalized l Value arg
+             , Supported l (Labels Value)) 
+            => SLabel l -> arg -> !Type -> !UniqueKey -> Value
 
 data LExp where
-    LExp :: (Normalized l LExp arg, Supported l (Labels LExp)) => 
-                SLabel l -> arg -> !Type -> !UniqueKey -> LExp
+    LExp :: (Normalized l LExp arg
+            , Supported l (Labels LExp)) 
+            => SLabel l -> arg -> !Type -> !UniqueKey -> LExp
 
 type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Literal e arg = arg ~ Lit
@@ -79,16 +84,22 @@ type family Meta (l :: Label) (e :: *) (info :: *) :: Constraint where
 
 data ExpView where
     EValue :: Value -> AbstInfo -> ExpView
-    EOther :: ( Normalized l Exp arg, Supported l '[ 'Let, 'LetRec, 'Assume, 'Branch, 'Fail, 'Omega]) => SLabel l -> arg -> ExpView
+    EOther :: ( Normalized l Exp arg
+              , Supported l '[ 'Let, 'LetRec, 'Assume
+                             , 'Branch, 'Fail, 'Omega]) 
+                => SLabel l -> arg -> ExpView
 
 data LExpView where
     LAtom  :: Atom -> LExpView
-    LOther :: ( Normalized l LExp arg, Supported l '[  'App, 'Branch, 'Rand]) => SLabel l -> arg -> LExpView
+    LOther :: ( Normalized l LExp arg
+              , Supported l '[  'App, 'Branch, 'Rand]) 
+                => SLabel l -> arg -> LExpView
 
 data ValueView where
     VAtom  :: Atom -> ValueView
-    VOther :: ( Normalized l Value arg, Supported l '[ 'Pair, 'Lambda ]) => SLabel l -> arg -> ValueView
-
+    VOther :: ( Normalized l Value arg
+              , Supported l '[ 'Pair, 'Lambda ]) 
+                => SLabel l -> arg -> ValueView
 
 type instance Labels Exp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
                             , 'Let, 'LetRec, 'Assume, 'Branch, 'Fail, 'Omega ]
@@ -165,7 +176,6 @@ mkFail, mkOmega :: Type -> UniqueKey -> Exp
 mkFail sty key = Exp SFail () sty () key
 mkOmega sty key = Exp SOmega () sty () key
 
-
 mkRand :: UniqueKey -> LExp
 mkRand key = LExp SRand () TInt key
 
@@ -205,7 +215,6 @@ instance Castable Value Exp where
         SLambda -> Exp l arg sty info key
         SPair -> Exp l arg sty info key
 
-
 instance Pretty AbstInfo where
     pPrint (AbstInfo ps (key,vs)) =
         -- [ p_1, ..., p_k; P_k(v1,...,v_n) ]
@@ -239,7 +248,6 @@ instance Pretty Value where
                 text "fun" <+> d_args $+$ char '|' <+> pPrint info <+> text "->" $+$
                 nest 4 (pPrint e)
             where d_args = hsep $ map (parens . pPrint) xs
-
 
 instance Pretty LExp where
     pPrint e = case lexpView e of

@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, DataKinds, GADTs, Rank2Types, BangPatterns #-}
+{-# LANGUAGE  Rank2Types, BangPatterns, TypeApplications #-}
 module Language.DMoCHi.ML.Syntax.PType where
 
 import Language.DMoCHi.ML.Syntax.Type
@@ -40,6 +40,9 @@ type Constraints = [Formula]
 type Formula = Atom
 type Id = TId
 
+-- Template for predicate generation.
+-- ``key`` identifies the location of the predicate
+-- ``atoms`` are arguments for the predicates. Each atom must have a base type.
 type PredTemplate = (UniqueKey, [Atom])
 
 type TermType = (Id, PType, [Formula], PredTemplate)
@@ -64,7 +67,6 @@ instance Eq PType where
     PPair ty pty_fst pty_snd == PPair ty' pty_fst' pty_snd' =
         ty == ty' && pty_fst == pty_fst' && pty_snd == pty_snd'
     _ == _ = False
-
 
 dummyPredTemplate = (reservedKey, [])
 
@@ -94,6 +96,9 @@ pprintPType assoc (PFun _ x_tup r_tup) =
 instance Pretty PType where
     pPrint = pprintPType 0
 
+instance Show PType where
+    show = render . pPrint
+
 substPredTemplate :: M.Map Id Id -> PredTemplate -> PredTemplate
 substPredTemplate subst (key, vs) = (key, map (substFormula subst) vs)
 
@@ -107,6 +112,14 @@ substTermType subst (x,pty,ps,info) = (x, pty', ps', info')
     pty' = substPType subst' pty
     ps' = map (substFormula subst') ps
     info' = substPredTemplate subst' info
+
+substVTermType :: M.Map Id Value -> TermType -> TermType
+substVTermType subst (x,pty,ps,info) = (x, pty', ps', info')
+    where
+    subst' = M.delete x subst
+    pty' = substVPType subst' pty
+    ps' = map (substVFormula subst') ps
+    info' = substVPredTemplate subst' info
 
 substPType :: M.Map Id Id -> PType -> PType
 substPType subst = substVPType (fmap (cast . mkVar) subst)
@@ -211,13 +224,15 @@ decompose x l = case getType x of
     TInt -> x : l
     TBool -> x : l
 
+
+
 initTypeMap :: forall m. MonadId m => Program -> m (TypeMap,ScopeMap)
 initTypeMap (Program fs t0) = do
     es <- execWriterT $ do
         let gatherE :: [TId] -> Exp -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
-            gatherE fv (Exp l arg _ _) = gather (Proxy :: Proxy Exp) fv l arg
+            gatherE fv (Exp l arg _ _) = gather (Proxy @Exp) fv l arg
             gatherV :: [TId] -> Value -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
-            gatherV fv (Value l arg _ _) = gather (Proxy :: Proxy Value) fv l arg
+            gatherV fv (Value l arg _ _) = gather (Proxy @Value) fv l arg
             gather :: (Ident e ~ TId, Normalized l e arg)  => 
                       Proxy e -> [TId] -> SLabel l -> arg -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
             gather _ fv l arg = case (l,arg) of
@@ -228,7 +243,7 @@ initTypeMap (Program fs t0) = do
                 (SLambda, (xs,e)) -> gatherE (xs ++ fv) e
                 (SPair, (v1,v2))  -> gatherV fv v1 >> gatherV fv v2 
                 (SLet, (x, (LExp l1 arg1 sty1 key1), e2)) -> do
-                    gather (Proxy :: Proxy LExp) fv l1 arg1
+                    gather (Proxy @ LExp) fv l1 arg1
                     let genType :: WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
                         genType = genTermType fv sty1 >>= \ty -> tell (DL.singleton (key1, Right ty, fv))
                     (case l1 of
@@ -328,3 +343,69 @@ mergeTermType (r_1,rty_1,qs_1, pred_tmpl) (r_2,rty_2,qs_2,_) = (r_1,rty,qs, pred
     subst = M.singleton r_2 r_1
     rty = mergePType rty_1 (substPType subst rty_2)
     qs = foldr (updateFormula . substFormula subst) qs_1 qs_2
+
+alphaConv :: TId -> TermType -> (PType, [Formula], PredTemplate)
+alphaConv x (r, r_ty, ps, info) = (x_ty, ps', info')
+    where
+    subst = M.singleton r x
+    x_ty = substPType subst r_ty
+    ps' = map (substFormula subst) ps
+    info' = substPredTemplate subst info
+
+alphaConvFun :: [TId] -> PType -> PType
+alphaConvFun ys (PFun sty sigma tau) = PFun sty sigma' tau'
+    where
+    (xs, xs_ty, ps, pred_tmpl) = sigma
+    sigma' = (ys, ys_ty, ps', pred_tmpl') 
+    subst = M.fromList $ zip xs ys
+    ys_ty = map (substPType subst) xs_ty
+    ps' = map (substFormula subst) ps
+    pred_tmpl' = substPredTemplate subst pred_tmpl
+    tau' = substTermType subst tau
+alphaConvFun xs ty = 
+    error $ "alphaConvFun: argument must be a function type" ++ show (xs,ty)
+
+betaConv :: Value -> TermType -> (PType, [Formula], PredTemplate)
+betaConv v (r, r_ty, ps, info) = (v_ty, ps', info')
+    where
+    subst = M.singleton r v
+    v_ty = substVPType subst r_ty
+    ps' = map (substVFormula subst) ps
+    info' = substVPredTemplate subst info
+
+appPType :: PType -> [Value] -> (([PType],[Formula],PredTemplate), TermType)
+appPType (PFun _ sigma tau) vs = (sigma', tau')
+    where
+    tau' = substVTermType subst tau
+    subst = M.fromList $ zip ys vs
+    (ys,ys_ty, ps, pred_tmpl) = sigma
+    sigma' = ( map (substVPType subst) ys_ty
+             , map (substVFormula subst) ps
+             , substVPredTemplate subst pred_tmpl)
+appPType _ _ = error "appPType defined only for function types"
+
+{- compute type environment for e2, given env |- let x = e in e2 : \tau -}
+extendEnvByLet :: TypeMap -> Env -> TId -> LExp -> Env
+extendEnvByLet tbl env x e = M.insert x x_ty env
+    where
+    defaultCase = case M.lookup (getUniqueKey e) tbl of
+        Just (Right (alphaConv x -> (x_ty, _, _))) -> x_ty
+        Just (Left _) -> 
+            error $ "extendEnvByLet: expected a term type but found value type for key " 
+                  ++ show (getUniqueKey e)
+        Nothing -> error $ "extendEnvByLet: No type found for " 
+                  ++ show (getUniqueKey e)
+    x_ty = case lexpView e of
+        LValue v -> case valueView v of
+            VAtom av -> typeOfAtom env av
+            VOther SLambda _ -> defaultCase
+            VOther SPair _   -> defaultCase
+        LOther SRand _ -> PInt
+        LOther SApp (f, vs) -> x_ty
+            where
+            (x_ty, _, _) = alphaConv x $ snd $ appPType (env M.! f) vs
+        LOther SBranch _ -> defaultCase
+        LOther SFail _   -> defaultCase
+        LOther SOmega _  -> defaultCase
+
+    
