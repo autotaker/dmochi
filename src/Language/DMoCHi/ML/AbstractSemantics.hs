@@ -66,9 +66,6 @@ initState tr = RefineState {
 formatPredicate :: Meta -> Int -> String
 formatPredicate meta i = printf "p_%s[%d:0]" (show meta) i
 
-
-
-
 genConstraints :: Context -> Trace -> Exp -> FreshIO (Dict AbstractSemantics) (Horn.HCCS, [(Int, UniqueKey)])
 genConstraints ctx trace e = runHFormulaT doit ctx 
     where
@@ -165,6 +162,41 @@ calcValue env c v =
         VOther SLambda (xs, info, e) -> ACls env c info ({-getUniqueKey v,-} xs, info, e)
         VOther SPair (v1, v2) -> APair (calcValue env c v1) (calcValue env c v2)
 
+{-# INLINE calcLExp #-}
+calcLExp :: Env -> Constraint -> TId -> LExp ->
+            M (Either (AValue, HFormula) (Maybe (AValue, BFormula, (Scope -> Predicate))))
+calcLExp env (fml, preds) x e = 
+    case lexpView e of
+        LAtom a -> do
+            let av = calcAtom env a
+            -- x == v
+            fml' <- lift $ do
+                vx <- mkVar x
+                toHFormula a >>= mkBin SEq vx >>= mkBin SAnd fml
+            return (Left (av, fml'))
+        LOther SRand _ -> return (Left (ABase TInt, fml))
+        LOther SApp (f, info_arg, vs) -> do
+            -- caller site
+            let ps = abstPredicates info_arg
+                scope = Scope $ snd $ abstTemplate info_arg
+                avs = map (calcValue env (fml, preds)) vs
+            pGenArg <- newPGen (Unique (fst (abstTemplate info_arg)))
+            phi <- lift $ calcCondition fml ps
+            genClause (fml, preds) (pGenArg scope)
+            -- callee site
+            let ACls env1 (fml1, preds1) info_arg' (xs, _, e1) = env M.! f
+                ps' = abstPredicates info_arg'
+                scope' = Scope $ snd $ abstTemplate info_arg'
+                env1' = extendEnv env1 $ zip xs avs
+                preds1' = pGenArg scope' : preds1
+            fml1' <- lift $ mkBin SAnd fml1 =<< fromBFormula ps' phi
+            Right <$> calcExp env1' (fml1', preds1') e1
+        LOther SBranch (e_l, e_r) -> do
+            b <- consumeBranch
+            case b of
+                True  -> Right <$> calcExp env (fml, preds) e_l
+                False -> Right <$> calcExp env (fml, preds) e_r
+
 calcExp :: Env -> Constraint -> Exp -> M (Maybe (AValue, BFormula, (Scope -> Predicate)))
 calcExp env (fml, preds) e = 
     case expView e of
@@ -177,47 +209,16 @@ calcExp env (fml, preds) e =
             genClause (fml, preds) (pGen scope)
             return (Just (av, phi, pGen))
         EOther SLet (x, e1, info, e2) -> do
-            let genericCase r1 = do
+            calcLExp env (fml, preds) x e1 >>= \case
+                Left (av,fml') -> calcExp (M.insert x av env) (fml', preds) e2
+                Right Nothing -> return Nothing
+                Right (Just (av, bfml, pGen')) -> do
                     let ps = abstPredicates info
                         scope = Scope $ snd $ abstTemplate info
-                    case r1 of
-                        Just (av, bfml, pGen') -> do
-                            fml' <- lift $ mkBin SAnd fml =<< fromBFormula ps bfml
-                            let env' = M.insert x av env
-                                preds' = pGen' scope : preds
-                            calcExp env' (fml', preds') e2
-                        Nothing -> return Nothing
-            case lexpView e1 of
-                LAtom a -> do
-                    let av = calcAtom env a
-                        env' = M.insert x av env
-                    -- x == v
-                    fml' <- lift $ do
-                        vx <- mkVar x
-                        toHFormula a >>= mkBin SEq vx >>= mkBin SAnd fml
-                    calcExp env' (fml', preds) e2
-                LOther SRand _ -> do
-                    let env' = M.insert x (ABase TInt) env
-                    calcExp env' (fml, preds) e2
-                LOther SApp (f, info_arg, vs) -> do
-                    let ps = abstPredicates info_arg
-                        scope = Scope $ snd $ abstTemplate info_arg
-                    let ACls env1 (fml1, preds1) info_arg' (xs, _, e1) = env M.! f
-                    pGenArg <- newPGen (Unique (fst (abstTemplate info_arg)))
-                    let ps' = abstPredicates info_arg'
-                        scope' = Scope $ snd $ abstTemplate info_arg'
-                    -- Just (ps', scope') <- ask >>= \ctx -> liftIO $ H.lookup (ctxArgTypeTbl ctx) key1
-                    let env1' = foldr (uncurry M.insert) env1 $ zip xs (map (calcValue env (fml, preds)) vs)
-                        preds1' = pGenArg scope' : preds1
-                    genClause (fml, preds) (pGenArg scope)
-                    phi <- lift (calcCondition fml ps)
-                    fml1' <- lift $ mkBin SAnd fml1 =<< fromBFormula ps' phi
-                    calcExp env1' (fml1', preds1') e1 >>= genericCase
-                LOther SBranch (e_l, e_r) -> do
-                    b <- consumeBranch
-                    case b of
-                        True -> calcExp env (fml, preds) e_l >>= genericCase
-                        False -> calcExp env (fml, preds) e_r >>= genericCase
+                    fml' <- lift $ mkBin SAnd fml =<< fromBFormula ps bfml
+                    let env' = M.insert x av env
+                        preds' = pGen' scope : preds
+                    calcExp env' (fml', preds') e2
         EOther SLetRec (fs, e1) -> do
             let env' = foldr (uncurry M.insert) env [ (f, calcValue env' (fml, preds) v) | (f,v) <- fs ]
             calcExp env' (fml, preds) e1
@@ -232,7 +233,6 @@ calcExp env (fml, preds) e =
         EOther SFail _ -> genFailClause (fml, preds) >> return Nothing
         EOther SOmega _ -> error "diverged"
 
-    
 
 ---- refinement
 refine :: Context -> Horn.Solver -> Int -> Trace -> Program -> 
@@ -242,13 +242,6 @@ refine ctx solver cegarId trace prog = do
     preds <- mapExceptT lift $ solver hccs cegarId
     let subst = predicateMap pId2key preds
     runHFormulaT (refineProgram subst prog) ctx
-
-refineTypeMap :: [(Int,UniqueKey)] -> [(Int, [Id], Formula)]-> TypeMap -> TypeMap
-refineTypeMap  pId2key preds = fmap conv
-    where
-    conv (Left pty)  = Left (refinePType subst pty)
-    conv (Right tau) = Right (refineTermType subst tau)
-    subst = predicateMap pId2key preds
 
 predicateMap :: [(Int, UniqueKey)] -> [(Int, [Id], Formula)] -> M.Map UniqueKey [([Id], Formula)]
 predicateMap pId2key preds = subst
@@ -280,6 +273,14 @@ refinePredicates subst (key, args) ps =
                         updateFormula fml' acc) ps fmls
             
 
+{-
+refineTypeMap :: [(Int,UniqueKey)] -> [(Int, [Id], Formula)]-> TypeMap -> TypeMap
+refineTypeMap  pId2key preds = fmap conv
+    where
+    conv (Left pty)  = Left (refinePType subst pty)
+    conv (Right tau) = Right (refineTermType subst tau)
+    subst = predicateMap pId2key preds
+
 refinePType :: M.Map UniqueKey [([Id], Atom)]  -> PType -> PType
 refinePType _ PInt = PInt 
 refinePType _ PBool = PBool
@@ -297,3 +298,4 @@ refineTermType subst (r, rty, qs, predTempl) = (r, rty', qs', predTempl)
     where
     rty' = refinePType subst rty
     qs' = refinePredicates subst predTempl qs
+    -}

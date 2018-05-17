@@ -193,48 +193,6 @@ incrNodeCounter = ask >>= \ctx -> liftIO $ do
     writeIORef (ctxNodeCounter ctx) $! v+1
     return v
 
-{-
--- Function: calcCondition fml ps 
--- assumption: fml is a satisfiable formula
--- assertion: phi |- fromBFormula ps ret
-calcCondition :: HFormula -> [HFormula] -> R BFormula
-calcCondition _fml _ps = measureTime CalcCondition $ do
-    phi <- go 1 _fml _ps
-    {-
-    liftIO $ print $ text "calcCondtion" $+$ 
-            braces (
-                text "assumption:" <+> pPrint _fml $+$
-                text "predicates:" <+> (brackets $ hsep $ punctuate comma (map pPrint _ps)) $+$
-                text "result:"     <+> text (show phi)
-            )
-            -}
-    return phi
-    where
-    go _ _ [] = mkBLeaf True
-    go i fml (p:ps) = do
-        np <- mkUni SNot p
-        b1 <- checkSat fml p
-        b2 <- checkSat fml np
-        v1 <- if b1 then mkBin SAnd fml p >>= \fml' -> go (i + 1) fml' ps 
-                    else mkBLeaf False
-        v2 <- if b2 then mkBin SAnd fml np >>= \fml' -> go (i + 1) fml' ps 
-                    else mkBLeaf False
-        mkBNode i v1 v2
-
-fromBFormula :: [HFormula] -> BFormula -> R HFormula
-fromBFormula ps fml = 
-    case bfmlBody fml of
-        BLeaf b -> mkLiteral (CBool b)
-        BNode i p1 p2 -> do
-            v1 <- fromBFormula ps p1
-            v2 <- fromBFormula ps p2
-            let x = ps !! (i - 1)
-            nx <- mkUni SNot x
-            v1 <- mkBin SAnd x  v1
-            v2 <- mkBin SAnd nx v2
-            mkBin SOr v1 v2
-            -}
-
 
 measureTime :: MeasureKey -> R a -> R a
 measureTime key action = do
@@ -281,32 +239,6 @@ getStatistics ctx = do
                         & access #number_smt_hit  ?~ smtHits
                         -}
                         & access #time ?~ times
-
-{-
-checkSat :: HFormula -> HFormula -> R Bool
-checkSat p1 p2 = measureTime CheckSat $ do
-    ctx <- ask
-    let key = (getIdent p1, getIdent p2)
-    res <- liftIO $ H.lookup (ctxCheckSatCache ctx) key
-    -- liftIO $ print $ text "checkSat" <+> pPrint key <+> pPrint p1 <+> text "|-" <+> pPrint p2
-    case res of
-        Just v -> do
-            liftIO $ modifyIORef' (ctxSMTCountHit ctx) succ 
-            return v
-        Nothing -> do 
-            liftIO $ modifyIORef' (ctxSMTCount ctx) succ 
-
-            v <- (Z3.local :: R Bool -> R Bool) $ do
-                SMT.ASTValue cond <- getIValue <$> mkBin SAnd p1 p2  
-                Z3.assert cond
-                res <- Z3.check
-                case res of
-                    Z3.Sat -> return True
-                    Z3.Unsat -> return False
-                    Z3.Undef -> liftIO $ putStrLn "Undef" >> return True
-            liftIO $ H.insert (ctxCheckSatCache ctx) key v
-            return v
-            -}
 
 genericPrint :: IEnv -> HFormula -> e -> IORef (SatType e) -> Int -> (e -> Doc) -> (SatType e -> Doc) -> IO Doc
 genericPrint env fml e tys_ref ident termPrinter typePrinter = do

@@ -8,6 +8,7 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , mkFail, mkOmega, mkRand
                                         , mkFailL, mkOmegaL
                                         , Castable(..)
+                                        , CataAtom(..), cataAtom
                                         , normalize
                                         , freeVariables
                                         , module Language.DMoCHi.ML.Syntax.Type
@@ -82,6 +83,22 @@ type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Omega   e arg = arg ~ ()
     Normalized 'Rand    e arg = arg ~ ()
     Normalized l        e arg = 'True ~ 'False
+
+data CataAtom a =
+    CataAtom { literalCase :: Lit -> a
+             , varCase :: TId -> a
+             , unaryCase :: forall op. Supported op (UniOps Atom) => SUniOp op -> a -> a
+             , binaryCase :: forall op. Supported op (BinOps Atom) => SBinOp op -> a -> a -> a
+             } 
+cataAtom :: CataAtom a -> Atom -> a
+cataAtom functor = go 
+    where 
+    go (Atom l arg _) =
+        case (l, arg) of
+            (SLiteral, lit) -> literalCase functor lit
+            (SVar, x) -> varCase functor x
+            (SUnary, UniArg op a) -> unaryCase functor op (go a)
+            (SBinary, BinArg op a1 a2) -> binaryCase functor op (go a1) (go a2)
 
 data ExpView where
     EValue :: Value -> ExpView
@@ -552,4 +569,6 @@ freeVariables _scope _e = subE _scope _e S.empty
     sub _ _     SRand    _ acc = acc
     sub _ scope SLambda  (xs, e) acc = subE (foldr S.insert scope xs) e acc
     sub p scope SApp     (f, vs) acc = foldr (subV scope) (sub p scope SVar f acc) vs
+
+
 

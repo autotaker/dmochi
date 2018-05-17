@@ -6,6 +6,7 @@ module Language.DMoCHi.ML.Syntax.CEGAR(
     , mkBin, mkUni, mkLiteral, mkVar, mkPair, mkLambda 
     , mkApp, mkLet, mkLetRec, mkAssume, mkBranch, mkBranchL, mkFail, mkOmega, mkRand
     , Castable(..)
+    , CataAtom(..), cataAtom
     , module Language.DMoCHi.ML.Syntax.Type
     , module Language.DMoCHi.ML.Syntax.Base )
      where
@@ -14,7 +15,7 @@ import Language.DMoCHi.Common.Id
 -- import Language.DMoCHi.Common.Util
 -- import qualified Data.Set as S
 import GHC.Exts(Constraint)
-import Language.DMoCHi.ML.Syntax.PNormal(Atom(..), mkBin, mkUni, mkLiteral, mkVar, UniArg, Castable(..))
+import Language.DMoCHi.ML.Syntax.PNormal(Atom(..), CataAtom(..), cataAtom, mkBin, mkUni, mkLiteral, mkVar, UniArg, Castable(..))
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.PType(PredTemplate)

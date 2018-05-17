@@ -10,7 +10,7 @@ test :: FilePath -> Spec
 test testCase = 
     describe ("Test: " ++ testCase) $ do
         it "fusion successfully ends" $ do
-            let conf = (defaultConfig testCase){ fusion = True, incremental = True, cegarMethod = AbstSemantics }
+            let conf = (defaultConfig testCase){ cegarMethod = AbstSemantics }
             (v1, _) <- verify conf
             let right (Left _) = False
                 right (Right _) = True
