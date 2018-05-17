@@ -20,6 +20,8 @@ import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.PType(PredTemplate)
 import Language.DMoCHi.ML.Syntax.Base
 import Text.PrettyPrint.HughesPJClass
+import Data.MonoTraversable
+import Data.Maybe
 
 data AbstInfo 
  = AbstInfo { abstPredicates :: [HFormula.HFormula]  -- current predicates to be used
@@ -67,6 +69,7 @@ instance HasUniqueKey LExp where
     getUniqueKey (LExp _ _ _ key) = key
 instance HasUniqueKey Value where
     getUniqueKey (Value _ _ _ key) = key
+
 
 type instance Ident  Exp = TId
 type instance Ident  LExp = TId
@@ -179,6 +182,7 @@ mkOmega sty key = Exp SOmega () sty () key
 mkRand :: UniqueKey -> LExp
 mkRand key = LExp SRand () TInt key
 
+
 instance HasType Exp where
     getType (Exp _ _ sty _ _) = sty
 instance HasType Value where
@@ -267,3 +271,160 @@ instance Show Value where
     show = render . pPrint 
 instance Show LExp where
     show = render . pPrint 
+
+type instance Element Exp = AbstInfo
+type instance Element LExp = AbstInfo
+type instance Element Value = AbstInfo
+type instance Element Program = AbstInfo
+
+instance MonoFunctor Program where
+    omap f (Program e) = Program (omap f e)
+
+instance MonoFoldable Program  where
+    ofoldMap f (Program e) = ofoldMap f e
+    ofoldr f z (Program e) = ofoldr f z e
+    ofoldl' f z (Program e) = ofoldl' f z e
+    ofoldr1Ex f (Program e) = ofoldr1Ex f e
+    ofoldl1Ex' f (Program e) = ofoldl1Ex' f e
+
+
+instance MonoTraversable Program where
+    otraverse f (Program e) = Program <$> otraverse f e
+
+instance MonoFunctor Exp where
+    omap f e =
+        let key = getUniqueKey e in
+        case expView e of
+            EValue v meta -> castWith (f meta) v
+            EOther SLet (x, e1, info, e2) -> 
+                mkLet x (omap f e1) (f info) (omap f e2) key
+            EOther SLetRec (fs, e1) -> mkLetRec fs' (omap f e1) key
+                where
+                fs' = fmap (\(g, v) -> (g, omap f v)) fs
+            EOther SAssume (cond, e1) -> mkAssume cond (omap f e1) key
+            EOther SBranch (e1, e2) -> mkBranch (omap f e1) (omap f e2) key
+            EOther SOmega _ -> e
+            EOther SFail _ -> e
+
+instance MonoFoldable Exp where
+    ofoldr f z e = 
+        case expView e of
+            EValue v meta -> f meta (ofoldr f z v)
+            EOther SLet (_, e1, meta, e2) -> 
+                ofoldr f (f meta (ofoldr f z e2)) e1
+            EOther SLetRec (fs, e) -> 
+                foldr (\(_,v) acc -> ofoldr f acc v) (ofoldr f z e) fs 
+            EOther SAssume (_, e) -> ofoldr f z e
+            EOther SBranch (e1, e2) -> ofoldr f (ofoldr f z e2) e1 
+            EOther SFail  _ -> z
+            EOther SOmega _ -> z
+    ofoldMap f = ofoldr (mappend . f) mempty
+    ofoldl' f z0 e = ofoldr f' id e z0
+        where f' x k z = k $! f z x
+    ofoldr1Ex f e = fromJust $ ofoldr g Nothing e
+        where
+        g v Nothing = Just v
+        g v1 (Just v2) = Just (f v1 v2)
+    ofoldl1Ex' f e = fromJust $ ofoldl' g Nothing e
+        where
+        g Nothing v = Just v
+        g (Just v1) v2 = Just $! f v1 v2
+
+instance MonoTraversable Exp where
+    otraverse f e =
+        let key = getUniqueKey e in
+        case expView e of
+            EValue v meta -> (\meta' -> castWith meta' v) <$> f meta
+            EOther SLet (x, e1, meta, e2) -> 
+                mkLet x <$> otraverse f e1 
+                        <*> f meta
+                        <*> otraverse f e2
+                        <*> pure key
+            EOther SLetRec (fs, e2) ->
+                mkLetRec <$> traverse (\(g, v) -> (g,) <$> otraverse f v) fs
+                         <*> otraverse f e2
+                         <*> pure key
+            EOther SAssume (cond, e) ->
+                mkAssume cond <$> otraverse f e <*> pure key
+            EOther SBranch (e1, e2) -> 
+                mkBranch <$> otraverse f e1 <*> otraverse f e2 <*> pure key
+            EOther SFail _ -> pure e
+            EOther SOmega _ -> pure e
+
+instance MonoFunctor LExp where
+    omap f e =
+        let key = getUniqueKey e in
+        case lexpView e of
+            LAtom _ -> e
+            LOther SBranch (e1, e2) -> 
+                mkBranchL (omap f e1) (omap f e2) key
+            LOther SApp (g, info, vs) ->
+                mkApp g (f info) (map (omap f) vs) key
+            LOther SRand _ -> mkRand key
+
+instance MonoFoldable LExp where
+    ofoldr f z e =
+        case lexpView e of
+            LAtom _ -> z
+            LOther SApp (_, info, vs) -> f info (foldr (flip (ofoldr f)) z vs)
+            LOther SRand _ -> z
+            LOther SBranch (e1, e2) -> ofoldr f (ofoldr f z e2) e1
+    ofoldMap f = ofoldr (mappend . f) mempty
+    ofoldl' f z0 e = ofoldr f' id e z0
+        where f' x k z = k $! f z x
+    ofoldr1Ex f e = fromJust $ ofoldr g Nothing e
+        where
+        g v Nothing = Just v
+        g v1 (Just v2) = Just (f v1 v2)
+    ofoldl1Ex' f e = fromJust $ ofoldl' g Nothing e
+        where
+        g Nothing v = Just v
+        g (Just v1) v2 = Just $! f v1 v2
+
+instance MonoTraversable LExp where
+    otraverse f e =
+        let key = getUniqueKey e in
+        case lexpView e of
+            LAtom _ -> pure e
+            LOther SApp (g, info, vs) -> 
+                mkApp g <$> f info <*> traverse (otraverse f) vs <*> pure key
+            LOther SRand _ -> pure e
+            LOther SBranch (e1, e2) -> 
+                mkBranchL <$> otraverse f e1 <*> otraverse f e2 <*> pure key
+
+instance MonoFunctor Value where
+    omap f v =
+        let key = getUniqueKey v in
+        case valueView v of
+            VAtom _ -> v
+            VOther SPair (v1, v2) -> mkPair (omap f v1) (omap f v2) key
+            VOther SLambda (xs, info, e) ->
+                mkLambda xs (f info) (omap f e) key
+
+instance MonoFoldable Value where
+    ofoldr f z v = 
+        case valueView v of
+            VAtom _ -> z
+            VOther SPair (v1, v2) -> ofoldr f (ofoldr f z v2) v1
+            VOther SLambda (_, info, e) -> f info (ofoldr f z e)
+    ofoldMap f = ofoldr (mappend . f) mempty
+    ofoldl' f z0 e = ofoldr f' id e z0
+        where f' x k z = k $! f z x
+    ofoldr1Ex f e = fromJust $ ofoldr g Nothing e
+        where
+        g v Nothing = Just v
+        g v1 (Just v2) = Just (f v1 v2)
+    ofoldl1Ex' f e = fromJust $ ofoldl' g Nothing e
+        where
+        g Nothing v = Just v
+        g (Just v1) v2 = Just $! f v1 v2
+
+instance MonoTraversable Value where
+    otraverse f v =
+        let key = getUniqueKey v in
+        case valueView v of
+            VAtom _ -> pure v
+            VOther SPair (v1, v2) -> 
+                mkPair <$> otraverse f v1 <*> otraverse f v2 <*> pure key
+            VOther SLambda (xs, info, e) -> 
+                mkLambda xs <$> f info <*> otraverse f e <*> pure key

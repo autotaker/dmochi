@@ -581,7 +581,10 @@ extendEnv x v env = case ML.getType x of
     ML.TFun _ _ -> env
 
 
-refine :: M.Map UniqueKey [Id] -> [(UniqueKey,RType)] -> [(UniqueKey,RPostType)] -> [(Int,[Id],ML.Atom)] -> PAbst.TypeMap -> PAbst.TypeMap
+type RTypeAssoc = [(UniqueKey, RType)]
+type RPostTypeAssoc = [(UniqueKey, RPostType)]
+
+refine :: M.Map UniqueKey [Id] -> RTypeAssoc -> RPostTypeAssoc -> [(Int,[Id],ML.Atom)] -> PAbst.TypeMap -> PAbst.TypeMap
 refine fvMap rtyAssoc rpostAssoc subst typeMap = typeMap'' where
     penv = IM.fromList [ (s,(xs,v)) | (s,xs,v) <- subst ]
     typeMap' = foldl' (\acc (i, rty) -> 

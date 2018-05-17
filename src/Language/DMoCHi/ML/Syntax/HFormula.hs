@@ -283,6 +283,17 @@ fromHFormula (HFormula l arg sty _ _) =
         (SUnary, UniArg op v1) -> 
             Atom l (UniArg op (fromHFormula v1)) sty
 
+updateHFormula :: HFormula -> [HFormula] -> [HFormula]
+updateHFormula phi@(HFormula l arg _ _ _) fmls =
+    case (l, arg) of
+        (SLiteral, CBool _) -> fmls
+        (SBinary, BinArg SAnd v1 v2) -> 
+            updateHFormula v1 (updateHFormula v2 fmls)
+        (SBinary, BinArg SOr  v1 v2) ->
+            updateHFormula v1 (updateHFormula v2 fmls)
+        _ | phi `elem` fmls -> fmls
+          | otherwise -> phi : fmls
+        
 instance Pretty HFormula where
     pPrintPrec plevel prec v = pPrintPrec plevel prec (fromHFormula v)
 

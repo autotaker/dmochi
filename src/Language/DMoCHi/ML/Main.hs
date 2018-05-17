@@ -7,7 +7,6 @@ import System.Console.GetOpt
 import Control.Monad.Except
 import Data.Monoid
 import Data.List(isSuffixOf)
-import Data.IORef
 import Data.Maybe(fromMaybe)
 import Text.PrettyPrint.HughesPJClass hiding((<>))
 import Text.Printf
@@ -34,6 +33,7 @@ import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
+import qualified Language.DMoCHi.ML.Syntax.CEGAR as CEGAR
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.AbstractSemantics as AbstSem
 import qualified Language.DMoCHi.ML.ToCEGAR as CEGAR
@@ -81,8 +81,8 @@ data Flag = Help
           | ContextSensitive 
           | Interactive
           | FoolTraces Int
-          | Fusion
-          | Incremental
+ --         | Fusion
+ --         | Incremental
           | Verbose
           | CEGARMethod CEGARMethod
           deriving Eq
@@ -96,8 +96,8 @@ data Config = Config { targetProgram :: FilePath
                      , contextSensitive :: Bool
                      , foolTraces :: Bool
                      , foolThreshold :: Int
-                     , fusion :: Bool
-                     , incremental :: Bool
+ --                    , fusion :: Bool
+ --                    , incremental :: Bool
                      , cegarMethod :: CEGARMethod
                      , verbose :: Bool
                      , interactive :: Bool }
@@ -115,8 +115,8 @@ defaultConfig path = Config { targetProgram = path
                             , contextSensitive = False
                             , foolTraces = False
                             , foolThreshold = 1
-                            , fusion = False
-                            , incremental = False
+  --                          , fusion = False
+  --                          , incremental = False
                             , verbose = False
                             , cegarMethod = DepType
                             , interactive = False }
@@ -140,8 +140,8 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
           , Option [] ["context-sensitive"] (NoArg ContextSensitive) 
                    "Enable context sensitive predicate discovery, this also enables --acc-traces flag"
           , Option [] ["fool-traces"] (OptArg (FoolTraces . fromMaybe 1 . fmap read) "N")  "Distinguish fool error traces in refinement phase, and set threshold (default = 1)"
-          , Option [] ["fusion"] (NoArg Fusion) "enable model checking fusion"
-          , Option [] ["incremental"] (NoArg Incremental) "enable incremental saturation algorithm"
+--          , Option [] ["fusion"] (NoArg Fusion) "enable model checking fusion"
+--          , Option [] ["incremental"] (NoArg Incremental) "enable incremental saturation algorithm"
           , Option ['v'] ["verbose"] (NoArg Verbose) "set pretty level to verbose"
           , Option [] ["cegar"] (ReqArg parseMethod "dep|abst") "Set CEGAR method (default = dep)"  
           , Option [] ["interactive"] (NoArg Interactive) "interactive counterexample generation" ]
@@ -177,8 +177,8 @@ parseArgs = doit
                      AccErrTraces -> acc { accErrTraces = True }
                      ContextSensitive -> acc { accErrTraces = True, contextSensitive = True }
                      FoolTraces n -> acc { foolTraces = True, foolThreshold = n }
-                     Fusion -> acc { fusion = True }
-                     Incremental -> acc { fusion = True, incremental = True }
+   --                  Fusion -> acc { fusion = True }
+   --                  Incremental -> acc { fusion = True, incremental = True }
                      Interactive -> acc { interactive = True } 
                      Help -> error "unexpected"
                      Verbose -> acc { verbose = True }
@@ -208,9 +208,18 @@ type instance Assoc CEGAR "fusion_sat" = Dict IncSat.IncSat
 type instance Assoc CEGAR "modelchecking" = Dict Boolean
 type instance Assoc CEGAR "abstractsemantics" = Dict AbstSem.AbstractSemantics
 
+data CEGARContext (method :: CEGARMethod) where
+    FusionContext :: CEGAR.Program -> HFormula.Context -> CEGARContext AbstSemantics
+    EagerContext  :: PNormal.Program -> PAbst.TypeMap -> PAbst.TypeMap -> [Horn.Clause] ->
+                     Refine.RTypeAssoc -> Refine.RPostTypeAssoc -> CEGARContext DepType
 
 verify :: Config -> IO (Either MainError (CEGARResult ()), Dict Main)
-verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_ level -> level >= LevelInfo)) $ runFreshT $ ioTracerT Dict.empty $ measure #total $ runExceptT $ do
+verify conf | verbose conf = runStdoutLoggingT doit
+            | otherwise = 
+                runStdoutLoggingT 
+                    $ filterLogger (\_ level -> level >= LevelInfo) doit
+  where 
+  doit = runFreshT $ ioTracerT Dict.empty $ measure #total $ runExceptT $ do
     -- ExceptT MainError (FreshT (TracerT c (LoggingT IO))) a
     let path = targetProgram conf
     
@@ -232,7 +241,6 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
             else withExceptT (ParseFailed. show) $ ExceptT $ liftIO $ Parser.parseProgramFromFile path
         program <$ prettyPrint "parse" "Parsed Program" program
 
--- forall f. Functor f => (a -> f a) -> b -> f b
     normalizedProgram <- measure #preprocess $ (do
         -- alpha conversion
         alphaProgram <- mapExceptT lift $ withExceptT AlphaFailed $ alpha parsedProgram
@@ -268,48 +276,89 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
 
         return _normalizedProgram) :: ExceptT MainError (FreshIO (Dict Main)) PNormal.Program
     
-    hContext <- liftIO HFormula.newContext
-
-    {- TODO: Fix this BAD HACK -}
-    currentProgramRef <- liftIO $ newIORef undefined
-
     (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
-    let mc k curTypeMap castFreeProgram 
-            | incremental conf = 
-                measure #fusion $ do
-                    unliftedProgram <- IncSat.unliftRec castFreeProgram
-                    cegarProgram <- liftIO $ CEGAR.convert hContext curTypeMap unliftedProgram
-                    liftIO $ writeIORef currentProgramRef cegarProgram
-                    (_,res) <- lift $ zoom (access' #fusion_sat Dict.empty) $ mapTracerT lift $ IncSat.saturate hContext cegarProgram
-                    logPretty "fusion" LevelDebug "result" res
-                    return (snd res)
-            | otherwise = do
-                boolProgram <- lift $ zoom (access' #abst Dict.empty) $ PAbst.abstProg curTypeMap castFreeProgram
-                prettyPrint "modelchecking" "Converted Program" boolProgram
-                case runExcept (B.tCheck boolProgram) of
-                    Left (s1,s2,str,ctx) -> do
-                        logErrorNS "typecheck" $ Text.pack $ printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
-                        forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
-                            logErrorNS "typecheck" $ Text.pack $ printf "Context %d: %s\n" i (show t)
-                        throwError $ BooleanError "Abstracted Program is ill-typed"
-                    Right _ -> return ()
-                boolProgram' <- lift $ B.liftRec boolProgram
-                prettyPrint "modelchecking" "Recursion lifted program" boolProgram'
-                let file_boolean = printf "%s_%d.bool" path k
-                liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
-                r <- mapExceptT (zoom (access' #modelchecking Dict.empty)) $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
-                return r
-        cegar _ k _  | k >= cegarLimit conf = throwError CEGARLimitExceeded
-        cegar (typeMap,typeMapFool) k (rtyAssoc0,rpostAssoc0,hcs,traces) = do
+
+    let mc :: CEGARContext method -> Int -> ExceptT MainError (FreshIO (Dict CEGAR)) (Maybe SExec.Trace)
+        mc (FusionContext cegarProgram hContext) _ = measure #fusion $ do
+            (_, res) <- lift $ zoom (access' #fusion_sat Dict.empty) 
+                            $ mapTracerT lift 
+                            $ IncSat.saturate hContext cegarProgram
+            logPretty "fusion" LevelDebug "result" res
+            return $ snd res
+        mc (EagerContext castFreeProgram typeMap typeMapFool _ _ _) k = do
+            let curTypeMap = PAbst.mergeTypeMap typeMap typeMapFool
+            boolProgram <- lift $ zoom (access' #abst Dict.empty) 
+                                $ PAbst.abstProg curTypeMap castFreeProgram
+            prettyPrint "modelchecking" "Converted Program" boolProgram
+            case runExcept (B.tCheck boolProgram) of
+                Left (s1,s2,str,ctx) -> do
+                    logErrorNS "typecheck" $ Text.pack 
+                        $ printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
+                    forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
+                        logErrorNS "typecheck" $ Text.pack $ printf "Context %d: %s\n" i (show t)
+                    throwError $ BooleanError "Abstracted Program is ill-typed"
+                Right _ -> return ()
+            boolProgram' <- lift $ B.liftRec boolProgram
+            prettyPrint "modelchecking" "Recursion lifted program" boolProgram'
+            let file_boolean = printf "%s_%d.bool" path k
+            liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
+            mapExceptT (zoom (access' #modelchecking Dict.empty)) 
+                $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
+
+        -- refine :: CEGARContext method -> Trace -> m (CEGARContext method)
+        refine :: CEGARContext method -> Int -> SExec.Trace -> Maybe Bool -> FilePath -> 
+                    ExceptT MainError (FreshIO (Dict CEGAR)) (CEGARContext method)
+        refine (FusionContext cegarProgram hContext) k trace _ _ = do
+            refinedProg <- mapExceptT (zoom (access' #abstractsemantics Dict.empty)) 
+                      $ withExceptT RefinementFailed 
+                      $ AbstSem.refine hContext currentSolver k trace cegarProgram
+            return $ FusionContext refinedProg hContext
+        refine (EagerContext castFreeProgram typeMap typeMapFool hcs
+                             rtyAssoc0 rpostAssoc0) k trace isFoolI traceFile = do
+            (isFool, clauses, assoc) <- do
+                Refine.refineCGen normalizedProgram 
+                              traceFile 
+                              (contextSensitive conf) 
+                              (foolThreshold conf) trace >>= \case
+                    Nothing -> throwError (RefinementFailed Horn.NoSolution)
+                    Just (isFool,(clauses, assoc)) -> return (isFool, clauses, assoc)
+            
+            let bf = case isFoolI of
+                    Just b -> b
+                    Nothing -> foolTraces conf && isFool
+            if bf then do
+                logInfoNS "refinement" "Fool counterexample refinement"
+                let hcs' = clauses
+                solution <- mapExceptT lift 
+                          $ withExceptT RefinementFailed 
+                          $ defaultSolver (Horn.HCCS hcs') k
+                let (rtyAssoc,rpostAssoc) = assoc
+                let typeMapFool' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMapFool
+                return $ EagerContext castFreeProgram typeMap typeMapFool' hcs rtyAssoc0 rpostAssoc0
+            else do
+                let hcs' = if accErrTraces conf then clauses ++ hcs else clauses
+                let (rtyAssoc,rpostAssoc) = 
+                        if accErrTraces conf then assoc <> (rtyAssoc0,rpostAssoc0)
+                                             else assoc
+                
+                solution <- mapExceptT lift 
+                          $ withExceptT RefinementFailed 
+                          $ currentSolver (Horn.HCCS hcs') k
+                --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
+                let typeMap' 
+                     | accErrTraces conf = 
+                        Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
+                     | otherwise         = 
+                        Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
+                return $ EagerContext castFreeProgram typeMap' typeMapFool hcs' rtyAssoc rpostAssoc
+
+    let cegarLoop :: Int -> CEGARContext method -> [SExec.Trace] -> 
+                        ExceptT MainError (FreshIO (Dict Main)) (CEGARResult ())
+        cegarLoop k _ _ | k >= cegarLimit conf = throwError CEGARLimitExceeded
+        cegarLoop k cegarContext traces = do
             update $ access' #cycles 0 %~ succ
             res <- mapExceptT (zoom (access' #cegar IM.empty . at k . non Dict.empty)) $ do
-                -- liftIO $ putStrLn "Predicate Abstracion"
-                -- liftIO $ PAbst.printTypeMap typeMap
-                let curTypeMap = PAbst.mergeTypeMap typeMap typeMapFool
-                --castFreeProgram <- lift $ PAbst.elimCast curTypeMap normalizedProgram
-                --prettyPrint "cegar" "Elim cast" castFreeProgram
-
-                mc k curTypeMap normalizedProgram >>= \case
+                mc cegarContext k >>= \case 
                     Nothing -> return Safe
                     Just trace -> measure #refine $ do
                         when (elem trace traces) $ throwError $ OtherError "No progress"
@@ -317,57 +366,16 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                         (trace,isFoolI) <- case interactive conf of
                             True -> Refine.interactiveCEGen normalizedProgram traceFile trace
                             False -> return (trace, Nothing)
-                        case cegarMethod conf of
-                            AbstSemantics -> do
-                                prog <- liftIO $ readIORef currentProgramRef
-                                res <- mapExceptT (zoom (access' #abstractsemantics Dict.empty)) 
-                                          $ withExceptT RefinementFailed 
-                                          $ fmap Just (AbstSem.refine hContext currentSolver k trace curTypeMap prog)
-                                          `catchError` (\err -> do
-                                              (_, log, _compTree) <- SExec.symbolicExec normalizedProgram trace
-                                              let cs = map SExec.fromSValue $ SExec.logCnstr log
-                                              isFeasible <- liftIO $ SMT.sat cs
-                                              if isFeasible
-                                                  then return Nothing
-                                                  else throwError err)
-                                case res of
-                                    Just typeMap' -> return $ Refine (typeMap', typeMapFool, [], [], [], trace)
-                                    Nothing -> return Unsafe
-                            DepType -> 
-                                Refine.refineCGen normalizedProgram 
-                                                  traceFile 
-                                                  (contextSensitive conf) 
-                                                  (foolThreshold conf) trace >>= \case
-                                    Nothing -> return Unsafe
-                                    Just (isFool,(clauses, assoc)) -> do
-                                        --let file_hcs_smt2 = printf "%s_%d.smt2" path k
-                                        let bf = case isFoolI of
-                                                Just b -> b
-                                                Nothing -> foolTraces conf && isFool
-                                        if bf then do
-                                            logInfoNS "refinement" "Fool counterexample refinement"
-                                            let hcs' = clauses
-                                            solution <- mapExceptT lift 
-                                                      $ withExceptT RefinementFailed 
-                                                      $ defaultSolver (Horn.HCCS hcs') k
-                                            let (rtyAssoc,rpostAssoc) = assoc
-                                            let typeMapFool' = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMapFool
-                                            return $ Refine (typeMap, typeMapFool', hcs, rtyAssoc0, rpostAssoc0, trace)
-                                        else do
-                                            let hcs' = if accErrTraces conf then clauses ++ hcs else clauses
-                                            let (rtyAssoc,rpostAssoc) = 
-                                                    if accErrTraces conf then assoc <> (rtyAssoc0,rpostAssoc0)
-                                                                         else assoc
-                                            
-                                            solution <- mapExceptT lift 
-                                                      $ withExceptT RefinementFailed 
-                                                      $ currentSolver (Horn.HCCS hcs') k
-                                            --liftIO $ writeFile file_hcs_smt2 $ Horn.renderSMTLib2 (Horn.HCCS hcs')
-                                            let typeMap' | accErrTraces conf = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap0
-                                                         | otherwise         = Refine.refine fvMap rtyAssoc rpostAssoc solution typeMap
-                                            return $ Refine (typeMap', typeMapFool, hcs', rtyAssoc, rpostAssoc, trace)
-
-                                
+                        (Refine . (,trace) <$> refine cegarContext k trace isFoolI traceFile)
+                            `catchError` (\case
+                                err@(RefinementFailed _) -> do
+                                    (_, log, _compTree) <- SExec.symbolicExec normalizedProgram trace
+                                    let cs = map SExec.fromSValue $ SExec.logCnstr log
+                                    isFeasible <- liftIO $ SMT.sat cs
+                                    if isFeasible
+                                        then return Unsafe
+                                        else throwError err
+                                err -> throwError err)
             case res of
                 Safe   -> do
                     update (access #result ?~ "Safe")
@@ -375,8 +383,15 @@ verify conf = runStdoutLoggingT $ (if verbose conf then id else filterLogger (\_
                 Unsafe -> do
                     update (access #result ?~ "Unsafe")
                     Unsafe <$ logInfoNS "result" "Unsafe" 
-                Refine (typeMap',typeMapFool', hcs', rtyAssoc, rpostAssoc, trace) ->
-                    cegar (typeMap',typeMapFool') (k+1) (rtyAssoc,rpostAssoc,hcs', trace:traces)
-    cegar (typeMap0,typeMap0) 0 ([],[],[],[])
-
-
+                Refine (cegarContext', trace) ->
+                    cegarLoop (k+1) cegarContext' (trace:traces)
+    
+    case cegarMethod conf of
+        AbstSemantics -> do
+            hContext <- liftIO HFormula.newContext
+            unliftedProgram <- IncSat.unliftRec normalizedProgram
+            cegarProgram <- liftIO $ CEGAR.convert hContext typeMap0 unliftedProgram
+            cegarLoop 0 (FusionContext cegarProgram hContext) []
+        DepType -> 
+            cegarLoop 0 (EagerContext normalizedProgram typeMap0 typeMap0 [] [] []) []
+    

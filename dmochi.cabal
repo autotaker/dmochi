@@ -65,7 +65,8 @@ library
                        optparse-applicative >= 0.12,
                        template-haskell >= 2.11,
                        json-tracer >= 0.0.3.0 && < 0.0.4,
-                       monad-logger >= 0.3.24
+                       monad-logger >= 0.3.24,
+                       mono-traversable
   build-tools:         alex, happy
   exposed-modules:     Language.DMoCHi.Common.Heap,
                        Language.DMoCHi.Common.Id,

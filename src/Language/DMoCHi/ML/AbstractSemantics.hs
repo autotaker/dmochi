@@ -15,6 +15,7 @@ import           Control.Monad.State.Strict
 import           Control.Monad.Except
 import           Text.PrettyPrint.HughesPJClass
 import           Text.Printf
+import           Data.MonoTraversable
 
 data AValue = ABase Type 
             | APair AValue AValue 
@@ -231,25 +232,46 @@ calcExp env (fml, preds) e =
         EOther SFail _ -> genFailClause (fml, preds) >> return Nothing
         EOther SOmega _ -> error "diverged"
 
+    
+
 ---- refinement
-refine :: Context -> Horn.Solver -> Int -> Trace -> TypeMap -> Program -> 
-          ExceptT Horn.SolverError (FreshIO (Dict AbstractSemantics)) TypeMap
-refine ctx solver cegarId trace typeMap prog = do
+refine :: Context -> Horn.Solver -> Int -> Trace -> Program -> 
+          ExceptT Horn.SolverError (FreshIO (Dict AbstractSemantics)) Program
+refine ctx solver cegarId trace prog = do
     (hccs, pId2key) <- lift (genConstraints ctx trace (mainTerm prog))
     preds <- mapExceptT lift $ solver hccs cegarId
-    return $ refineTypeMap pId2key preds typeMap
+    let subst = predicateMap pId2key preds
+    runHFormulaT (refineProgram subst prog) ctx
 
 refineTypeMap :: [(Int,UniqueKey)] -> [(Int, [Id], Formula)]-> TypeMap -> TypeMap
 refineTypeMap  pId2key preds = fmap conv
     where
     conv (Left pty)  = Left (refinePType subst pty)
     conv (Right tau) = Right (refineTermType subst tau)
-    g = IM.fromList pId2key
-    subst = M.fromListWith (++) [ (key, [(args,fml)]) | (pId, args, fml) <- preds, 
-                                                        let key = g IM.! pId ]
-    
+    subst = predicateMap pId2key preds
 
-refinePredicates :: M.Map UniqueKey [([Id], Atom)] -> PredTemplate -> [Formula] -> [Formula]
+predicateMap :: [(Int, UniqueKey)] -> [(Int, [Id], Formula)] -> M.Map UniqueKey [([Id], Formula)]
+predicateMap pId2key preds = subst
+    where
+    g = IM.fromList pId2key
+    subst = M.fromListWith (++) $ do
+        (pId, args, fml) <- preds
+        return (g IM.! pId, [(args,fml)])
+    
+refineProgram :: HFormulaFactory m => M.Map UniqueKey [([Id], Formula)] -> Program -> m Program
+refineProgram subst  = otraverse conv 
+    where
+    conv info = do
+        let ps = abstPredicates info
+            (key, args) = abstTemplate info
+        ps' <- case M.lookup key subst of
+            Nothing -> pure ps
+            Just preds -> foldM (\acc (args_i, fml) -> do
+                fml' <- toHFormula $ substAFormula (M.fromList $ zip args_i args) fml
+                pure (updateHFormula fml' acc)) ps preds
+        pure info{ abstPredicates = ps' }
+
+refinePredicates :: M.Map UniqueKey [([Id], Formula)] -> PredTemplate -> [Formula] -> [Formula]
 refinePredicates subst (key, args) ps =
      case M.lookup key subst of
         Nothing -> ps
