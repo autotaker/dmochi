@@ -37,6 +37,10 @@ data Cache e = Cache {
 newCache :: IO (Cache e)
 newCache = Cache <$> H.new <*> newIORef 0
 
+reserved :: Int -> a -> Identified a
+reserved key v | key < 0 = Identified v key
+               | otherwise = error "reserved: reserved key must be a negative number"
+
 {-# INLINE genEntry #-}
 genEntry :: (Eq (Key e),Hashable (Key e),MonadIO m) => Cache e -> Key e -> (Int -> m e) -> m e
 genEntry cache key cnstr = 

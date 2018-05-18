@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances, RecordWildCards #-}
+{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances, RecordWildCards, OverloadedLabels #-}
 module Language.DMoCHi.ML.IncSaturationPre where
 import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.PNormal (Atom(..))
@@ -143,7 +143,7 @@ data Node e where
     Node :: (Eq (SatType e)) => 
             { typeEnv    :: IEnv
             , constraint :: HFormula
-            , ident      :: !Int
+            , ident      :: !NodeId
             , types      :: IORef (SatType e)
             , recalcator :: R (SatType e)
             , extractor  :: Extractor e
@@ -292,16 +292,26 @@ getNode i = do
         Just v -> return v
         Nothing -> error $ "getNode: This node id " ++ (show i) ++ " is not registered!"
 
-addDep :: Int -> NodeId -> R ()
-addDep !v i = do
-    tbl <- ctxNodeDepG <$> ask 
-    liftIO $ 
-        H.lookup tbl v >>= \case
-            Nothing -> H.insert tbl v [i]
-            Just l  -> H.insert tbl v (i:l)
+setParent :: NodeId -> Node e -> R (Node e)
+setParent pId node = ask >>= \ctx -> do
+    liftIO $ insertTbl (ctxNodeDepG ctx) (nodeId node) pId
+    return node
 
-getTypes :: Node e -> R (SatType e)
+getTypes :: MonadIO m => Node e -> m (SatType e)
 getTypes (Node { types = types }) = liftIO $ readIORef types
 
-setTypes :: Node e -> SatType e -> R ()
+setTypes :: MonadIO m => Node e -> SatType e -> m ()
 setTypes (Node { types = types }) ty = liftIO $ writeIORef types ty
+
+insertTbl :: (Eq key, Hashable key) => HashTable key [a] -> key -> a -> IO ()
+insertTbl tbl key value = 
+    H.lookup tbl key >>= \case
+        Just l -> H.insert tbl key (value : l)
+        Nothing -> H.insert tbl key [value]
+
+lookupTbl :: (Eq key,Hashable key) => HashTable key [a] -> key -> IO [a]
+lookupTbl tbl key =
+    H.lookup tbl key >>= \case
+        Just l -> return l
+        Nothing -> return []
+

@@ -1,11 +1,14 @@
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveGeneric, PatternSynonyms #-}
 module Language.DMoCHi.ML.Syntax.IType(
-    IType, ITypeBody(..), 
-    ITermType, ITermTypeBody(..), 
+    IType, -- ITypeBody(..), 
+    ITermType, -- ITermTypeBody(..), 
     ITypeFactory(..),
-    genIType, genITermType, 
+    -- genIType, genITermType, 
     mkIBase, mkIPair, mkIFun,
     mkIFail, mkITerm,
+    isFail, 
+    pattern IBase, pattern IPair, pattern IFun,
+    pattern IFail, pattern ITerm,
     concatMerge, merge,
     subTypeOf, subTermTypeOf, mkIntersection, appType,
     module Language.DMoCHi.ML.Syntax.BFormula
@@ -24,10 +27,14 @@ import           Language.DMoCHi.ML.Syntax.BFormula
 type IType = Identified ITypeBody
 
 data ITypeBody 
-  = IBase
-  | IPair !IType !IType
-  | IFun  [([IType], BFormula, ITermType)]
+  = IBase'
+  | IPair' !IType !IType
+  | IFun'  [([IType], BFormula, ITermType)]
   deriving(Eq, Ord, Generic)
+
+pattern IBase <- Identified { body = IBase' }
+pattern IPair v1 v2 <- Identified { body = IPair' v1 v2 }
+pattern IFun as <- Identified { body = IFun' as }
 
 instance Hashable ITypeBody
 instance Show ITypeBody where
@@ -36,9 +43,12 @@ instance Show ITypeBody where
 type ITermType = Identified ITermTypeBody
 
 data ITermTypeBody
-  = IFail
-  | ITerm !IType !BFormula
+  = IFail'
+  | ITerm' !IType !BFormula
   deriving(Eq, Ord, Generic)
+
+pattern IFail <- Identified { body = IFail' }
+pattern ITerm ty fml <- Identified { body = ITerm' ty fml }
 
 instance Hashable ITermTypeBody
 
@@ -48,13 +58,13 @@ instance Show ITermTypeBody where
 instance Pretty ITypeBody where
     pPrintPrec plevel prec ity =
         case ity of
-            IBase -> text "base"
-            IPair ity1 ity2 -> maybeParens (prec > 0) d 
+            IBase' -> text "base"
+            IPair' ity1 ity2 -> maybeParens (prec > 0) d 
                 where
                     d1 = pPrintPrec plevel 1 ity1
                     d2 = pPrintPrec plevel 1 ity2
                     d  = d1 <+> text "*" <+> d2
-            IFun ty_assoc -> 
+            IFun' ty_assoc -> 
                 braces $ vcat $ punctuate comma $ 
                     map (\(ty_xs, fml, ty_ret) -> 
                             let d_xs = hsep $ punctuate comma (map (pPrintPrec plevel 0) ty_xs)
@@ -63,8 +73,9 @@ instance Pretty ITypeBody where
                             in braces (d_xs <+> text "|" <+> d_fml) <+> text "->" <+> d_ret) ty_assoc
 
 instance Pretty ITermTypeBody where
-    pPrintPrec _ _ IFail = text "fail"
-    pPrintPrec plevel _ (ITerm ty fml) = braces $ pPrintPrec plevel 0 ty <+> text "|" <+> text (show fml)
+    pPrintPrec _ _ IFail' = text "fail"
+    pPrintPrec plevel _ (ITerm' ty fml) = 
+        braces $ pPrintPrec plevel 0 ty <+> text "|" <+> text (show fml)
 
 
 class BFormulaFactory m => ITypeFactory m where
@@ -81,29 +92,33 @@ genITermType body = getITermCache >>= liftIO . flip genIdentified body
 
 {-# INLINE mkIPair #-}
 mkIPair :: ITypeFactory m => IType -> IType -> m IType
-mkIPair ity1 ity2 = genIType (IPair ity1 ity2)
+mkIPair ity1 ity2 = genIType (IPair' ity1 ity2)
 
 {-# INLINE mkIBase #-}
-mkIBase :: ITypeFactory m => m IType
-mkIBase = genIType IBase
+mkIBase :: IType
+mkIBase = reserved (-1) IBase'
 
 {-# INLINE mkIFun #-}
 mkIFun :: ITypeFactory m => [([IType], BFormula, ITermType)] -> m IType
-mkIFun assoc = genIType (IFun assoc)
+mkIFun assoc = genIType (IFun' assoc)
 
 {-# INLINE mkIFail #-}
-mkIFail :: ITypeFactory m => m ITermType
-mkIFail = genITermType IFail
+mkIFail :: ITermType
+mkIFail = reserved (-1) IFail'
+
+{-# INLINE isFail #-}
+isFail :: ITermType -> Bool
+isFail IFail = True
+isFail _ = False
 
 {-# INLINE mkITerm #-}
 mkITerm :: ITypeFactory m => IType -> BFormula -> m ITermType
-mkITerm ity fml = genITermType (ITerm ity fml)
+mkITerm ity fml = genITermType (ITerm' ity fml)
 
 subTypeOf :: IType -> IType -> Bool
-subTypeOf = sub `on` body
+subTypeOf = sub
     where
     sub IBase IBase = True
-    sub IBase _ = error "subTypeOf: sort mismatch"
     sub (IFun as1) (IFun as2) =
         all (\(thetas_i, fml_i, iota_i) ->
            any (\(thetas_j, fml_j, iota_j) ->
@@ -112,19 +127,16 @@ subTypeOf = sub `on` body
                iota_i `subTermTypeOf` iota_j
                ) as1
            ) as2
-    sub (IFun _) _ = error "subTypeOf: sort mismatch"
     sub (IPair ty1 ty2) (IPair ty3 ty4) = subTypeOf ty1 ty3 && subTypeOf ty2 ty4
-    sub (IPair _ _) _ = error "subTypeOf: sort mismatch"
-
+    sub ty1 ty2 = error $ "subTypeOf: sort mismatch" ++ show (ty1, ty2)
 
 subTermTypeOf :: ITermType -> ITermType -> Bool
-subTermTypeOf = sub `on` body
+subTermTypeOf = sub
     where
     sub IFail IFail = True
-    sub IFail _     = False
     sub (ITerm theta1 fml1) (ITerm theta2 fml2) =
         fml1 == fml2 && subTypeOf theta1 theta2
-    sub (ITerm _ _) _ = False
+    sub _ _     = False
 
 merge :: Ord a => [a] -> [a] -> [a]
 merge xs [] = xs
@@ -141,13 +153,12 @@ concatMerge (x:y:xs) = concatMerge (merge x y:xs)
 
 {-# INLINE mkIntersection #-}
 mkIntersection :: ITypeFactory m => IType -> IType -> m IType
+mkIntersection (IFun assoc1) (IFun assoc2) = mkIFun (merge assoc1 assoc2)
 mkIntersection ty1 ty2 = 
-    case (body ty1, body ty2) of
-        (IFun assoc1, IFun assoc2) -> mkIFun (merge assoc1 assoc2)
-        _ -> error $ "mkIntersection: defined only on function types: " ++ show (ty1, ty2)
+    error $ "mkIntersection: defined only on function types: " ++ show (ty1, ty2)
 
 appType :: IType -> [IType] -> BFormula -> [ITermType]
-appType (body -> IFun assoc) thetas phi = 
+appType (IFun assoc) thetas phi = 
     foldl' (\acc x -> x `seq` acc) () l `seq` l
     where
     l = sort [ iota | (thetas', phi', iota) <- assoc, thetas == thetas' && phi == phi' ]
