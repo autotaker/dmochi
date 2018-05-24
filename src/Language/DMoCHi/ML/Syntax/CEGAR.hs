@@ -5,6 +5,7 @@ module Language.DMoCHi.ML.Syntax.CEGAR(
     , LExpView(..), ExpView(..), ValueView(..), expView, valueView, lexpView
     , mkBin, mkUni, mkLiteral, mkVar, mkPair, mkLambda 
     , mkApp, mkLet, mkLetRec, mkAssume, mkBranch, mkBranchL, mkFail, mkOmega, mkRand
+    , mkAbstInfo, updateAbstInfo
     , Castable(..)
     , CataAtom(..), cataAtom
     , module Language.DMoCHi.ML.Syntax.Type
@@ -18,18 +19,25 @@ import GHC.Exts(Constraint)
 import Language.DMoCHi.ML.Syntax.PNormal(Atom(..), CataAtom(..), cataAtom, mkBin, mkUni, mkLiteral, mkVar, UniArg, Castable(..))
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import Language.DMoCHi.ML.Syntax.Type
-import Language.DMoCHi.ML.Syntax.PType(PredTemplate)
+import Language.DMoCHi.ML.Syntax.PType(PredTemplate,desubstFormula, substAFormula, substFormula, decomposeFormula)
 import Language.DMoCHi.ML.Syntax.Base
 import Text.PrettyPrint.HughesPJClass
+import qualified Data.Map as M
 import Data.MonoTraversable
+import Control.Monad
 import Data.Maybe
+import Text.Printf
 
 data AbstInfo 
- = AbstInfo { abstPredicates :: [HFormula.HFormula]  -- current predicates to be used
+ = AbstInfo { abstFormulas    :: [HFormula.HFormula]  -- current predicates to be used
             , abstTemplate   :: PredTemplate         -- represents P_k(a_1,...a_n) 
+            , abstPredicates :: ([TId], [Atom]) -- (xs, [p_1,..., p_m]) s.t.
+                                                     -- [a_1/x_1,...,a_n/x_n] p_i = phi_i
             }
+  | DummyInfo
 
 newtype Program = Program { mainTerm :: Exp }
+
 
 data Exp where
     Exp :: (Normalized l Exp arg
@@ -111,6 +119,7 @@ type instance Labels LExp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'App, 'Branch, '
 type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda ]
 type instance Labels Atom  = '[ 'Literal, 'Var, 'Binary, 'Unary ]
 
+
 {-# INLINE expView #-}
 expView :: Exp -> ExpView
 expView (Exp l arg sty meta key) = case l of
@@ -148,6 +157,7 @@ lexpView (LExp l arg sty _) = case l of
     SRand    -> LOther l arg
     SApp     -> LOther l arg
 
+
 mkPair :: Value -> Value -> UniqueKey -> Value
 mkPair v1@(Value _ _ sty1 _) v2@(Value _ _ sty2 _) key = Value SPair (v1, v2) (TPair sty1 sty2) key
 
@@ -183,7 +193,35 @@ mkOmega sty key = Exp SOmega () sty () key
 mkRand :: UniqueKey -> LExp
 mkRand key = LExp SRand () TInt key
 
+mkAbstInfo :: HFormula.HFormulaFactory m => [Atom] -> PredTemplate -> m AbstInfo
+mkAbstInfo ps' tmpl@(_, vs) = do
+    ps <- mapM HFormula.toHFormula ps'
+    let f :: Type -> String
+        f TBool = "b"
+        f _ = "x"
+        xs = zipWith (\(getType -> ty) i -> 
+            let name = printf "%s_%d" (f ty) i in
+            TId ty $ reserved name) vs [0::Int ..]
+        subst = M.fromList $ zip xs vs
+    return $ AbstInfo 
+        { abstFormulas = ps
+        , abstTemplate = tmpl
+        , abstPredicates = (xs, map (desubstFormula subst) ps')
+        }
 
+updateAbstInfo :: HFormula.HFormulaFactory m => [([TId], Atom)] -> AbstInfo -> m AbstInfo
+updateAbstInfo _ DummyInfo = pure DummyInfo
+updateAbstInfo preds (AbstInfo ps tmpl (xs,fs)) = do
+    (ps',fs') <- foldM (\(ps, fs) (ys, fml) -> do
+        let fml' = substFormula (M.fromList $ zip ys xs) fml
+        fml'' <- HFormula.toHFormula $ substAFormula (M.fromList $ zip ys (snd tmpl)) fml
+        if fml'' `elem` ps 
+            then pure (ps, fs)
+            else pure (fml'' : ps, fml' : fs)
+        ) (ps, fs) [ (ys, fml) | (ys, fml') <- preds
+                               , fml <- decomposeFormula fml' [] ]
+    pure $ AbstInfo ps' tmpl (xs, fs')       
+    
 instance HasType Exp where
     getType (Exp _ _ sty _ _) = sty
 instance HasType Value where
@@ -221,10 +259,13 @@ instance Castable Value Exp where
         SPair -> Exp l arg sty info key
 
 instance Pretty AbstInfo where
-    pPrint (AbstInfo ps (key,vs)) =
-        -- [ p_1, ..., p_k; P_k(v1,...,v_n) ]
-        brackets $ (hsep $ punctuate comma (map pPrint ps)) <> semi <+> dTemp 
+    pPrint (AbstInfo ps (key,vs) (xs,qs)) =
+        -- [ p_1, ..., p_k; P_k(v1,...,v_n); (xs,qs) ]
+        brackets $ 
+            (hsep $ punctuate comma (map pPrint ps)) <> semi $+$ 
+                dTemp <> semi $+$ pPrint (xs, qs)
         where dTemp = text "P_" <> pPrint key <> parens (hsep $ punctuate comma (map pPrint vs))
+    pPrint DummyInfo = empty
 
 instance Pretty Exp where
     pPrint e = case expView e of

@@ -72,6 +72,7 @@ library
                        Language.DMoCHi.Common.Id,
                        Language.DMoCHi.Common.Util,
                        Language.DMoCHi.Common.Cache,
+                       Language.DMoCHi.Common.Sized,
                        Language.DMoCHi.ML.Syntax.Base,
                        Language.DMoCHi.ML.Syntax.UnTyped,
                        Language.DMoCHi.ML.Syntax.Type,

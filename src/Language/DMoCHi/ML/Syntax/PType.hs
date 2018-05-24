@@ -6,10 +6,12 @@ import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.ML.Syntax.PNormal
 -- import Language.DMoCHi.ML.PrettyPrint.PNormal
 import Language.DMoCHi.Common.Id hiding(Id)
+import Language.DMoCHi.Common.Sized
 import qualified Data.Map as M
 
 import Text.PrettyPrint.HughesPJClass
 import Control.Monad.Writer
+import Data.List(sortOn)
 import Data.Proxy
 import qualified Data.DList as DL
 --import Debug.Trace
@@ -408,4 +410,28 @@ extendEnvByLet tbl env x e = M.insert x x_ty env
         LOther SFail _   -> defaultCase
         LOther SOmega _  -> defaultCase
 
-    
+desubstFormula :: M.Map TId Atom -> Atom -> Atom
+desubstFormula env atom = foldr f atom assocs
+    where
+    assocs = sortOn (getSize.snd) $ M.assocs env
+    f :: (TId, Atom) -> Atom -> Atom
+    f (x, v) a@(Atom l arg _)
+        | a == v = mkVar x
+        | otherwise = 
+            case l of 
+                SLiteral -> a
+                SVar -> a
+                SBinary | BinArg op a1 a2 <- arg -> 
+                    mkBin op (f (x, v) a1) (f (x, v) a2)
+                SUnary  | UniArg op a1 <- arg ->
+                    mkUni op (f (x, v) a1)
+
+decomposeFormula :: Formula -> [Formula] -> [Formula]
+decomposeFormula a@(Atom l arg _) acc =
+    case (l, arg) of
+        (SLiteral, _) -> acc
+        (SBinary, BinArg SAnd a1 a2) -> 
+            decomposeFormula a1 (decomposeFormula a2 acc)
+        (SBinary, BinArg SOr a1 a2) -> 
+            decomposeFormula a1 (decomposeFormula a2 acc)
+        (_, _) -> a : acc

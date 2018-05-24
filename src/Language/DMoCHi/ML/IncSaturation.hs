@@ -109,7 +109,7 @@ calcPair env fml pId (v1,v2) = do
     
 calcLambda :: IEnv -> HFormula -> NodeId -> UniqueKey -> ([TId], AbstInfo, Exp) -> R (R IType, ValueExtractor, R ())
 calcLambda env fml pId key (xs, _abstInfo, e) = do
-    let ps = abstPredicates _abstInfo
+    let ps = abstFormulas _abstInfo
     tbl <- liftIO H.new
     ask >>= \ctx -> liftIO $ insertTbl (ctxFlowReg ctx) key pId
     let recalc = do
@@ -150,7 +150,7 @@ bindTermType f tys = fmap concatMerge $ forM tys $ \case
     ITerm ity phi -> f ity phi
     _ -> undefined -- impossible
 
-calcLet :: IEnv -> HFormula -> Int -> (TId, LExp,AbstInfo, Exp) 
+calcLet :: IEnv -> HFormula -> Int -> (TId, LExp, AbstInfo, Exp) 
             -> R ([ITermType], R [ITermType], TermExtractor, R ())
 calcLet env fml pId  (x, e1, _abstInfo, e2) = 
     calcLExp env fml x e1 >>= \case
@@ -164,7 +164,7 @@ calcLet env fml pId  (x, e1, _abstInfo, e2) =
             return (tys,  recalc, extract, destructor node2)
         Right node1 -> do 
             _ <- setParent pId node1
-            let ps = abstPredicates _abstInfo
+            let ps = abstFormulas _abstInfo
             tbl <- liftIO H.new :: R (HashTable (IType, BFormula) ExpNode)
             let calc :: [ITermType] -> R [ITermType]
                 calc = bindTermType $ \ity phi -> -- TODO: あるケースが参照されなくなったらdestructする
@@ -288,7 +288,7 @@ calcAssume env fml pId (a, e) = do
 calcApp :: IEnv -> HFormula -> NodeId -> (TId, AbstInfo, [Value]) -> R ([ITermType], R [ITermType], TermExtractor, R ())
 calcApp env fml pId (f, _abstInfo, vs) = do
     let ity_f = env ! f
-    let ps = abstPredicates _abstInfo
+    let ps = abstFormulas _abstInfo
     phi <- calcCondition fml ps
     nodes <- forM vs $ \v -> calcValue env fml v >>= setParent pId
     flow <- (!f) . ctxFlowMap <$> ask
@@ -363,7 +363,7 @@ calcExp env fml exp =
     genNode $ \nodeIdent -> do
         (itys,recalc, extract, destruct) <- case expView exp of
             EValue v _info -> 
-                let ps = abstPredicates _info in
+                let ps = abstFormulas _info in
                 case valueView v of
                     VAtom atom -> do
                         let ity = calcAtom env atom

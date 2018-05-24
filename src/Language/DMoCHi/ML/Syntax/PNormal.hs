@@ -16,6 +16,7 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
 -- import Control.Monad
 import Language.DMoCHi.Common.Id
 import Language.DMoCHi.Common.Util
+import Language.DMoCHi.Common.Sized
 -- import qualified Data.Map as M
 import qualified Data.Set as S
 import GHC.Exts(Constraint)
@@ -130,6 +131,14 @@ type instance Ident  Exp = TId
 type instance Ident  LExp = TId
 type instance Ident  Value = TId
 type instance Ident  Atom = TId
+
+instance Sized Atom where
+    getSize (Atom l arg _) =
+        case l of
+            SLiteral -> 1
+            SVar     -> 1
+            SBinary | BinArg _ a1 a2 <- arg -> 1 + getSize a1 + getSize a2
+            SUnary  | UniArg _ a1 <- arg -> 1 + getSize a1
 
 {-# INLINE expView #-}
 expView :: Exp -> ExpView

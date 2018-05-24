@@ -177,7 +177,7 @@ calcLExp env (fml, preds) x e =
         LOther SRand _ -> return (Left (ABase TInt, fml))
         LOther SApp (f, info_arg, vs) -> do
             -- caller site
-            let ps = abstPredicates info_arg
+            let ps = abstFormulas info_arg
                 scope = Scope $ snd $ abstTemplate info_arg
                 avs = map (calcValue env (fml, preds)) vs
             pGenArg <- newPGen (Unique (fst (abstTemplate info_arg)))
@@ -185,7 +185,7 @@ calcLExp env (fml, preds) x e =
             genClause (fml, preds) (pGenArg scope)
             -- callee site
             let ACls env1 (fml1, preds1) info_arg' (xs, _, e1) = env M.! f
-                ps' = abstPredicates info_arg'
+                ps' = abstFormulas info_arg'
                 scope' = Scope $ snd $ abstTemplate info_arg'
                 env1' = extendEnv env1 $ zip xs avs
                 preds1' = pGenArg scope' : preds1
@@ -201,7 +201,7 @@ calcExp :: Env -> Constraint -> Exp -> M (Maybe (AValue, BFormula, (Scope -> Pre
 calcExp env (fml, preds) e = 
     case expView e of
         EValue v info -> do
-            let ps = abstPredicates info
+            let ps = abstFormulas info
                 scope = Scope $ snd $ abstTemplate info
             phi <- lift (calcCondition fml ps)
             let av = calcValue env (fml, preds) v
@@ -213,7 +213,7 @@ calcExp env (fml, preds) e =
                 Left (av,fml') -> calcExp (M.insert x av env) (fml', preds) e2
                 Right Nothing -> return Nothing
                 Right (Just (av, bfml, pGen')) -> do
-                    let ps = abstPredicates info
+                    let ps = abstFormulas info
                         scope = Scope $ snd $ abstTemplate info
                     fml' <- lift $ mkBin SAnd fml =<< fromBFormula ps bfml
                     let env' = M.insert x av env
@@ -254,16 +254,15 @@ predicateMap pId2key preds = subst
 refineProgram :: HFormulaFactory m => M.Map UniqueKey [([Id], Formula)] -> Program -> m Program
 refineProgram subst  = otraverse conv 
     where
-    conv info = do
-        let ps = abstPredicates info
+    conv DummyInfo = pure DummyInfo
+    conv info = 
+        let ps = abstFormulas info
             (key, args) = abstTemplate info
-        ps' <- case M.lookup key subst of
-            Nothing -> pure ps
-            Just preds -> foldM (\acc (args_i, fml) -> do
-                fml' <- toHFormula $ substAFormula (M.fromList $ zip args_i args) fml
-                pure (updateHFormula fml' acc)) ps preds
-        pure info{ abstPredicates = ps' }
+        in case M.lookup key subst of
+            Nothing -> pure info
+            Just preds -> updateAbstInfo preds info
 
+{-
 refinePredicates :: M.Map UniqueKey [([Id], Formula)] -> PredTemplate -> [Formula] -> [Formula]
 refinePredicates subst (key, args) ps =
      case M.lookup key subst of
@@ -273,7 +272,6 @@ refinePredicates subst (key, args) ps =
                         updateFormula fml' acc) ps fmls
             
 
-{-
 refineTypeMap :: [(Int,UniqueKey)] -> [(Int, [Id], Formula)]-> TypeMap -> TypeMap
 refineTypeMap  pId2key preds = fmap conv
     where

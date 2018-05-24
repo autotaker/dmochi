@@ -2,7 +2,7 @@ module Language.DMoCHi.ML.ToCEGAR(convert) where
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as From
 import qualified Language.DMoCHi.ML.Syntax.CEGAR   as To
-import           Language.DMoCHi.ML.Syntax.HFormula(HFormulaFactory(..), toHFormula, runHFormulaT, Context)
+import           Language.DMoCHi.ML.Syntax.HFormula(HFormulaFactory(..), runHFormulaT, Context)
 import           Language.DMoCHi.ML.Syntax.Base
 import           Language.DMoCHi.ML.Syntax.PType
 import           Language.DMoCHi.ML.Syntax.PNormal(Castable(..))
@@ -26,8 +26,7 @@ convertV typeMap env v sigma =
             let PFun _ (_, ptys_xs, ps, pred_tmpl_xs) tau = alphaConvFun xs sigma
                 env' = extendEnv env (zip xs ptys_xs)
             e' <- convertE typeMap env' e tau
-            info <- fmap (\ps -> To.AbstInfo ps pred_tmpl_xs) 
-                    $ mapM toHFormula ps
+            info <- To.mkAbstInfo ps pred_tmpl_xs
             return $ To.mkLambda xs info e' key
         From.VOther SPair (v1, v2) -> do
             let PPair _ sigma1 sigma2 = sigma
@@ -43,8 +42,7 @@ convertE typeMap env e tau =
         From.EValue v -> do
             let (rty, ps, pred_tmpl) = betaConv v tau
             v' <- convertV typeMap env v rty 
-            info <- fmap (\ps -> To.AbstInfo ps pred_tmpl) 
-                    $ mapM toHFormula ps
+            info <- To.mkAbstInfo ps pred_tmpl
             return $ castWith info v'
         From.EOther SLetRec (fs, e2) -> do
             let as = [ (f, pty_f)  | (f, v_f) <- fs, 
@@ -65,8 +63,8 @@ convertE typeMap env e tau =
         From.EOther SLet (x, e1, e2) -> 
             case From.lexpView e1 of
                 From.LValue (From.valueView -> From.VAtom a) -> do
-                    let info = To.AbstInfo [] dummyPredTemplate
-                        pty_x = typeOfAtom env a
+                    let info = To.DummyInfo
+                    let pty_x = typeOfAtom env a
                     e2' <- convertE typeMap (M.insert x pty_x env) e2 tau
                     return $ To.mkLet x (castWith (getUniqueKey e1) a) info e2' key
                 From.LValue _ -> error "RHS of let-binding must not be a pair nor a lambda-abst"
@@ -74,15 +72,13 @@ convertE typeMap env e tau =
                     let ((ptys_vs, ps, pred_tmpl_arg), ty_ret) = appPType (env M.! f) vs
                         (pty_x, qs, pred_tmpl_ret) = alphaConv x ty_ret
                     vs' <- zipWithM (convertV typeMap env) vs ptys_vs
-                    info_arg <- fmap (\ps -> To.AbstInfo ps pred_tmpl_arg) 
-                                $ mapM toHFormula ps
+                    info_arg <- To.mkAbstInfo ps pred_tmpl_arg
                     let e1' = To.mkApp f info_arg vs' (getUniqueKey e1)
                     e2' <- convertE typeMap (M.insert x pty_x env) e2 tau
-                    info_ret <- fmap (\qs -> To.AbstInfo qs pred_tmpl_ret) $ 
-                                mapM toHFormula qs
+                    info_ret <- To.mkAbstInfo qs pred_tmpl_ret
                     return $ To.mkLet x e1' info_ret e2' key
                 From.LOther SRand () -> do
-                    let info = To.AbstInfo [] dummyPredTemplate
+                    let info = To.DummyInfo
                     e2' <- convertE typeMap (M.insert x PInt env) e2 tau
                     return $ To.mkLet x (To.mkRand (getUniqueKey e1)) info e2' key
                 From.LOther SBranch (e_l, e_r) -> do
@@ -91,8 +87,7 @@ convertE typeMap env e tau =
                     e_l' <- convertE typeMap env e_l tau1
                     e_r' <- convertE typeMap env e_r tau1
                     e2' <- convertE typeMap (M.insert x pty_x env) e2 tau
-                    info <- fmap (\ps -> To.AbstInfo ps pred_tmpl_x) 
-                            $ mapM toHFormula ps 
+                    info <- To.mkAbstInfo ps pred_tmpl_x 
                     return $ To.mkLet x (To.mkBranchL e_l' e_r' key1) info e2' key
                 From.LOther SOmega _ -> return $ To.mkOmega (getType e) key
                 From.LOther SFail  _ -> return $ To.mkFail  (getType e) key
