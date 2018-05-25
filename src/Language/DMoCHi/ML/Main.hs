@@ -45,6 +45,7 @@ import qualified Language.DMoCHi.ML.SymbolicExec as SExec
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
 import qualified Language.DMoCHi.ML.EtaNormalize as Eta
 import qualified Language.DMoCHi.ML.ConstPropagation as ConstProp
+import qualified Language.DMoCHi.ML.PredicateGeneralizer as PredicateGen
 import qualified Language.DMoCHi.ML.TailOptimization as TailOpt
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
@@ -206,6 +207,7 @@ type instance Assoc CEGAR "abst" = Dict PAbst.Abst
 type instance Assoc CEGAR "fusion" = NominalDiffTime
 type instance Assoc CEGAR "fusion_sat" = Dict IncSat.IncSat
 type instance Assoc CEGAR "modelchecking" = Dict Boolean
+type instance Assoc CEGAR "predicategeneralizer" = Dict (PredicateGen.PredicateGeneralizer)
 type instance Assoc CEGAR "abstractsemantics" = Dict AbstSem.AbstractSemantics
 
 data CEGARContext (method :: CEGARMethod) where
@@ -312,6 +314,8 @@ verify conf | verbose conf = runStdoutLoggingT doit
             refinedProg <- mapExceptT (zoom (access' #abstractsemantics Dict.empty)) 
                       $ withExceptT RefinementFailed 
                       $ AbstSem.refine hContext currentSolver k trace cegarProgram
+            lift $ zoom (access' #predicategeneralizer Dict.empty) $
+                PredicateGen.calc hContext [trace] refinedProg
             return $ FusionContext refinedProg hContext
         refine (EagerContext castFreeProgram typeMap typeMapFool hcs
                              rtyAssoc0 rpostAssoc0) k trace isFoolI traceFile = do

@@ -21,7 +21,6 @@ data AValue = ABase Type
             | APair AValue AValue 
             | ACls { _clsEnv :: Env
                    , _clsConstraint :: Constraint
-                   , _clsAbstInfo :: AbstInfo
                    , _clsBody :: ([TId], AbstInfo, Exp) }
 
 data AbstractSemantics
@@ -159,7 +158,7 @@ calcValue :: Env -> Constraint -> Value -> AValue
 calcValue env c v =
     case valueView v of
         VAtom a -> calcAtom env a
-        VOther SLambda (xs, info, e) -> ACls env c info ({-getUniqueKey v,-} xs, info, e)
+        VOther SLambda (xs, info, e) -> ACls env c ({-getUniqueKey v,-} xs, info, e)
         VOther SPair (v1, v2) -> APair (calcValue env c v1) (calcValue env c v2)
 
 {-# INLINE calcLExp #-}
@@ -184,7 +183,7 @@ calcLExp env (fml, preds) x e =
             phi <- lift $ calcCondition fml ps
             genClause (fml, preds) (pGenArg scope)
             -- callee site
-            let ACls env1 (fml1, preds1) info_arg' (xs, _, e1) = env M.! f
+            let ACls env1 (fml1, preds1) (xs, info_arg', e1) = env M.! f
                 ps' = abstFormulas info_arg'
                 scope' = Scope $ snd $ abstTemplate info_arg'
                 env1' = extendEnv env1 $ zip xs avs
@@ -208,7 +207,7 @@ calcExp env (fml, preds) e =
             pGen <- newPGen (Unique (fst (abstTemplate info)))
             genClause (fml, preds) (pGen scope)
             return (Just (av, phi, pGen))
-        EOther SLet (x, e1, info, e2) -> do
+        EOther SLet (x, e1, info, e2) ->
             calcLExp env (fml, preds) x e1 >>= \case
                 Left (av,fml') -> calcExp (M.insert x av env) (fml', preds) e2
                 Right Nothing -> return Nothing
@@ -220,7 +219,7 @@ calcExp env (fml, preds) e =
                         preds' = pGen' scope : preds
                     calcExp env' (fml', preds') e2
         EOther SLetRec (fs, e1) -> do
-            let env' = foldr (uncurry M.insert) env [ (f, calcValue env' (fml, preds) v) | (f,v) <- fs ]
+            let env' = extendEnv env [ (f, calcValue env' (fml, preds) v) | (f,v) <- fs ]
             calcExp env' (fml, preds) e1
         EOther SAssume (cond, e1) -> do
             fml' <- lift $ mkBin SAnd fml =<< toHFormula cond
@@ -256,8 +255,7 @@ refineProgram subst  = otraverse conv
     where
     conv DummyInfo = pure DummyInfo
     conv info = 
-        let ps = abstFormulas info
-            (key, args) = abstTemplate info
+        let (key, _) = abstTemplate info
         in case M.lookup key subst of
             Nothing -> pure info
             Just preds -> updateAbstInfo preds info
