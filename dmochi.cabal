@@ -67,7 +67,8 @@ library
                        json-tracer >= 0.0.3.0 && < 0.0.4,
                        monad-logger >= 0.3.24,
                        mono-traversable,
-                       atto-lisp
+                       atto-lisp,
+                       attoparsec
 
   build-tools:         alex, happy
   exposed-modules:     Language.DMoCHi.Common.Heap,

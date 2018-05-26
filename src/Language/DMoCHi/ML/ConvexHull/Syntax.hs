@@ -2,9 +2,10 @@ module Language.DMoCHi.ML.ConvexHull.Syntax where
 
 import Language.DMoCHi.ML.Syntax.PNormal
 import Data.AttoLisp
-import Data.Text(Text)
+import Data.Text(Text, unpack)
 import qualified Data.Map as M
 import Control.Monad
+--import Debug.Trace
 
 type DNFFormula = [[Atom]]
 
@@ -16,7 +17,7 @@ type LinearExp = ([(TId, Integer)], Integer)
 convLinearExp :: Text -> LinearExp -> Lisp
 convLinearExp op (l, v) = List [Symbol op, l', toLisp v]
     where
-    l' = List $ map (\(x, c) -> List [Symbol "*", toLisp c, toLisp (show x)]) l
+    l' = List $ map (\(x, c) -> List [Symbol "*", toLisp c, toLisp (show (name x))]) l
 
 addLinear :: LinearExp -> LinearExp -> LinearExp
 addLinear (xs,c1) (ys, c2) = (xs ++ ys, c1 + c2)
@@ -81,7 +82,7 @@ convFormula a@(Atom l arg _) =
 instance ToLisp Query where
     toLisp (Query vs dnf) = List (Symbol "q" : toLisp vs' : dnfLisp)
         where
-        vs' = [ toLisp (show x) | x <- vs, getType x == TInt ]
+        vs' = [ toLisp (show (name x)) | x <- vs, getType x == TInt ]
         dnfLisp = map (\cls -> List $ cls >>= convFormula) dnf
 
 
@@ -93,8 +94,12 @@ parseAnswer _ _ = mzero
 fromLinear :: LinearExp -> Atom
 fromLinear (xs,c) = 
     let acc0 = mkLiteral (CInt c) in
-    foldr (\(x,v) acc -> 
+    foldl (\acc (x,v) -> 
         mkBin SAdd (mkBin SMul (mkLiteral (CInt v)) (mkVar x)) acc) acc0 xs
+
+parseVar :: M.Map String TId -> Lisp -> Parser TId
+parseVar env (Symbol x) = pure $ env M.! (unpack x)
+parseVar _ _ = mzero
 
 parseLinear :: M.Map String TId -> Lisp -> Parser Atom
 parseLinear env (List [Symbol op, List l, c]) = do
@@ -104,10 +109,8 @@ parseLinear env (List [Symbol op, List l, c]) = do
         ">" -> pure $ mkBin SLt (mkLiteral (CInt 0)) (fromLinear lin)
         ">=" -> pure $ mkBin SLte (mkLiteral (CInt 0)) (fromLinear lin)
         _ -> mzero
-    where f (List [Symbol "*", c, x]) = do
-            x <- parseLisp x
-            c <- parseLisp c
-            pure (env M.! x, c)
+    where f (List [Symbol "*", c, x]) = 
+            (,) <$> parseVar env x <*> parseLisp c
           f _ = mzero
 parseLinear _ _ = mzero
 

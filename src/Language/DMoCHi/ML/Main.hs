@@ -49,9 +49,11 @@ import qualified Language.DMoCHi.ML.PredicateGeneralizer as PredicateGen
 import qualified Language.DMoCHi.ML.TailOptimization as TailOpt
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
+import qualified Language.DMoCHi.ML.ConvexHull.Solver as ConvexHull
 import qualified Language.DMoCHi.ML.SMT as SMT
 
 import qualified Language.DMoCHi.ML.HornClause as Horn
+import Control.Exception(bracket)
 
 data MainError = NoInputSpecified
                | ParseFailed String
@@ -107,6 +109,9 @@ data Config = Config { targetProgram :: FilePath
 getHCCSSolver :: IO FilePath
 --getHCCSSolver = Paths_dmochi.getDataFileName "hcsolver"
 getHCCSSolver = return "rcaml.opt"
+
+getConvexHullSolver :: IO FilePath
+getConvexHullSolver = return "convex-hull"
 
 defaultConfig :: FilePath -> Config
 defaultConfig path = Config { targetProgram = path
@@ -216,12 +221,19 @@ data CEGARContext (method :: CEGARMethod) where
                      Refine.RTypeAssoc -> Refine.RPostTypeAssoc -> CEGARContext DepType
 
 verify :: Config -> IO (Either MainError (CEGARResult ()), Dict Main)
-verify conf | verbose conf = runStdoutLoggingT doit
-            | otherwise = 
-                runStdoutLoggingT 
-                    $ filterLogger (\_ level -> level >= LevelInfo) doit
+verify conf = setup doit
   where 
-  doit = runFreshT $ ioTracerT Dict.empty $ measure #total $ runExceptT $ do
+  setup cont = 
+    bracket 
+        (getConvexHullSolver >>= ConvexHull.convexHullSolver)
+        (\(_, exit) -> exit)
+        (\(solver, _) -> 
+            if verbose conf 
+                then runStdoutLoggingT (cont solver)
+                else runStdoutLoggingT 
+                        $ filterLogger (\_ level -> level >= LevelInfo) 
+                        $ cont solver)
+  doit convexHullSolver = runFreshT $ ioTracerT Dict.empty $ measure #total $ runExceptT $ do
     -- ExceptT MainError (FreshT (TracerT c (LoggingT IO))) a
     let path = targetProgram conf
     
@@ -315,7 +327,7 @@ verify conf | verbose conf = runStdoutLoggingT doit
                       $ withExceptT RefinementFailed 
                       $ AbstSem.refine hContext currentSolver k trace cegarProgram
             lift $ zoom (access' #predicategeneralizer Dict.empty) $
-                PredicateGen.calc hContext [trace] refinedProg
+                PredicateGen.calc hContext convexHullSolver [trace] refinedProg
             return $ FusionContext refinedProg hContext
         refine (EagerContext castFreeProgram typeMap typeMapFool hcs
                              rtyAssoc0 rpostAssoc0) k trace isFoolI traceFile = do

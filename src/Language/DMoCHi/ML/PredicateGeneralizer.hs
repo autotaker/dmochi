@@ -7,6 +7,9 @@ import           Data.PolyDict(Dict)
 import           Language.DMoCHi.ML.Syntax.HFormula hiding(mkUni)
 import           Language.DMoCHi.ML.Syntax.IType
 import           Control.Monad.State.Strict
+import           Control.Monad.Except
+import qualified Language.DMoCHi.ML.ConvexHull.Syntax as ConvexHull
+import qualified Language.DMoCHi.ML.ConvexHull.Solver as ConvexHull
 
 
 data AValue = ABase 
@@ -19,7 +22,7 @@ data PredicateGeneralizer
 
 data AState = 
     AState { stTrace :: [Bool]
-           , stConditions :: M.Map UniqueKey DNFFormula }
+           , stConditions :: M.Map UniqueKey ([TId],DNFFormula) }
 type M a = StateT AState (HFormulaT (FreshIO (Dict PredicateGeneralizer))) a
 type Trace = [Bool]
 
@@ -34,22 +37,22 @@ consume :: M Bool
 consume = state $ \st -> (head (stTrace st), st { stTrace = tail (stTrace st) })
 
 addCondition :: AbstInfo -> BFormula -> M ()
-addCondition info phi = do
+addCondition info phi = unless (dnf == [] || dnf == [[]]) $ do
     logPretty "PredicateGeneralizer" LevelDebug "addCondition" (key, dnf)
     state $ \st -> 
-        ((), st { stConditions = M.insertWith (++) key dnf (stConditions st) })
+        ((), st { stConditions = M.insertWith update key (xs, dnf) (stConditions st) })
     where
-    (_, as) = abstPredicates info
+    (xs, as) = abstPredicates info
     f i = if i > 0 then fml
                    else mkUni SNot fml
         where fml = as !! (abs i - 1)
     dnf = map (map f) $ toDNF phi 
     key = fst (abstTemplate info)
+    update (xs, dnf1) (_, dnf2) = (xs, dnf1 ++ dnf2)
 
-
-calc :: Context -> [Trace] -> Program 
-        -> FreshIO (Dict PredicateGeneralizer) [(UniqueKey, DNFFormula)]
-calc ctx traces prog = runHFormulaT doit ctx
+calc :: Context -> ConvexHull.Solver -> [Trace] -> Program 
+        -> FreshIO (Dict PredicateGeneralizer) [(UniqueKey, ([TId], DNFFormula))]
+calc ctx solver traces prog = runHFormulaT doit ctx
     where
     doit = do
         v_true <- mkLiteral (CBool True)
@@ -58,13 +61,19 @@ calc ctx traces prog = runHFormulaT doit ctx
             forM_ traces $ \trace -> do
                 setTrace trace
                 calcExp M.empty v_true (mainTerm prog)
+        forM_ (M.assocs (stConditions st)) $ \(_key, (xs, dnf)) -> do
+            let q = ConvexHull.Query xs dnf
+            unless (dnf == [] || dnf == [[]]) $ do
+                lift $ lift $ runExceptT (solver q) >>= \case
+                    Left err -> logPretty "convexhull" LevelError "error" (show err)
+                    Right (ConvexHull.Answer answer) -> logPretty "convexhull" LevelInfo "result" answer
         return $ M.assocs $ stConditions st
 
 calcAtom :: Env -> Atom -> AValue
 calcAtom env (Atom l arg _) =
     case (l, arg) of
         (SLiteral, _ ) -> ABase
-        (SVar, x ) -> env M.! x
+        (SVar, x) -> env M.! x
         (SUnary, UniArg SFst a) -> 
             let APair a1 _ = calcAtom env a in a1
         (SUnary, UniArg SSnd a) -> 
