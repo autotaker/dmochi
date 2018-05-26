@@ -27,6 +27,8 @@ import Data.MonoTraversable
 import Control.Monad
 import Data.Maybe
 import Text.Printf
+import Debug.Trace
+
 
 data AbstInfo 
  = AbstInfo { abstFormulas    :: [HFormula.HFormula]  -- current predicates to be used
@@ -35,6 +37,7 @@ data AbstInfo
                                                      -- [a_1/x_1,...,a_n/x_n] p_i = phi_i
             }
   | DummyInfo
+  deriving(Show)
 
 newtype Program = Program { mainTerm :: Exp }
 
@@ -211,7 +214,7 @@ mkAbstInfo ps' tmpl@(_, vs) = do
 
 updateAbstInfo :: HFormula.HFormulaFactory m => [([TId], Atom)] -> AbstInfo -> m AbstInfo
 updateAbstInfo _ DummyInfo = pure DummyInfo
-updateAbstInfo preds (AbstInfo ps tmpl (xs,fs)) = do
+updateAbstInfo preds info@(AbstInfo ps tmpl (xs,fs)) = do
     (ps',fs') <- foldM (\(ps, fs) (ys, fml) -> do
         let fml' = substFormula (M.fromList $ zip ys xs) fml
         fml'' <- HFormula.toHFormula $ substAFormula (M.fromList $ zip ys (snd tmpl)) fml
@@ -220,7 +223,7 @@ updateAbstInfo preds (AbstInfo ps tmpl (xs,fs)) = do
             else pure (fml'' : ps, fml' : fs)
         ) (ps, fs) [ (ys, fml) | (ys, fml') <- preds
                                , fml <- decomposeFormula fml' [] ]
-    pure $ AbstInfo ps' tmpl (xs, fs')       
+    pure $ AbstInfo ps' tmpl (xs, fs') 
     
 instance HasType Exp where
     getType (Exp _ _ sty _ _) = sty
@@ -376,7 +379,7 @@ instance MonoTraversable Exp where
     otraverse f e =
         let key = getUniqueKey e in
         case expView e of
-            EValue v meta -> (\meta' -> castWith meta' v) <$> f meta
+            EValue v meta -> castWith <$> f meta <*> otraverse f v
             EOther SLet (x, e1, meta, e2) -> 
                 mkLet x <$> otraverse f e1 
                         <*> f meta

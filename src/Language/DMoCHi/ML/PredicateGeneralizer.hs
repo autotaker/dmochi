@@ -10,6 +10,8 @@ import           Control.Monad.State.Strict
 import           Control.Monad.Except
 import qualified Language.DMoCHi.ML.ConvexHull.Syntax as ConvexHull
 import qualified Language.DMoCHi.ML.ConvexHull.Solver as ConvexHull
+import           Data.MonoTraversable
+import Debug.Trace
 
 
 data AValue = ABase 
@@ -45,13 +47,13 @@ addCondition info phi = unless (dnf == [] || dnf == [[]]) $ do
     (xs, as) = abstPredicates info
     f i = if i > 0 then fml
                    else mkUni SNot fml
-        where fml = as !! (abs i - 1)
+        where fml = traceShow (as,i) $ as !! (abs i - 1)
     dnf = map (map f) $ toDNF phi 
     key = fst (abstTemplate info)
     update (xs, dnf1) (_, dnf2) = (xs, dnf1 ++ dnf2)
 
 calc :: Context -> ConvexHull.Solver -> [Trace] -> Program 
-        -> FreshIO (Dict PredicateGeneralizer) [(UniqueKey, ([TId], DNFFormula))]
+        -> FreshIO (Dict PredicateGeneralizer) Program
 calc ctx solver traces prog = runHFormulaT doit ctx
     where
     doit = do
@@ -61,13 +63,28 @@ calc ctx solver traces prog = runHFormulaT doit ctx
             forM_ traces $ \trace -> do
                 setTrace trace
                 calcExp M.empty v_true (mainTerm prog)
-        forM_ (M.assocs (stConditions st)) $ \(_key, (xs, dnf)) -> do
-            let q = ConvexHull.Query xs dnf
-            unless (dnf == [] || dnf == [[]]) $ do
-                lift $ lift $ runExceptT (solver q) >>= \case
-                    Left err -> logPretty "convexhull" LevelError "error" (show err)
-                    Right (ConvexHull.Answer answer) -> logPretty "convexhull" LevelInfo "result" answer
-        return $ M.assocs $ stConditions st
+        let conv DummyInfo = pure DummyInfo
+            conv info = 
+                let (key, _) = abstTemplate info 
+                    (ys, _)  = abstPredicates info
+                in
+                case M.lookup key (stConditions st) of
+                    Just (xs, dnf) 
+                      | not (dnf == [] || dnf == [[]]) -> do
+                        let q = ConvexHull.Query xs dnf
+                        preds <- lift $ lift $ runExceptT (solver q) >>= \case
+                            Left err -> do
+                                logPretty "convexhull" 
+                                          LevelError "error" (show err)
+                                return []
+                            Right (ConvexHull.Answer answer) -> do
+                                logPretty "convexhull" 
+                                          LevelInfo "result" answer
+                                return $ map (ys,) answer
+                        updateAbstInfo preds info
+                      | otherwise -> pure info
+                    Nothing -> pure info
+        otraverse conv prog
 
 calcAtom :: Env -> Atom -> AValue
 calcAtom env (Atom l arg _) =

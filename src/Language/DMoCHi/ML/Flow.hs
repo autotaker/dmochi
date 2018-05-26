@@ -40,7 +40,7 @@ data Edge = ELabel Label Label    -- ELabel l1 l2 <=> C(l1) \supseteq C(l2)
           deriving(Show)
           -- EApp f l_f ls l_x <=> \forall i \in C(l_f). 
           --                 let (fun ys -> e) = def(i) in
-          --                 \forall j \in [0..length ls]. C(labelOf (ys !! j)) \supseteq C(ls !! i)
+          --                 \forall j \in [0..length ls-1]. C(labelOf (ys !! j)) \supseteq C(ls !! i)
           --                 C(l_x) \supseteq C(LBody i)
 instance Pretty Edge where
     pPrintPrec _ prec (ELabel l1 l2) = 

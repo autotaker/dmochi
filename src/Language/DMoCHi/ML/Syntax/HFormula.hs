@@ -19,6 +19,7 @@ import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, m
 import           Language.DMoCHi.ML.Syntax.BFormula
 -- import           Language.DMoCHi.ML.Flow
 import qualified Language.DMoCHi.ML.SMT as SMT
+import Debug.Trace
 
 
 data HFormula where
@@ -298,6 +299,8 @@ updateHFormula phi@(HFormula l arg _ _ _) fmls =
         
 instance Pretty HFormula where
     pPrintPrec plevel prec v = pPrintPrec plevel prec (fromHFormula v)
+instance Show HFormula where
+    show = render . pPrint 
 
 
 -- Function: calcCondition fml ps 

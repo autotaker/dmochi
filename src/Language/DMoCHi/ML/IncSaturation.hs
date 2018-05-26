@@ -24,6 +24,7 @@ import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
 import           Text.PrettyPrint.HughesPJClass
 import           Debug.Trace
+import           GHC.Stack
 import           Data.PolyDict(Dict)
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
@@ -50,7 +51,7 @@ addFlow i v = do
         Nothing -> cont (S.singleton v)
     -- liftIO $ print ("addFlow", i, v)
 
-whenSat :: HFormula -> [HFormula] -> BFormula -> a -> (HFormula -> R a) -> R a
+whenSat :: HasCallStack => HFormula -> [HFormula] -> BFormula -> a -> (HFormula -> R a) -> R a
 whenSat fml ps phi def cont = do
     cond <- fromBFormula ps phi
     fml' <- mkBin SAnd fml cond

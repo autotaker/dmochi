@@ -4,7 +4,7 @@ let update i n a x = a i; let a j = if i=j then x else a j in a
 let print_string s = ()
 let abs x = if x < 0 then -x else x
 
-let queen(size) =
+let queen size =
   let queenArray = make_array size 0 in
   let assign i j queenArray = update (i) size queenArray j in
   let rec dotsPrint n = if n = 0 then () else begin print_string (); dotsPrint (n-1) end in

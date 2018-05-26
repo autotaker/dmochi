@@ -84,6 +84,7 @@ data Flag = Help
           | ContextSensitive 
           | Interactive
           | FoolTraces Int
+          | PredicateGen
  --         | Fusion
  --         | Incremental
           | Verbose
@@ -99,6 +100,7 @@ data Config = Config { targetProgram :: FilePath
                      , contextSensitive :: Bool
                      , foolTraces :: Bool
                      , foolThreshold :: Int
+                     , predicateGen :: Bool
  --                    , fusion :: Bool
  --                    , incremental :: Bool
                      , cegarMethod :: CEGARMethod
@@ -121,6 +123,7 @@ defaultConfig path = Config { targetProgram = path
                             , contextSensitive = False
                             , foolTraces = False
                             , foolThreshold = 1
+                            , predicateGen = False
   --                          , fusion = False
   --                          , incremental = False
                             , verbose = False
@@ -143,6 +146,7 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
           , Option [] ["hccs"] (ReqArg parseSolver "it|gch") "Set hccs solver"
           , Option ['l'] ["limit"] (ReqArg (CEGARLimit . read) "N") "Set CEGAR round limit (default = 20)"
           , Option [] ["acc-traces"] (NoArg AccErrTraces) "Accumrate error traces"
+          , Option [] ["pred-gen"] (NoArg PredicateGen) "Generalize Predicate based on AI"
           , Option [] ["context-sensitive"] (NoArg ContextSensitive) 
                    "Enable context sensitive predicate discovery, this also enables --acc-traces flag"
           , Option [] ["fool-traces"] (OptArg (FoolTraces . fromMaybe 1 . fmap read) "N")  "Distinguish fool error traces in refinement phase, and set threshold (default = 1)"
@@ -183,6 +187,7 @@ parseArgs = doit
                      AccErrTraces -> acc { accErrTraces = True }
                      ContextSensitive -> acc { accErrTraces = True, contextSensitive = True }
                      FoolTraces n -> acc { foolTraces = True, foolThreshold = n }
+                     PredicateGen -> acc { predicateGen = True }
    --                  Fusion -> acc { fusion = True }
    --                  Incremental -> acc { fusion = True, incremental = True }
                      Interactive -> acc { interactive = True } 
@@ -326,9 +331,13 @@ verify conf = setup doit
             refinedProg <- mapExceptT (zoom (access' #abstractsemantics Dict.empty)) 
                       $ withExceptT RefinementFailed 
                       $ AbstSem.refine hContext currentSolver k trace cegarProgram
-            lift $ zoom (access' #predicategeneralizer Dict.empty) $
-                PredicateGen.calc hContext convexHullSolver [trace] refinedProg
-            return $ FusionContext refinedProg hContext
+            if predicateGen conf 
+                then do
+                    refinedProg <- lift $ zoom (access' #predicategeneralizer Dict.empty) $
+                        PredicateGen.calc hContext convexHullSolver [trace] refinedProg
+                    return $ FusionContext refinedProg hContext
+                else return $ FusionContext refinedProg hContext
+
         refine (EagerContext castFreeProgram typeMap typeMapFool hcs
                              rtyAssoc0 rpostAssoc0) k trace isFoolI traceFile = do
             (isFool, clauses, assoc) <- do

@@ -95,7 +95,13 @@ fromLinear :: LinearExp -> Atom
 fromLinear (xs,c) = 
     let acc0 = mkLiteral (CInt c) in
     foldl (\acc (x,v) -> 
-        mkBin SAdd (mkBin SMul (mkLiteral (CInt v)) (mkVar x)) acc) acc0 xs
+        let vx = mkVar x
+            vc = mkLiteral (CInt (abs v)) in
+        if v == 0 then acc
+        else if v == 1  then mkBin SAdd acc vx
+        else if v == -1 then mkBin SSub acc vx
+        else if v <  0  then mkBin SSub acc (mkBin SMul vc vx)
+        else mkBin SAdd acc (mkBin SMul vc vx)) acc0 xs
 
 parseVar :: M.Map String TId -> Lisp -> Parser TId
 parseVar env (Symbol x) = pure $ env M.! (unpack x)
