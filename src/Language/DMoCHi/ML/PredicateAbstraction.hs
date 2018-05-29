@@ -10,6 +10,7 @@ import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
 import qualified Language.DMoCHi.Boolean.PrettyPrint.Typed as B
 import qualified Language.DMoCHi.ML.SMT as SMT
 import Language.DMoCHi.ML.Syntax.PType
+import Language.DMoCHi.ML.Syntax.Atom(Formula)
 import Language.DMoCHi.Common.Id
 import Language.DMoCHi.Common.Util
 import Data.PolyDict(Assoc,Dict,access)

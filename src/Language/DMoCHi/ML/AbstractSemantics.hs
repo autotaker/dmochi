@@ -10,7 +10,6 @@ import qualified Language.DMoCHi.ML.HornClause as Horn
 --import           Language.DMoCHi.ML.IncSaturationPre
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.IType
-import           Language.DMoCHi.ML.Syntax.PType hiding(Env)
 import           Control.Monad.State.Strict
 import           Control.Monad.Except
 import           Text.PrettyPrint.HughesPJClass
@@ -242,7 +241,7 @@ refine ctx solver cegarId trace prog = do
     let subst = predicateMap pId2key preds
     runHFormulaT (refineProgram subst prog) ctx
 
-predicateMap :: [(Int, UniqueKey)] -> [(Int, [Id], Formula)] -> M.Map UniqueKey [([Id], Formula)]
+predicateMap :: [(Int, UniqueKey)] -> [(Int, [TId], Formula)] -> M.Map UniqueKey [([TId], Formula)]
 predicateMap pId2key preds = subst
     where
     g = IM.fromList pId2key
@@ -250,7 +249,7 @@ predicateMap pId2key preds = subst
         (pId, args, fml) <- preds
         return (g IM.! pId, [(args,fml)])
     
-refineProgram :: HFormulaFactory m => M.Map UniqueKey [([Id], Formula)] -> Program -> m Program
+refineProgram :: HFormulaFactory m => M.Map UniqueKey [([TId], Formula)] -> Program -> m Program
 refineProgram subst  = otraverse conv 
     where
     conv DummyInfo = pure DummyInfo

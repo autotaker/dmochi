@@ -5,9 +5,8 @@ module Language.DMoCHi.ML.Syntax.CEGAR(
     , LExpView(..), ExpView(..), ValueView(..), expView, valueView, lexpView
     , mkBin, mkUni, mkLiteral, mkVar, mkPair, mkLambda 
     , mkApp, mkLet, mkLetRec, mkAssume, mkBranch, mkBranchL, mkFail, mkOmega, mkRand
-    , mkAbstInfo, updateAbstInfo
+    , mkAbstInfo, updateAbstInfo, Formula
     , Castable(..)
-    , CataAtom(..), cataAtom
     , module Language.DMoCHi.ML.Syntax.Type
     , module Language.DMoCHi.ML.Syntax.Base )
      where
@@ -16,10 +15,10 @@ import Language.DMoCHi.Common.Id
 -- import Language.DMoCHi.Common.Util
 -- import qualified Data.Set as S
 import GHC.Exts(Constraint)
-import Language.DMoCHi.ML.Syntax.PNormal(Atom(..), CataAtom(..), cataAtom, mkBin, mkUni, mkLiteral, mkVar, UniArg, Castable(..))
+import Language.DMoCHi.ML.Syntax.Atom
+import Language.DMoCHi.ML.Syntax.PNormal(Castable(..))
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import Language.DMoCHi.ML.Syntax.Type
-import Language.DMoCHi.ML.Syntax.PType(PredTemplate,desubstFormula, substAFormula, substFormula, decomposeFormula)
 import Language.DMoCHi.ML.Syntax.Base
 import Text.PrettyPrint.HughesPJClass
 import qualified Data.Map as M
@@ -209,12 +208,12 @@ mkAbstInfo ps' tmpl@(_, vs) = do
     return $ AbstInfo 
         { abstFormulas = ps
         , abstTemplate = tmpl
-        , abstPredicates = (xs, map (desubstFormula subst) ps')
+        , abstPredicates = (xs, map (desubstAtom subst) ps')
         }
 
 updateAbstInfo :: HFormula.HFormulaFactory m => [([TId], Atom)] -> AbstInfo -> m AbstInfo
 updateAbstInfo _ DummyInfo = pure DummyInfo
-updateAbstInfo preds info@(AbstInfo ps tmpl (xs,fs)) = do
+updateAbstInfo preds (AbstInfo ps tmpl (xs,fs)) = do
     (ps',fs') <- foldM (\(ps, fs) (ys, fml) -> do
         let fml' = substFormula (M.fromList $ zip ys xs) fml
         fml'' <- HFormula.toHFormula $ substAFormula (M.fromList $ zip ys (snd tmpl)) fml

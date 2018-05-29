@@ -60,32 +60,39 @@ whenSat fml ps phi def cont = do
         True  -> cont fml'
 
 calcAtom :: IEnv -> Atom -> IType
-calcAtom env = cataAtom $ CataAtom{..}
+calcAtom env = go
     where
-    literalCase _ = mkIBase
-    varCase x = env ! x
-    binaryCase _ _ _ = mkIBase
-    unaryCase :: Supported op (UniOps Atom) => SUniOp op -> IType -> IType
-    unaryCase SFst (IPair i1 _) = i1
-    unaryCase SFst _ = error "calcAtom: unexpected pattern"
-    unaryCase SSnd (IPair _ i2) = i2
-    unaryCase SSnd _ = error "calcAtom: unexpected pattern"
-    unaryCase SNeg _ = mkIBase
-    unaryCase SNot _ = mkIBase
+    go (Atom l arg _) =
+      case (l, arg) of
+        (SLiteral, _) -> mkIBase
+        (SVar, x) -> env ! x
+        (SBinary, _) -> mkIBase
+        (SUnary, UniArg op v1) ->
+          case (op, go v1) of
+            (SFst, IPair i1 _) -> i1
+            (SSnd, IPair _ i2) -> i2
+            (SFst, _) -> error "calcAtom: unexpected pattern"
+            (SSnd, _) -> error "calcAtom: unexpected pattern"
+            (SNeg, _) -> mkIBase
+            (SNot, _) -> mkIBase
 
 evalAtom :: CEnv -> Atom -> CValue
-evalAtom cenv = cataAtom $ CataAtom {..}
+evalAtom cenv = go
     where
-    literalCase _ = CBase
-    varCase x = cenv ! x
-    binaryCase _ _ _ = CBase
-    unaryCase :: Supported op (UniOps Atom) => SUniOp op -> CValue -> CValue
-    unaryCase SFst (CPair i1 _) = i1
-    unaryCase SFst _ = error "evalAtom: unexpected pattern"
-    unaryCase SSnd (CPair _ i2) = i2
-    unaryCase SSnd _ = error "evalAtom: unexpected pattern"
-    unaryCase SNeg _ = CBase
-    unaryCase SNot _ = CBase
+    go :: Atom -> CValue
+    go (Atom l arg _) =
+      case (l, arg) of
+        (SLiteral, _) -> CBase
+        (SVar, x) -> cenv ! x
+        (SBinary, _) -> CBase
+        (SUnary, UniArg op v1) ->
+          case (op, go v1) of
+            (SFst, CPair c1 _) -> c1
+            (SSnd, CPair _ c2) -> c2
+            (SFst, _) -> error "evalAtom: unexpected pattern"
+            (SSnd, _) -> error "evalAtom: unexpected pattern"
+            (SNeg, _) -> CBase
+            (SNot, _) -> CBase
 
 calcFromValue :: HFormula -> [HFormula] -> (R IType, ValueExtractor, R ()) 
                  -> R ([ITermType], R [ITermType], TermExtractor, R ())

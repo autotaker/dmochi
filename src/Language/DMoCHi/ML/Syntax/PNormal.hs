@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, BangPatterns, TypeFamilies, DataKinds, KindSignatures, GADTs, MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleContexts, BangPatterns, TypeFamilies, DataKinds, KindSignatures, GADTs, MultiParamTypeClasses, TypeApplications #-}
 module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , Exp(..), Value(..), Atom(..), LExp(..), Normalized
                                         , LExpView(..), ExpView(..), ValueView(..), expView, valueView, lexpView
@@ -8,7 +8,6 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , mkFail, mkOmega, mkRand
                                         , mkFailL, mkOmegaL
                                         , Castable(..)
-                                        , CataAtom(..), cataAtom
                                         , normalize
                                         , freeVariables
                                         , module Language.DMoCHi.ML.Syntax.Type
@@ -16,13 +15,13 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
 -- import Control.Monad
 import Language.DMoCHi.Common.Id
 import Language.DMoCHi.Common.Util
-import Language.DMoCHi.Common.Sized
 -- import qualified Data.Map as M
 import qualified Data.Set as S
 import GHC.Exts(Constraint)
 -- import Data.Char
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.Base
+import Language.DMoCHi.ML.Syntax.Atom
 import qualified Language.DMoCHi.ML.Syntax.Typed as Typed
 import Control.Monad.Cont
 import Control.Monad.Trans.Cont(shiftT,resetT,evalContT)
@@ -40,10 +39,6 @@ data Value where
     Value :: (Normalized l Value arg, Supported l (Labels Value)) => 
             SLabel l -> arg -> Type -> UniqueKey -> Value
 
-data Atom where
-    Atom :: (Normalized l Atom arg, Supported l (Labels Atom)) => 
-            SLabel l -> arg -> Type -> Atom
-
 data LExp where
     LExp :: (Normalized l LExp arg, Supported l (Labels LExp)) => 
                 SLabel l -> arg -> Type -> UniqueKey -> LExp
@@ -55,18 +50,6 @@ instance HasUniqueKey LExp where
 instance HasUniqueKey Value where
     getUniqueKey (Value _ _ _ key) = key
 
-
-instance Eq Atom where
-    (==) (Atom l1 arg1 _) (Atom l2 arg2 _) =
-        case (l1,l2) of
-            (SLiteral, SLiteral) -> arg1 == arg2
-            (SLiteral, _) -> False
-            (SVar, SVar) -> arg1 == arg2
-            (SVar, _) -> False
-            (SBinary, SBinary) -> arg1 == arg2
-            (SBinary, _) -> False
-            (SUnary, SUnary) -> arg1 == arg2
-            (SUnary, _) -> False
 
 type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Literal e arg = arg ~ Lit
@@ -85,21 +68,6 @@ type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Rand    e arg = arg ~ ()
     Normalized l        e arg = 'True ~ 'False
 
-data CataAtom a =
-    CataAtom { literalCase :: Lit -> a
-             , varCase :: TId -> a
-             , unaryCase :: forall op. Supported op (UniOps Atom) => SUniOp op -> a -> a
-             , binaryCase :: forall op. Supported op (BinOps Atom) => SBinOp op -> a -> a -> a
-             } 
-cataAtom :: CataAtom a -> Atom -> a
-cataAtom functor = go 
-    where 
-    go (Atom l arg _) =
-        case (l, arg) of
-            (SLiteral, lit) -> literalCase functor lit
-            (SVar, x) -> varCase functor x
-            (SUnary, UniArg op a) -> unaryCase functor op (go a)
-            (SBinary, BinArg op a1 a2) -> binaryCase functor op (go a1) (go a2)
 
 data ExpView where
     EValue :: Value -> ExpView
@@ -122,23 +90,12 @@ type instance Labels Exp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
 type instance Labels LExp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
                              , 'App, 'Branch, 'Rand, 'Fail, 'Omega ]
 type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda ]
-type instance Labels Atom  = '[ 'Literal, 'Var, 'Binary, 'Unary ]
 
-
-type instance BinOps Atom  = '[ 'Add, 'Sub, 'Div, 'Mul, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
-type instance UniOps Atom  = '[ 'Fst, 'Snd, 'Not, 'Neg ]
 type instance Ident  Exp = TId
 type instance Ident  LExp = TId
 type instance Ident  Value = TId
-type instance Ident  Atom = TId
 
-instance Sized Atom where
-    getSize (Atom l arg _) =
-        case l of
-            SLiteral -> 1
-            SVar     -> 1
-            SBinary | BinArg _ a1 a2 <- arg -> 1 + getSize a1 + getSize a2
-            SUnary  | UniArg _ a1 <- arg -> 1 + getSize a1
+
 
 {-# INLINE expView #-}
 expView :: Exp -> ExpView
@@ -181,39 +138,6 @@ lexpView (LExp l arg sty key) = case l of
     SFail    -> LOther l arg
     SOmega   -> LOther l arg
 
-mkBin :: SBinOp op -> Atom -> Atom -> Atom
-mkBin op v1 v2 = case op of
-    SAdd -> Atom SBinary (BinArg SAdd v1 v2) TInt
-    SSub -> Atom SBinary (BinArg SSub v1 v2) TInt
-    SDiv -> Atom SBinary (BinArg SDiv v1 v2) TInt
-    SMul -> Atom SBinary (BinArg SMul v1 v2) TInt
-    SEq  -> Atom SBinary (BinArg SEq v1 v2) TBool
-    SNEq  -> Atom SUnary (UniArg SNot (Atom SBinary (BinArg SEq v1 v2) TBool)) TBool
-    SLt  -> Atom SBinary (BinArg SLt v1 v2) TBool
-    SLte -> Atom SBinary (BinArg SLte v1 v2) TBool
-    SGt  -> Atom SBinary (BinArg SLt v2 v1) TBool
-    SGte -> Atom SBinary (BinArg SLte v2 v1) TBool
-    SAnd -> Atom SBinary (BinArg SAnd v1 v2) TBool
-    SOr  -> Atom SBinary (BinArg SOr  v1 v2) TBool
-
-mkUni :: SUniOp op -> Atom -> Atom
-mkUni op v1@(Atom _ _ sty) = case op of
-    SNeg -> Atom SUnary (UniArg SNeg v1) TInt
-    SNot -> Atom SUnary (UniArg SNot v1) TBool
-    SFst -> case sty of
-        TPair sty1 _ -> Atom SUnary (UniArg SFst v1) sty1
-        _ -> error "mkUni: Fst"
-    SSnd -> case sty of
-        TPair _ sty2 -> Atom SUnary (UniArg SSnd v1) sty2
-        _ -> error "mkUni: Snd"
-
-mkLiteral :: Lit -> Atom
-mkLiteral l@(CInt _) = Atom SLiteral l TInt
-mkLiteral l@(CBool _) = Atom SLiteral l TBool
-mkLiteral CUnit = error "mkLiteral: unexpected unit literal"
-
-mkVar :: TId -> Atom
-mkVar x@(TId sty _) = Atom SVar x sty
 
 mkPair :: Value -> Value -> UniqueKey -> Value
 mkPair v1@(Value _ _ sty1 _) v2@(Value _ _ sty2 _) key = Value SPair (v1, v2) (TPair sty1 sty2) key
@@ -258,8 +182,6 @@ instance HasType Exp where
     getType (Exp _ _ sty _) = sty
 instance HasType Value where
     getType (Value _ _ sty _) = sty
-instance HasType Atom where
-    getType (Atom _ _ sty) = sty
 instance HasType LExp where
     getType (LExp _ _ sty _) = sty
 
@@ -397,10 +319,19 @@ instance Pretty Exp where
     pPrintPrec plevel prec e = pPrintPrec plevel prec (cast e :: Typed.Exp)
 instance Pretty Value where
     pPrintPrec plevel prec e = pPrintPrec plevel prec (cast e :: Typed.Exp)
-instance Pretty Atom where
-    pPrintPrec plevel prec e = pPrintPrec plevel prec (cast e :: Typed.Exp)
 instance Pretty LExp where
     pPrintPrec plevel prec e = pPrintPrec plevel prec (cast e :: Typed.Exp)
+
+instance Atomic Value where
+  opFst (Value SPair (v1, _) _ _) = v1
+  opFst v = fromAtom $ opFst $ unsafeAtomic v
+  opSnd (Value SPair (_, v2) _ _) = v2
+  opSnd v = fromAtom $ opSnd $ unsafeAtomic v
+  fromAtom = cast
+  atomic v = case valueView v of
+    VAtom a -> Just a
+    VOther _ _ -> Nothing
+
 
 instance Pretty Program where
     pPrintPrec plevel _ (Program fs t) = 
@@ -415,9 +346,7 @@ instance Pretty Program where
 instance Show Exp where
     show = render . pPrint 
 instance Show Value where
-    show = render . pPrint 
-instance Show Atom where
-    show = render . pPrint 
+    show = render . pPrint
 instance Show LExp where
     show = render . pPrint 
 
@@ -552,13 +481,19 @@ freeVariables :: S.Set TId -> Exp -> S.Set TId
 freeVariables _scope _e = subE _scope _e S.empty
     where
     subE :: S.Set TId -> Exp -> S.Set TId -> S.Set TId
-    subE scope (Exp l arg _ _) acc   = sub (Proxy :: Proxy Exp)   scope l arg acc
+    subE scope (Exp l arg _ _) acc   = sub (Proxy @Exp)   scope l arg acc
     subA :: S.Set TId -> Atom -> S.Set TId -> S.Set TId
-    subA scope (Atom l arg _) acc  = sub (Proxy :: Proxy Atom)  scope l arg acc
+    subA scope (Atom l arg _) acc  =
+      case (l, arg) of
+        (SVar, x) | S.member x scope -> acc
+                  | otherwise -> S.insert x acc
+        (SLiteral, _) -> acc
+        (SBinary, BinArg _ v1 v2) -> subA scope v2 (subA scope v1 acc)
+        (SUnary, UniArg _ v1) -> subA scope v1 acc
     subV :: S.Set TId -> Value -> S.Set TId -> S.Set TId
-    subV scope (Value l arg _ _) acc = sub (Proxy :: Proxy Value) scope l arg acc
+    subV scope (Value l arg _ _) acc = sub (Proxy @ Value) scope l arg acc
     subL :: S.Set TId -> LExp -> S.Set TId -> S.Set TId
-    subL scope (LExp l arg _ _) acc  = sub (Proxy :: Proxy LExp)  scope l arg acc
+    subL scope (LExp l arg _ _) acc  = sub (Proxy @ LExp)  scope l arg acc
     sub :: (Normalized l e arg, Ident e ~ TId) => 
            Proxy e -> S.Set TId -> SLabel l -> arg -> S.Set TId -> S.Set TId
     sub _ _ SLiteral _ acc = acc

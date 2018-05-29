@@ -3,15 +3,13 @@ module Language.DMoCHi.ML.Syntax.PType where
 
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.Base
+import Language.DMoCHi.ML.Syntax.Atom
 import Language.DMoCHi.ML.Syntax.PNormal
--- import Language.DMoCHi.ML.PrettyPrint.PNormal
 import Language.DMoCHi.Common.Id hiding(Id)
-import Language.DMoCHi.Common.Sized
 import qualified Data.Map as M
 
 import Text.PrettyPrint.HughesPJClass
 import Control.Monad.Writer
-import Data.List(sortOn)
 import Data.Proxy
 import qualified Data.DList as DL
 --import Debug.Trace
@@ -39,13 +37,9 @@ mkPPair ty1 ty2 =
 
 type Env = M.Map Id PType
 type Constraints = [Formula]
-type Formula = Atom
 type Id = TId
 
--- Template for predicate generation.
--- ``key`` identifies the location of the predicate
--- ``atoms`` are arguments for the predicates. Each atom must have a base type.
-type PredTemplate = (UniqueKey, [Atom])
+
 
 type TermType = (Id, PType, [Formula], PredTemplate)
 type ArgType = ([Id],[PType],[Formula], PredTemplate)
@@ -143,6 +137,7 @@ substVPType subst (PFun ty (xs,ty_xs,ps,tmpl_arg) (r,ty_r,qs, tmpl_ret)) =
     qs' = map (substVFormula subst2) qs
     tmpl_ret' = substVPredTemplate subst2 tmpl_ret
 
+{-
 substFormula :: M.Map Id Id -> Formula -> Formula
 substFormula subst = substVFormula (fmap (cast . mkVar) subst)
 
@@ -157,34 +152,10 @@ substAFormula subst = go
         (SLiteral, _) -> atom
         (SBinary, BinArg op v1 v2) -> mkBin op (go v1) (go v2)
         (SUnary, UniArg op v1) -> mkUni op (go v1)
+        -}
 
 substVFormula :: M.Map Id Value -> Formula -> Formula
-substVFormula subst = atomic . go where
-    atomic v = case valueView v of
-        VAtom a -> a
-        _ -> error "substVFormula: type error"
-    go e@(Atom l arg _) = case (l,arg) of
-        (SVar,x) ->
-            case M.lookup x subst of
-                Just b -> b
-                Nothing -> cast e
-        (SLiteral, CInt  _) -> cast e
-        (SLiteral, CBool _) -> cast e
-        (SLiteral, CUnit) -> error "unexpected"
-        -- Pair v1 v2 -> Pair (go v1) (go v2)
-        (SBinary, BinArg op v1 v2) ->  
-            let !v1' = atomic $ go v1
-                !v2' = atomic $ go v2 in
-            cast $ mkBin op v1' v2'
-        (SUnary, UniArg op a) -> case op of
-            SFst -> case go a of 
-                Value SPair (v1,_) _ _ -> v1
-                v -> cast $ mkUni SFst $! atomic v
-            SSnd  -> case go a of
-                Value SPair (_,v2) _ _ -> v2
-                v -> cast $ mkUni SSnd $! atomic v
-            SNot -> cast $ mkUni SNot $! atomic (go a)
-            SNeg -> cast $ mkUni SNeg $! atomic (go a)
+substVFormula = substAtomic
 
 typeOfAtom :: Env -> Atom -> PType
 typeOfAtom env = go where
@@ -219,12 +190,7 @@ flatten (Value l arg sty _) xs =
         (SUnary, _)       -> Atom l arg sty : xs
         (SLambda, _)  -> xs
 
-decompose :: Atom -> [Atom] -> [Atom]
-decompose x l = case getType x of
-    TPair _ _ -> decompose (mkUni SFst x) (decompose (mkUni SSnd x) l)
-    TFun _ _  -> l
-    TInt -> x : l
-    TBool -> x : l
+
 
 
 
@@ -309,13 +275,7 @@ genPType scope ty@(TFun ts t2) = do
     predTempl <- genPredTemplate scope'
     return $ PFun ty (xs, ty_xs, [], predTempl) rty
 
-updateFormula :: Formula -> [Formula] -> [Formula]
-updateFormula phi@(Atom l arg _ ) fml = case (l,arg) of
-    (SLiteral, CBool _) -> fml
-    (SBinary, BinArg SAnd v1 v2) -> updateFormula v1 (updateFormula v2 fml)
-    (SBinary, BinArg SOr  v1 v2) -> updateFormula v1 (updateFormula v2 fml)
-    _ | phi `elem` fml -> fml
-      | otherwise -> phi : fml
+
 
 mergeTypeMap :: TypeMap -> TypeMap -> TypeMap
 mergeTypeMap typeMap1 typeMap2 = M.unionWith f typeMap1 typeMap2
@@ -386,6 +346,7 @@ appPType (PFun _ sigma tau) vs = (sigma', tau')
              , substVPredTemplate subst pred_tmpl)
 appPType _ _ = error "appPType defined only for function types"
 
+{-
 {- compute type environment for e2, given env |- let x = e in e2 : \tau -}
 extendEnvByLet :: TypeMap -> Env -> TId -> LExp -> Env
 extendEnvByLet tbl env x e = M.insert x x_ty env
@@ -410,28 +371,7 @@ extendEnvByLet tbl env x e = M.insert x x_ty env
         LOther SFail _   -> defaultCase
         LOther SOmega _  -> defaultCase
 
-desubstFormula :: M.Map TId Atom -> Atom -> Atom
-desubstFormula env atom = foldr f atom assocs
-    where
-    assocs = sortOn (getSize.snd) $ M.assocs env
-    f :: (TId, Atom) -> Atom -> Atom
-    f (x, v) a@(Atom l arg _)
-        | a == v = mkVar x
-        | otherwise = 
-            case l of 
-                SLiteral -> a
-                SVar -> a
-                SBinary | BinArg op a1 a2 <- arg -> 
-                    mkBin op (f (x, v) a1) (f (x, v) a2)
-                SUnary  | UniArg op a1 <- arg ->
-                    mkUni op (f (x, v) a1)
 
-decomposeFormula :: Formula -> [Formula] -> [Formula]
-decomposeFormula a@(Atom l arg _) acc =
-    case (l, arg) of
-        (SLiteral, _) -> acc
-        (SBinary, BinArg SAnd a1 a2) -> 
-            decomposeFormula a1 (decomposeFormula a2 acc)
-        (SBinary, BinArg SOr a1 a2) -> 
-            decomposeFormula a1 (decomposeFormula a2 acc)
-        (_, _) -> a : acc
+-}
+
+

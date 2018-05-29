@@ -1,5 +1,10 @@
 {-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, RecordWildCards #-}
-module Language.DMoCHi.ML.Syntax.HFormula where
+module Language.DMoCHi.ML.Syntax.HFormula(
+  HFormula(..), HFormulaFactory(..)
+  , getIdent, getIValue, Context(..), HFormulaT, runHFormulaT, newContext
+  , mkBin, mkUni, mkVar, mkLiteral
+  , toHFormula, fromHFormula, calcCondition, fromBFormula
+) where
 
 import qualified Data.HashTable.IO as H
 import           Data.Hashable
@@ -14,12 +19,9 @@ import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.Common.Cache
 import           Language.DMoCHi.ML.Syntax.Type
-import           Language.DMoCHi.ML.Syntax.PType hiding(Env)
-import           Language.DMoCHi.ML.Syntax.PNormal hiding(mkBin, mkUni, mkVar, mkLiteral)
+import           Language.DMoCHi.ML.Syntax.Atom hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.BFormula
--- import           Language.DMoCHi.ML.Flow
 import qualified Language.DMoCHi.ML.SMT as SMT
-import Debug.Trace
 
 
 data HFormula where
@@ -102,17 +104,6 @@ instance Eq HFormula where
 instance Ord HFormula where
     compare = compare `on` getIdent
 
-{-
-infix 4 ===
-
-(===) :: HFormula -> HFormula -> Bool
-(===) = (==) `on` getIdent
--}
-
-{-
-instance HFormulaFactory m => HFormulaFactory (ReaderT r m) where
-    genHFormula a m
-    -}
 
 data Context = 
     Context {
@@ -191,8 +182,6 @@ genHFormula key@(HFormulaKey l arg) m_iv = do
         iv <- m_iv
         return $ HFormula l arg (getType key) iv i
 
-type HFormulaTbl = HashTable HFormula HFormula
-
 
 instance MonadIO m => BFormulaFactory (HFormulaT m) where
     getBFormulaCache = ctxBFormulaCache <$> ask
@@ -261,7 +250,7 @@ mkVar :: HFormulaFactory m => TId -> m HFormula
 mkVar x@(TId sty name_x) = genHFormula (HFormulaKey SVar x) (SMT.toIValueId sty (show name_x))
 
 {-# INLINE toHFormula #-}
-toHFormula :: HFormulaFactory m => Formula -> m HFormula
+toHFormula :: HFormulaFactory m => Atom -> m HFormula
 toHFormula (Atom l arg _) = 
     case (l, arg) of
         (SLiteral, arg) -> mkLiteral arg
@@ -274,7 +263,7 @@ toHFormula (Atom l arg _) =
             f1 <- toHFormula v1
             mkUni op f1
 
-fromHFormula :: HFormula -> Formula
+fromHFormula :: HFormula -> Atom
 fromHFormula (HFormula l arg sty _ _) = 
     case (l, arg) of
         (SLiteral, arg) -> Atom l arg sty
@@ -284,19 +273,7 @@ fromHFormula (HFormula l arg sty _ _) =
         (SUnary, UniArg op v1) -> 
             Atom l (UniArg op (fromHFormula v1)) sty
 
-{-
-updateHFormula :: HFormula -> [HFormula] -> [HFormula]
-updateHFormula phi@(HFormula l arg _ _ _) fmls =
-    case (l, arg) of
-        (SLiteral, CBool _) -> fmls
-        (SBinary, BinArg SAnd v1 v2) -> 
-            updateHFormula v1 (updateHFormula v2 fmls)
-        (SBinary, BinArg SOr  v1 v2) ->
-            updateHFormula v1 (updateHFormula v2 fmls)
-        _ | phi `elem` fmls -> fmls
-          | otherwise -> phi : fmls
-          -}
-        
+
 instance Pretty HFormula where
     pPrintPrec plevel prec v = pPrintPrec plevel prec (fromHFormula v)
 instance Show HFormula where
