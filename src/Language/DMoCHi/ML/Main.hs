@@ -33,6 +33,7 @@ import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
 import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
+import qualified Language.DMoCHi.ML.Syntax.UnTyped as UnTyped
 import qualified Language.DMoCHi.ML.Syntax.CEGAR as CEGAR
 import qualified Language.DMoCHi.ML.PredicateAbstraction as PAbst
 import qualified Language.DMoCHi.ML.AbstractSemantics as AbstSem
@@ -259,7 +260,7 @@ verify conf = setup doit
             then withExceptT ParseFailed $ ExceptT $ liftIO $ MLParser.parseProgramFromFile path
             else withExceptT (ParseFailed. show) $ ExceptT $ liftIO $ Parser.parseProgramFromFile path
         program <$ prettyPrint "parse" "Parsed Program" program
-
+    let specs = UnTyped.specs parsedProgram
     normalizedProgram <- measure #preprocess $ (do
         -- alpha conversion
         alphaProgram <- mapExceptT lift $ withExceptT AlphaFailed $ alpha parsedProgram
@@ -295,10 +296,12 @@ verify conf = setup doit
 
         return _normalizedProgram) :: ExceptT MainError (FreshIO (Dict Main)) PNormal.Program
     
-    (typeMap0, fvMap) <- lift $ PAbst.initTypeMap normalizedProgram
+    (typeMap0, fvMap) <- lift $ PAbst.initTypeMap specs normalizedProgram
+    prettyPrint "PAbst" "initial type map" $ PPrinted (PAbst.pprintTypeMap typeMap0)
 
     let mc :: CEGARContext method -> Int -> ExceptT MainError (FreshIO (Dict CEGAR)) (Maybe SExec.Trace)
         mc (FusionContext cegarProgram hContext) _ = measure #fusion $ do
+            prettyPrint "fusion" "CEGAR Program" cegarProgram
             (_, res) <- lift $ zoom (access' #fusion_sat Dict.empty) 
                             $ mapTracerT lift 
                             $ IncSat.saturate hContext cegarProgram

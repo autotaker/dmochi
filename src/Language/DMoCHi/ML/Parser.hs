@@ -74,6 +74,7 @@ progP = do
     e <- exprP
     return $ Program { functions = funDefs
                      , synonyms = synDefs
+                     , specs = []
                      , mainTerm = e }
 
 defP :: Parser (Either (AnnotVar String (Maybe Type),TypeScheme,Exp) SynonymDef)

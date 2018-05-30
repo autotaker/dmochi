@@ -20,9 +20,11 @@ $eol = [\n]
 @module = ($upper$symchar*\.)*
 
 tokens :-
-<0>            $eol    ;
-<0>            $white+ ;
-<0,commentSC>  "(*"    { beginComment } 
+<0,specSC>     $eol    ;
+<0,specSC>     $white+ ;
+<0>            "(*{SPEC}"  { beginSpec }
+<specSC>       "{SPEC}*)"  { endSpec   }
+<0,commentSC>  "(*"    { beginComment }
 <commentSC>    "*)"    { endComment   }
 <commentSC>    [.\n]   ;
 <0>            let     { lexeme $ \_ -> TokenLet}
@@ -33,34 +35,39 @@ tokens :-
 <0>            fun     { lexeme $ \_ -> TokenFun }
 <0>            begin   { lexeme $ \_ -> TokenBegin}
 <0>            end     { lexeme $ \_ -> TokenEnd }
-<0>            "->"    { lexeme $ \_ -> TokenArr }
-<0>            ";;"    { lexeme $ \_ -> TokenEOL }
-<0>            ";"     { lexeme $ \_ -> TokenSemi}
+<0,specSC>     "->"    { lexeme $ \_ -> TokenArr }
+<0,specSC>     ";;"    { lexeme $ \_ -> TokenEOL }
+<0,specSC>     ";"     { lexeme $ \_ -> TokenSemi}
 <0>            ","     { lexeme $ \_ -> TokenComma}
-<0>            ":"     { lexeme $ \_ -> TokenColon}
+<0,specSC>     ":"     { lexeme $ \_ -> TokenColon}
 <0>            if      { lexeme $ \_ -> TokenIf  }
 <0>            then    { lexeme $ \_ -> TokenThen}
 <0>            else    { lexeme $ \_ -> TokenElse}
-<0>            "||"    { lexeme $ \_ -> TokenOr  }
-<0>            "&&"    { lexeme $ \_ -> TokenLAnd}
-<0>            \=      { lexeme $ \_ -> TokenEq  }
-<0>            "<>"    { lexeme $ \_ -> TokenNEq }
-<0>            "<"     { lexeme $ \_ -> TokenLt  }
-<0>            ">"     { lexeme $ \_ -> TokenGt  }
-<0>            "<="    { lexeme $ \_ -> TokenLe  }
-<0>            ">="    { lexeme $ \_ -> TokenGe  }
-<0>            "+"     { lexeme $ \_ -> TokenAdd }
-<0>            "-"     { lexeme $ \_ -> TokenSub }
-<0>            "/"     { lexeme $ \_ -> TokenDiv }
-<0>            \(      { lexeme $ \_ -> TokenLPar}
-<0>            \)      { lexeme $ \_ -> TokenRPar}
-<0>            "*"     { lexeme $ \_ -> TokenMul }
-<0>            true    { lexeme $ \_ -> TokenTrue }
-<0>            false   { lexeme $ \_ -> TokenFalse }
+<0,specSC>     "||"    { lexeme $ \_ -> TokenOr  }
+<0,specSC>     "&&"    { lexeme $ \_ -> TokenLAnd}
+<0,specSC>     \=      { lexeme $ \_ -> TokenEq  }
+<0,specSC>     "<>"    { lexeme $ \_ -> TokenNEq }
+<0,specSC>     "<"     { lexeme $ \_ -> TokenLt  }
+<0,specSC>     ">"     { lexeme $ \_ -> TokenGt  }
+<0,specSC>     "<="    { lexeme $ \_ -> TokenLe  }
+<0,specSC>     ">="    { lexeme $ \_ -> TokenGe  }
+<0,specSC>     "+"     { lexeme $ \_ -> TokenAdd }
+<0,specSC>     "-"     { lexeme $ \_ -> TokenSub }
+<0,specSC>     "/"     { lexeme $ \_ -> TokenDiv }
+<0,specSC>     \(      { lexeme $ \_ -> TokenLPar}
+<0,specSC>     \)      { lexeme $ \_ -> TokenRPar}
+<specSC>       \[       { lexeme $ \_ -> TokenLBra }
+<specSC>       \]       { lexeme $ \_ -> TokenRBra }
+<0,specSC>     "*"     { lexeme $ \_ -> TokenMul }
+<0,specSC>     true    { lexeme $ \_ -> TokenTrue }
+<0,specSC>     false   { lexeme $ \_ -> TokenFalse }
+<specSC>       valcegar { lexeme $ \_ -> TokenValCEGAR }
+<specSC>       not { lexeme $ \_ -> TokenNot }
 <0>            assert  { lexeme $ \_ -> TokenAssert }
 <0>            @module@ident  { lexeme $ \s -> if s == "_" then TokenHole else TokenVar s }
+<specSC>       @ident  { lexeme $ \s -> TokenVar s }
 <0>            \'@ident{ lexeme $ \s -> TokenTVar s }
-<0>            $digit+ { lexeme $ \s -> TokenNum (read s) }
+<0,specSC>     $digit+ { lexeme $ \s -> TokenNum (read s) }
 {
 data Token
  = TokenLet
@@ -102,8 +109,12 @@ data Token
  | TokenSub
  | TokenDiv
  | TokenMul
+ | TokenNot
  | TokenEOL
  | TokenEOF
+ | TokenValCEGAR
+ | TokenLBra
+ | TokenRBra
  deriving(Show,Eq)
 
 lexeme :: (String -> Token) -> AlexAction Token
@@ -137,7 +148,17 @@ endComment _ _ = do
     alexSetUserState s{ lexerCommentDepth = d }
     when (d == 0) $ alexSetStartCode 0 
     alexMonadScan
-        
+
+beginSpec :: AlexAction Token
+beginSpec _ _ = do
+    alexSetStartCode specSC
+    alexMonadScan
+
+endSpec :: AlexAction Token
+endSpec _ _ = do
+    alexSetStartCode 0
+    alexMonadScan
+
 alexInitUserState = AlexUserState undefined undefined 0
 
 scanToken :: Alex Token

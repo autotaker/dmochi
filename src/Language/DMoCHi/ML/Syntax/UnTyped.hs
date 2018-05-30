@@ -1,5 +1,5 @@
 {-# LANGUAGE GADTs, TypeFamilies, LambdaCase #-}
-module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..)
+module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..), AType(..)
                                         , Type(..), TypeScheme(..), SynName, annot, annotVar, toTypeScheme
                                         , SynonymDef(..), Program(..), unusedVar, matchTypeScheme, matchType
                                         , arity
@@ -29,11 +29,15 @@ type SynName = String
 
 data Program = Program { functions :: [(Var,TypeScheme,Exp)] 
                        , synonyms :: [SynonymDef]
+                       , specs     :: [(String, AType)]
                        , mainTerm  :: Exp }
 
 data SynonymDef = SynonymDef { synName :: SynName
                              , typVars :: [String]
                              , synDef :: Type }
+
+data AType = ABase String Type [Exp] | AFun AType AType
+
 
 data Type = TInt | TBool | TPair Type Type | TUnit
           | TFun [Type] Type | TSyn [Type] SynName
@@ -204,6 +208,16 @@ instance Pretty Type where
                 [ty] -> pPrintPrec plevel 1 ty
                 _ -> parens $ hsep $ punctuate comma (map (pPrintPrec plevel 0) tys)
 
+instance Pretty AType where
+  pPrintPrec plevel prec = \case
+    ABase x ty [] -> maybeParens (prec >= 1) $ text x <> text ":" <> pPrint ty
+    ABase x ty preds -> maybeParens (prec >= 1) $
+      text x <> text ":" <> pPrint ty <> brackets dpreds
+      where dpreds = hsep $ punctuate semi $ map (pPrintPrec plevel 0) preds
+    AFun ty1 ty2 -> maybeParens (prec >= 1) $
+      pPrintPrec plevel 1 ty1 <+> text "->" <+> pPrintPrec plevel 0 ty2
+
+
 instance Pretty TypeScheme where
     pPrintPrec plevel prec (TypeScheme [] ty) = pPrintPrec plevel prec ty
     pPrintPrec plevel prec (TypeScheme xs ty) = 
@@ -211,10 +225,10 @@ instance Pretty TypeScheme where
             text "forall" <+> hsep (map (text.('\'':)) xs) <> text 
                       "." <+> pPrintPrec plevel 0 ty
 
-instance Pretty a => Pretty (AnnotVar a (Maybe Type)) where
-    pPrintPrec plevel prec (V x Nothing) = pPrintPrec plevel prec x
+instance Show a => Pretty (AnnotVar a (Maybe Type)) where
+    pPrintPrec _ _ (V x Nothing) = text (show x)
     pPrintPrec plevel _ (V x (Just ty)) = 
-        parens $ pPrintPrec plevel 0 x <+> text ":" <+> pPrintPrec plevel 0 ty
+        parens $ text (show x) <+> text ":" <+> pPrintPrec plevel 0 ty
 
 instance Pretty Exp where
     pPrintPrec plevel prec (Exp l arg key) = 
@@ -226,14 +240,24 @@ instance Pretty Exp where
                    pPrintIdent = pPrintPrec
                  }
             doc = genericPPrint pp plevel prec l arg
+instance Show Exp where
+  show = render . pPrint
+instance Show Program where
+  show = render . pPrint
 
+instance Show AType where
+  show = render. pPrint
 
 instance Pretty Program where
-    pPrintPrec plevel _ (Program fs syns t) = 
+    pPrintPrec plevel _ (Program fs syns specs t) =
         text "(* functions *)" $+$ 
         vcat (map (\(f,ty,e) -> 
             text "let" <+> text (varName f) <+> colon <+> pPrintPrec plevel 0 ty <+> equals $+$
             nest 4 (pPrintPrec plevel 0 e <> text ";;")) fs) $+$
+        text "(*{SPEC}" $+$
+        vcat (map (\(x, ty) ->
+          text "valcegar" <+> text x <+> text ":" <+> pPrint ty) specs) $+$
+        text "{SPEC}*)" $+$
         text "(* synonyms *)" $+$
         vcat (map (\syn -> 
             let dargs = case typVars syn of

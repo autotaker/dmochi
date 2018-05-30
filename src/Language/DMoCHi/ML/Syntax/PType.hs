@@ -5,6 +5,8 @@ import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.ML.Syntax.Atom
 import Language.DMoCHi.ML.Syntax.PNormal
+import Language.DMoCHi.ML.Syntax.UnTyped(AType(..))
+import qualified Language.DMoCHi.ML.Syntax.UnTyped as UnTyped
 import Language.DMoCHi.Common.Id hiding(Id)
 import qualified Data.Map as M
 
@@ -12,7 +14,7 @@ import Text.PrettyPrint.HughesPJClass
 import Control.Monad.Writer
 import Data.Proxy
 import qualified Data.DList as DL
---import Debug.Trace
+import Debug.Trace
 
 data PType = PInt | PBool
            | PFun Type ArgType TermType
@@ -190,12 +192,52 @@ flatten (Value l arg sty _) xs =
         (SUnary, _)       -> Atom l arg sty : xs
         (SLambda, _)  -> xs
 
+fromATypeFormula :: M.Map String TId -> UnTyped.Exp -> Formula
+fromATypeFormula env e@(UnTyped.Exp l arg _) =
+  case (l, arg) of
+    (SLiteral, CUnit) -> mkLiteral (CInt 0)
+    (SLiteral, lit) -> mkLiteral lit
+    (SVar, x) -> mkVar $ env M.! varName x
+    (SBinary, BinArg op v1 v2) -> mkBin op (fromATypeFormula env v1)
+                                           (fromATypeFormula env v2)
+    (SUnary, UniArg op v1) -> mkUni op (fromATypeFormula env v1)
+    (_, _) -> error $ "fromATypeFormula: failed to convert formula: " ++ show (pPrint e)
+
+updatePTypeFromAType :: M.Map String TId -> AType -> PType -> PType
+updatePTypeFromAType env ty pty | traceShow ("updatePTypeFromAType", env, ty, pty) False = undefined
+updatePTypeFromAType env ty (PFun sty arg_ty ret_ty) = PFun sty arg_ty' ret_ty'
+  where
+  (xs, pty_xs, fmls, tmpl) = arg_ty
+  (ret_aty, env', fmls', reverse -> pty_xs') = foldl (\(AFun ty1 ty2, env, fmls, pty_xs) (x, pty_x) ->
+      case ty1 of
+        ABase y _ preds ->
+          let env' = M.insert y x env in
+          let fmls' = map (fromATypeFormula env') preds in
+          (ty2, env', fmls' ++ fmls, pty_x: pty_xs)
+        AFun _ _ ->
+          let pty_x' = updatePTypeFromAType env ty1 pty_x in
+          (ty2, env, fmls, pty_x' : pty_xs)) (ty, env, fmls, []) (zip xs pty_xs)
+  arg_ty' = (xs, pty_xs', fmls', tmpl)
+  ret_ty' = updateTermTypeFromAType env' ret_aty ret_ty
+updatePTypeFromAType _ _  PInt = PInt
+updatePTypeFromAType _ _  PBool = PBool
+updatePTypeFromAType _ _  (PPair _ _ _) = error "unexpected pattern"
 
 
+updateTermTypeFromAType :: M.Map String TId -> AType -> TermType -> TermType
+updateTermTypeFromAType env ty (r, r_pty, fmls, tmpl) = (r, r_pty', fmls', tmpl)
+  where
+  r_pty' = updatePTypeFromAType env ty r_pty
+  fmls' = case ty of
+    ABase r' _ preds ->
+      let env' = M.insert r' r env in
+      map (fromATypeFormula env') preds ++ fmls
+    AFun _ _ -> fmls
 
 
-initTypeMap :: forall m. MonadId m => Program -> m (TypeMap,ScopeMap)
-initTypeMap (Program fs t0) = do
+initTypeMap :: forall m. MonadId m => [(String, AType)] -> Program -> m (TypeMap,ScopeMap)
+initTypeMap specs (Program fs t0) = do
+    let specMap = M.fromList specs
     es <- execWriterT $ do
         let gatherE :: [TId] -> Exp -> WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
             gatherE fv (Exp l arg _ _) = gather (Proxy @Exp) fv l arg
@@ -229,8 +271,13 @@ initTypeMap (Program fs t0) = do
                     gatherE (x : fv) e2
                 (SLetRec, (fs, e2)) -> do
                     let fv' = map fst fs ++ fv
-                    forM_ fs $ \(_, v) -> do
-                        ty <- genPType fv (getType v) 
+                    forM_ fs $ \(f, v) -> do
+                        ty <- genPType fv (getType v)
+                        let f_orig = getName (name f)
+                        ty <- case M.lookup f_orig specMap of
+                          Just aty ->
+                            return $ updatePTypeFromAType M.empty aty ty
+                          Nothing -> return ty
                         tell (DL.singleton (getUniqueKey v, Left ty, fv'))
                         gatherV fv' v
                     gatherE fv' e2

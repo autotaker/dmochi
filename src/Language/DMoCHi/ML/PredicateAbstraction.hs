@@ -1,4 +1,4 @@
-module Language.DMoCHi.ML.PredicateAbstraction(abstProg, Abst) where
+module Language.DMoCHi.ML.PredicateAbstraction(abstProg, Abst, pprintTypeMap) where
 import Control.Monad
 import Control.Monad.Writer
 import qualified Data.Map as M

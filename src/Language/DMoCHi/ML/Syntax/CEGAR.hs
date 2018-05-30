@@ -217,7 +217,7 @@ updateAbstInfo preds (AbstInfo ps tmpl (xs,fs)) = do
     (ps',fs') <- foldM (\(ps, fs) (ys, fml) -> do
         let fml' = substFormula (M.fromList $ zip ys xs) fml
         fml'' <- HFormula.toHFormula $ substAFormula (M.fromList $ zip ys (snd tmpl)) fml
-        if fml'' `elem` ps 
+        if fml' `elem` fs
             then pure (ps, fs)
             else pure (fml'' : ps, fml' : fs)
         ) (ps, fs) [ (ys, fml) | (ys, fml') <- preds

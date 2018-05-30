@@ -188,7 +188,8 @@ calcLExp env (fml, preds) x e =
                 env1' = extendEnv env1 $ zip xs avs
                 preds1' = pGenArg scope' : preds1
             fml1' <- lift $ mkBin SAnd fml1 =<< fromBFormula ps' phi
-            Right <$> calcExp env1' (fml1', preds1') e1
+            Right <$> calcExp env1' (fml1, preds1') e1
+            --Right <$> calcExp env1' (fml1', preds1') e1
         LOther SBranch (e_l, e_r) -> do
             b <- consumeBranch
             case b of
@@ -216,7 +217,8 @@ calcExp env (fml, preds) e =
                     fml' <- lift $ mkBin SAnd fml =<< fromBFormula ps bfml
                     let env' = M.insert x av env
                         preds' = pGen' scope : preds
-                    calcExp env' (fml', preds') e2
+                    calcExp env' (fml, preds') e2
+                    --calcExp env' (fml', preds') e2
         EOther SLetRec (fs, e1) -> do
             let env' = extendEnv env [ (f, calcValue env' (fml, preds) v) | (f,v) <- fs ]
             calcExp env' (fml, preds) e1
@@ -250,14 +252,14 @@ predicateMap pId2key preds = subst
         return (g IM.! pId, [(args,fml)])
     
 refineProgram :: HFormulaFactory m => M.Map UniqueKey [([TId], Formula)] -> Program -> m Program
-refineProgram subst  = otraverse conv 
+refineProgram subst  = otraverse conv
     where
     conv DummyInfo = pure DummyInfo
-    conv info = 
-        let (key, _) = abstTemplate info
-        in case M.lookup key subst of
-            Nothing -> pure info
-            Just preds -> updateAbstInfo preds info
+    conv info =
+          let (key, _) = abstTemplate info
+          in case M.lookup key subst of
+              Nothing -> pure info
+              Just preds -> updateAbstInfo preds info
 
 {-
 refinePredicates :: M.Map UniqueKey [([Id], Formula)] -> PredTemplate -> [Formula] -> [Formula]
