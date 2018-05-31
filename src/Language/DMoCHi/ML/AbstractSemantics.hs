@@ -1,4 +1,4 @@
-module Language.DMoCHi.ML.AbstractSemantics(genConstraints, refine,AbstractSemantics, RefineConf(..)) where
+module Language.DMoCHi.ML.AbstractSemantics(refine,AbstractSemantics, RefineConf(..)) where
 
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
@@ -11,6 +11,7 @@ import qualified Language.DMoCHi.ML.HornClause as Horn
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.IType
 import           Control.Monad.State.Strict
+import           Control.Monad.Reader
 import           Control.Monad.Except
 import           Text.PrettyPrint.HughesPJClass
 import           Text.Printf
@@ -44,11 +45,11 @@ type Env = M.Map TId AValue
 type Constraint = (HFormula, [Predicate])
 data Predicate = Predicate Meta Int Scope
 type Trace = [Bool]
-type M a = StateT RefineState (HFormulaT (FreshIO (Dict AbstractSemantics))) a
+type M a = ReaderT RefineConf (StateT RefineState (HFormulaT (FreshIO (Dict AbstractSemantics)))) a
 
 data RefineState = 
-    RefineState { 
-        stTrace :: Trace 
+    RefineState {
+        stTrace :: Trace
       , stClauses :: [Horn.Clause]
       , stPIdEntries :: [(Int, UniqueKey)]
     }
@@ -64,12 +65,12 @@ initState tr = RefineState {
 formatPredicate :: Meta -> Int -> String
 formatPredicate meta i = printf "p_%s[%d:0]" (show meta) i
 
-genConstraints :: Context -> Trace -> Exp -> FreshIO (Dict AbstractSemantics) (Horn.HCCS, [(Int, UniqueKey)])
-genConstraints ctx trace e = runHFormulaT doit ctx 
+genConstraints :: Context -> RefineConf -> Trace -> Exp -> FreshIO (Dict AbstractSemantics) (Horn.HCCS, [(Int, UniqueKey)])
+genConstraints ctx conf trace e = runHFormulaT doit ctx
     where
     doit = do
         v_true <- mkLiteral (CBool True)
-        st <- execStateT (calcExp M.empty (v_true, []) e) (initState trace)
+        st <- execStateT (runReaderT (calcExp M.empty (v_true, []) e) conf) (initState trace)
         return (Horn.HCCS (reverse $ stClauses st), stPIdEntries st)
 
 genClause :: Constraint -> Predicate -> M ()
@@ -168,7 +169,7 @@ calcLExp env (fml, preds) x e =
         LAtom a -> do
             let av = calcAtom env a
             -- x == v
-            fml' <- lift $ do
+            fml' <- lift . lift $ do
                 vx <- mkVar x
                 toHFormula a >>= mkBin SEq vx >>= mkBin SAnd fml
             return (Left (av, fml'))
@@ -179,7 +180,6 @@ calcLExp env (fml, preds) x e =
                 scope = Scope $ snd $ abstTemplate info_arg
                 avs = map (calcValue env (fml, preds)) vs
             pGenArg <- newPGen (Unique (fst (abstTemplate info_arg)))
-            phi <- lift $ calcCondition fml ps
             genClause (fml, preds) (pGenArg scope)
             -- callee site
             let ACls env1 (fml1, preds1) (xs, info_arg', e1) = env M.! f
@@ -187,8 +187,12 @@ calcLExp env (fml, preds) x e =
                 scope' = Scope $ snd $ abstTemplate info_arg'
                 env1' = extendEnv env1 $ zip xs avs
                 preds1' = pGenArg scope' : preds1
-            fml1' <- lift $ mkBin SAnd fml1 =<< fromBFormula ps' phi
-            --Right <$> calcExp env1' (fml1, preds1') e1
+
+            fml1' <- ask >>= \conf ->
+              if embedCurCond conf then lift . lift $ do
+                    phi <- calcCondition fml ps
+                    mkBin SAnd fml1 =<< fromBFormula ps' phi
+              else pure fml1
             Right <$> calcExp env1' (fml1', preds1') e1
         LOther SBranch (e_l, e_r) -> do
             b <- consumeBranch
@@ -202,7 +206,7 @@ calcExp env (fml, preds) e =
         EValue v info -> do
             let ps = abstFormulas info
                 scope = Scope $ snd $ abstTemplate info
-            phi <- lift (calcCondition fml ps)
+            phi <- lift $ lift (calcCondition fml ps)
             let av = calcValue env (fml, preds) v
             pGen <- newPGen (Unique (fst (abstTemplate info)))
             genClause (fml, preds) (pGen scope)
@@ -214,16 +218,18 @@ calcExp env (fml, preds) e =
                 Right (Just (av, bfml, pGen')) -> do
                     let ps = abstFormulas info
                         scope = Scope $ snd $ abstTemplate info
-                    fml' <- lift $ mkBin SAnd fml =<< fromBFormula ps bfml
                     let env' = M.insert x av env
                         preds' = pGen' scope : preds
-                    -- calcExp env' (fml, preds') e2
+                    fml' <- ask >>= \conf ->
+                      if embedCurCond conf then do
+                        lift .lift $ mkBin SAnd fml =<< fromBFormula ps bfml
+                      else pure fml
                     calcExp env' (fml', preds') e2
         EOther SLetRec (fs, e1) -> do
             let env' = extendEnv env [ (f, calcValue env' (fml, preds) v) | (f,v) <- fs ]
             calcExp env' (fml, preds) e1
         EOther SAssume (cond, e1) -> do
-            fml' <- lift $ mkBin SAnd fml =<< toHFormula cond
+            fml' <- lift . lift $ mkBin SAnd fml =<< toHFormula cond
             calcExp env (fml', preds) e1
         EOther SBranch (e1, e2) -> do
             b <- consumeBranch
@@ -235,13 +241,14 @@ calcExp env (fml, preds) e =
 
 data RefineConf =
   RefineConf { solver :: Horn.Solver
+             , embedCurCond :: Bool
              , decompose :: Bool }
 
 ---- refinement
 refine :: Context -> RefineConf -> Int -> Trace -> Program ->
           ExceptT Horn.SolverError (FreshIO (Dict AbstractSemantics)) Program
 refine ctx conf cegarId trace prog = do
-    (hccs, pId2key) <- lift (genConstraints ctx trace (mainTerm prog))
+    (hccs, pId2key) <- lift (genConstraints ctx conf trace (mainTerm prog))
     preds <- mapExceptT lift $ solver conf hccs cegarId
     let pMap = predicateMap pId2key preds
     let subst | decompose conf = fmap (\l -> l >>= \(xs, fml) -> (xs,) <$> decomposeFormula fml []) pMap

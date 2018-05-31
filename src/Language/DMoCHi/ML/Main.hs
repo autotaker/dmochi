@@ -86,6 +86,7 @@ data Flag = Help
           | Interactive
           | FoolTraces Int
           | PredicateGen
+          | NoEmbedCurCond
  --         | Fusion
  --         | Incremental
           | Verbose
@@ -106,6 +107,7 @@ data Config = Config { targetProgram :: FilePath
                      , foolTraces :: Bool
                      , foolThreshold :: Int
                      , predicateGen :: Bool
+                     , embedCurCond :: Bool
  --                    , fusion :: Bool
  --                    , incremental :: Bool
                      , cegarMethod :: CEGARMethod
@@ -134,6 +136,7 @@ defaultConfig path = Config { targetProgram = path
                             , foolTraces = False
                             , foolThreshold = 1
                             , predicateGen = False
+                            , embedCurCond = True
   --                          , fusion = False
   --                          , incremental = False
                             , verbose = False
@@ -157,6 +160,7 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
           , Option ['l'] ["limit"] (ReqArg (CEGARLimit . read) "N") "Set CEGAR round limit (default = 20)"
           , Option [] ["acc-traces"] (NoArg AccErrTraces) "Accumrate error traces"
           , Option [] ["pred-gen"] (NoArg PredicateGen) "Generalize Predicate based on AI"
+          , Option [] ["no-embed-cur-cond"] (NoArg NoEmbedCurCond) "Disable Embed current condition in Horn clauses"
           , Option [] ["context-sensitive"] (NoArg ContextSensitive) 
                    "Enable context sensitive predicate discovery, this also enables --acc-traces flag"
           , Option [] ["fool-traces"] (OptArg (FoolTraces . fromMaybe 1 . fmap read) "N")  "Distinguish fool error traces in refinement phase, and set threshold (default = 1)"
@@ -200,6 +204,7 @@ parseArgs = doit
                      ContextSensitive -> acc { accErrTraces = True, contextSensitive = True }
                      FoolTraces n -> acc { foolTraces = True, foolThreshold = n }
                      PredicateGen -> acc { predicateGen = True }
+                     NoEmbedCurCond -> acc { embedCurCond = False }
    --                  Fusion -> acc { fusion = True }
    --                  Incremental -> acc { fusion = True, incremental = True }
                      Interactive -> acc { interactive = True } 
@@ -341,6 +346,7 @@ verify conf = setup doit
                     ExceptT MainError (FreshIO (Dict CEGAR)) (CEGARContext method)
         refine (FusionContext cegarProgram hContext) k trace _ _ = do
             let rconf = AbstSem.RefineConf { AbstSem.solver = currentSolver
+                                           , AbstSem.embedCurCond = embedCurCond conf
                                            , AbstSem.decompose =
                                                 predicateGen conf || Hoice /= hornSolver conf }
             refinedProg <- mapExceptT (zoom (access' #abstractsemantics Dict.empty)) 

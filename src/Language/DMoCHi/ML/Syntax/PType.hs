@@ -268,7 +268,13 @@ initTypeMap specs (Program fs t0) = do
                         SRand    -> pure ()
                         SOmega   -> genType 
                         SFail    -> genType) :: WriterT (DL.DList (UniqueKey, Either PType TermType, [TId])) m ()
-                    gatherE (x : fv) e2
+                    let fv' = case l1 of
+                          SLiteral -> fv
+                          SVar -> fv
+                          SBinary -> fv
+                          SUnary -> fv
+                          _ -> x : fv
+                    gatherE fv' e2
                 (SLetRec, (fs, e2)) -> do
                     let fv' = map fst fs ++ fv
                     forM_ fs $ \(f, v) -> do

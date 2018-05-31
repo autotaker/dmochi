@@ -137,7 +137,6 @@ newContext = do
     return $ Context {..}
 
 
-
     
 
 instance MonadIO m => Z3.MonadZ3 (HFormulaT m) where
@@ -148,6 +147,7 @@ instance MonadIO m => Z3.MonadZ3 (HFormulaT m) where
 class (Z3.MonadZ3 m, BFormulaFactory m) => HFormulaFactory m where
     getHFormulaCache :: m (Cache HFormula)
     checkSat         :: HFormula -> HFormula -> m Bool
+
 
 instance MonadIO m => HFormulaFactory (HFormulaT m) where
     getHFormulaCache = ctxHFormulaCache <$> ask
