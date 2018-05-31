@@ -36,7 +36,7 @@ do
     rm -f work/$testcase*
     src=$testcase.ml
     cp $SRC_DIR/$src work/$src
-    DMOCHI_FLAG="--hccs gch --incremental"
+    DMOCHI_FLAG="--cegar abst --hccs hoice"
     $TIMEOUT_CMD $TIMEOUT $DMOCHI $DMOCHI_FLAG work/$src > $LOG_DIR/$testcase.log
     cp work/$src.result.json $LOG_DIR/$testcase.result.json
 done

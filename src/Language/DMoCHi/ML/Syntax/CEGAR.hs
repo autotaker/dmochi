@@ -5,7 +5,7 @@ module Language.DMoCHi.ML.Syntax.CEGAR(
     , LExpView(..), ExpView(..), ValueView(..), expView, valueView, lexpView
     , mkBin, mkUni, mkLiteral, mkVar, mkPair, mkLambda 
     , mkApp, mkLet, mkLetRec, mkAssume, mkBranch, mkBranchL, mkFail, mkOmega, mkRand
-    , mkAbstInfo, updateAbstInfo, Formula
+    , mkAbstInfo, updateAbstInfo, Formula , decomposeFormula
     , Castable(..)
     , module Language.DMoCHi.ML.Syntax.Type
     , module Language.DMoCHi.ML.Syntax.Base )
@@ -220,8 +220,8 @@ updateAbstInfo preds (AbstInfo ps tmpl (xs,fs)) = do
         if fml' `elem` fs
             then pure (ps, fs)
             else pure (fml'' : ps, fml' : fs)
-        ) (ps, fs) [ (ys, fml) | (ys, fml') <- preds
-                               , fml <- decomposeFormula fml' [] ]
+        ) (ps, fs) [ (ys, fml') | (ys, fml') <- preds ]
+                              -- , fml <- decomposeFormula fml' [] ]
     pure $ AbstInfo ps' tmpl (xs, fs') 
     
 instance HasType Exp where

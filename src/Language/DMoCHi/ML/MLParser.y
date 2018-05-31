@@ -85,6 +85,7 @@ Defs : let LetDef Defs        { $2 : $3 }
      | valcegar SpecDef Defs  { $2 : $3  }
      | valcegar SpecDef ';;' Defs  { $2 : $4  }
      | Expr Defs              { DLet unusedVar $1 : $2 }
+     | Expr ';;' Defs         { DLet unusedVar $1 : $3 }
      |                        { [] }
 
 

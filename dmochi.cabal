@@ -115,6 +115,7 @@ library
                        Language.DMoCHi.ML.HornClause,
                        Language.DMoCHi.ML.HornClause.Syntax,
                        Language.DMoCHi.ML.HornClause.Parser,
+                       Language.DMoCHi.ML.HornClause.SMTLibParser,
                        Language.DMoCHi.ML.HornClause.Solver,
                        Language.DMoCHi.ML.ConvexHull.Solver,
                        Language.DMoCHi.ML.ConvexHull.Syntax,

@@ -8,7 +8,8 @@ import qualified Data.Set as S
 import Control.Monad.State.Strict
 
 newtype HCCS = HCCS { clauses :: [Clause] }
-
+instance Monoid HCCS where
+  mappend (HCCS a) (HCCS b) = HCCS (a ++ b)
 data Clause = Clause { cHead :: Head , cBody :: Body }
 
 data Head = Bot | PVar String [Term] deriving(Show)
@@ -55,9 +56,7 @@ freeVariables :: Clause -> [TId]
 freeVariables clause = S.toList $ execState doit S.empty
     where
     doit = do
-        forM_ (cBody clause) $ \case
-            Pred _ ts -> mapM_ term ts
-            _ -> return () 
+        forM_ (cBody clause) term
         case cHead clause of
             Bot -> return ()
             PVar _ ts -> mapM_ term ts
@@ -81,6 +80,32 @@ freeVariables clause = S.toList $ execState doit S.empty
         Or  t1 t2 -> term t1 >> term t2
         And t1 t2 -> term t1 >> term t2
 
+renamePVar :: (String -> String) -> HCCS -> HCCS
+renamePVar rename (HCCS hccs) = HCCS $
+  map (\clause -> Clause { cHead = renameHead (cHead clause)
+                         , cBody = renameBody (cBody clause)}) hccs
+  where
+  renameHead Bot = Bot
+  renameHead (PVar s ts) = PVar (rename s) (map renameTerm ts)
+  renameBody = map renameTerm
+  renameTerm = \case
+    Bool b -> Bool b
+    Int i -> Int i
+    Var x -> Var x
+    Pred s ts -> Pred (rename s) (map renameTerm ts)
+    Add t1 t2 -> Add (renameTerm t1) (renameTerm t2)
+    Sub t1 t2 -> Sub (renameTerm t1) (renameTerm t2)
+    Mul t1 t2 -> Mul (renameTerm t1) (renameTerm t2)
+    Div t1 t2 -> Div (renameTerm t1) (renameTerm t2)
+    Eq t1 t2 -> Eq (renameTerm t1) (renameTerm t2)
+    NEq t1 t2 -> NEq (renameTerm t1) (renameTerm t2)
+    Gt t1 t2 -> Gt (renameTerm t1) (renameTerm t2)
+    Lt t1 t2 -> Lt (renameTerm t1) (renameTerm t2)
+    Gte t1 t2 -> Gte (renameTerm t1) (renameTerm t2)
+    Lte t1 t2 -> Lte (renameTerm t1) (renameTerm t2)
+    Not t1 -> Not (renameTerm t1)
+    And t1 t2 -> And (renameTerm t1) (renameTerm t2)
+    Or t1 t2 -> Or (renameTerm t1) (renameTerm t2)
 
 predicates :: HCCS -> [(String, [Type])]
 predicates (HCCS hccs) = M.toList $ execState doit M.empty
@@ -129,7 +154,8 @@ renderSMTLib2 hccs = render doit ++ "\n"
     renderTerm = \case
         Bool True -> text "true"
         Bool False -> text "false"
-        Int i -> integer i
+        Int i | i >= 0 -> integer i
+              | otherwise -> parens $ text "-" <+> integer (abs i)
         Var x -> quote $ show $ name x
         Pred s ts -> parens $ hsep (quote s : map renderTerm ts)
         Add t1 t2 -> parens $ text "+" <+> renderTerm t1 <+> renderTerm t2

@@ -2,6 +2,7 @@ module Language.DMoCHi.ML.Syntax.Atom(
   Atom(..), Formula, PredTemplate
   , mkBin, mkUni, mkLiteral, mkVar
   , module Language.DMoCHi.ML.Syntax.Base
+  , module Language.DMoCHi.ML.Syntax.Type
   , Atomic(..), substAtomic, substAFormula, substFormula, desubstAtom
   , decompose, updateFormula, decomposeFormula
 ) where

@@ -1,4 +1,4 @@
-module Language.DMoCHi.ML.AbstractSemantics(genConstraints, refine,AbstractSemantics) where
+module Language.DMoCHi.ML.AbstractSemantics(genConstraints, refine,AbstractSemantics, RefineConf(..)) where
 
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
@@ -188,8 +188,8 @@ calcLExp env (fml, preds) x e =
                 env1' = extendEnv env1 $ zip xs avs
                 preds1' = pGenArg scope' : preds1
             fml1' <- lift $ mkBin SAnd fml1 =<< fromBFormula ps' phi
-            Right <$> calcExp env1' (fml1, preds1') e1
-            --Right <$> calcExp env1' (fml1', preds1') e1
+            --Right <$> calcExp env1' (fml1, preds1') e1
+            Right <$> calcExp env1' (fml1', preds1') e1
         LOther SBranch (e_l, e_r) -> do
             b <- consumeBranch
             case b of
@@ -217,8 +217,8 @@ calcExp env (fml, preds) e =
                     fml' <- lift $ mkBin SAnd fml =<< fromBFormula ps bfml
                     let env' = M.insert x av env
                         preds' = pGen' scope : preds
-                    calcExp env' (fml, preds') e2
-                    --calcExp env' (fml', preds') e2
+                    -- calcExp env' (fml, preds') e2
+                    calcExp env' (fml', preds') e2
         EOther SLetRec (fs, e1) -> do
             let env' = extendEnv env [ (f, calcValue env' (fml, preds) v) | (f,v) <- fs ]
             calcExp env' (fml, preds) e1
@@ -233,14 +233,19 @@ calcExp env (fml, preds) e =
         EOther SFail _ -> genFailClause (fml, preds) >> return Nothing
         EOther SOmega _ -> error "diverged"
 
+data RefineConf =
+  RefineConf { solver :: Horn.Solver
+             , decompose :: Bool }
 
 ---- refinement
-refine :: Context -> Horn.Solver -> Int -> Trace -> Program -> 
+refine :: Context -> RefineConf -> Int -> Trace -> Program ->
           ExceptT Horn.SolverError (FreshIO (Dict AbstractSemantics)) Program
-refine ctx solver cegarId trace prog = do
+refine ctx conf cegarId trace prog = do
     (hccs, pId2key) <- lift (genConstraints ctx trace (mainTerm prog))
-    preds <- mapExceptT lift $ solver hccs cegarId
-    let subst = predicateMap pId2key preds
+    preds <- mapExceptT lift $ solver conf hccs cegarId
+    let pMap = predicateMap pId2key preds
+    let subst | decompose conf = fmap (\l -> l >>= \(xs, fml) -> (xs,) <$> decomposeFormula fml []) pMap
+              |otherwise = pMap
     runHFormulaT (refineProgram subst prog) ctx
 
 predicateMap :: [(Int, UniqueKey)] -> [(Int, [TId], Formula)] -> M.Map UniqueKey [([TId], Formula)]

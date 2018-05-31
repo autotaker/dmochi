@@ -91,11 +91,15 @@ data Flag = Help
           | Verbose
           | CEGARMethod CEGARMethod
           deriving Eq
-data HCCSSolver = IT | GCH  deriving Eq
+data HCCSSolver = Fpat FpatSolver | Hoice  deriving Eq
+data FpatSolver = IT | GCH
+  deriving Eq
+
 data CEGARMethod = DepType | AbstSemantics deriving Eq
 
 data Config = Config { targetProgram :: FilePath
                      , hornOption :: String
+                     , hornSolver :: HCCSSolver
                      , cegarLimit :: Int
                      , accErrTraces :: Bool
                      , contextSensitive :: Bool
@@ -109,9 +113,13 @@ data Config = Config { targetProgram :: FilePath
                      , interactive :: Bool }
 
 
-getHCCSSolver :: IO FilePath
+getHCCSSolver :: Config -> FilePath -> Horn.Solver
 --getHCCSSolver = Paths_dmochi.getDataFileName "hcsolver"
-getHCCSSolver = return "rcaml.opt"
+getHCCSSolver (Config { hornSolver = Fpat _
+                      , hornOption = option }) basename =
+  Horn.rcamlSolver "rcaml.opt" option basename
+getHCCSSolver (Config { hornSolver = Hoice }) basename =
+  Horn.hoiceSolver "hoice" basename
 
 getConvexHullSolver :: IO FilePath
 getConvexHullSolver = return "convex-hull"
@@ -119,6 +127,7 @@ getConvexHullSolver = return "convex-hull"
 defaultConfig :: FilePath -> Config
 defaultConfig path = Config { targetProgram = path
                             , hornOption = ""
+                            , hornSolver = Fpat IT
                             , cegarLimit = 20
                             , accErrTraces = False
                             , contextSensitive = False
@@ -144,7 +153,7 @@ run = do
         
 options :: [ OptDescr Flag ]
 options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
-          , Option [] ["hccs"] (ReqArg parseSolver "it|gch") "Set hccs solver"
+          , Option [] ["hccs"] (ReqArg parseSolver "it|gch|hoice") "Set hccs solver"
           , Option ['l'] ["limit"] (ReqArg (CEGARLimit . read) "N") "Set CEGAR round limit (default = 20)"
           , Option [] ["acc-traces"] (NoArg AccErrTraces) "Accumrate error traces"
           , Option [] ["pred-gen"] (NoArg PredicateGen) "Generalize Predicate based on AI"
@@ -157,8 +166,9 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
           , Option [] ["cegar"] (ReqArg parseMethod "dep|abst") "Set CEGAR method (default = dep)"  
           , Option [] ["interactive"] (NoArg Interactive) "interactive counterexample generation" ]
     where
-    parseSolver "it" = HCCS IT
-    parseSolver "gch" = HCCS GCH
+    parseSolver "it" = HCCS (Fpat IT)
+    parseSolver "gch" = HCCS (Fpat GCH)
+    parseSolver "hoice" = HCCS Hoice
     parseSolver s = error $ "Non Supported Parameter for --hccs: " ++ s
     parseMethod "dep" = CEGARMethod DepType
     parseMethod "abst" = CEGARMethod AbstSemantics
@@ -181,8 +191,9 @@ parseArgs = doit
         (opts, _, []) | Help `elem` opts -> help
         (opts, [file], []) -> return $
             foldl (\acc opt -> case opt of
-                     HCCS IT -> acc { hornOption = "-hccs it" }
-                     HCCS GCH -> acc { hornOption = "-hccs gch" }
+                     HCCS (Fpat IT) -> acc { hornSolver = Fpat IT, hornOption = "-hccs it" }
+                     HCCS (Fpat GCH) -> acc { hornSolver = Fpat GCH, hornOption = "-hccs gch" }
+                     HCCS Hoice -> acc { hornSolver = Hoice, hornOption = ""}
                      CEGARLimit l -> acc { cegarLimit = l }
                      CEGARMethod m -> acc { cegarMethod = m }
                      AccErrTraces -> acc { accErrTraces = True }
@@ -243,10 +254,8 @@ verify conf = setup doit
     -- ExceptT MainError (FreshT (TracerT c (LoggingT IO))) a
     let path = targetProgram conf
     
-    hccsSolverPath <- liftIO getHCCSSolver
-    let defaultSolver = Horn.rcamlSolver hccsSolverPath "-hccs it" path
-        gchSolver     = Horn.rcamlSolver hccsSolverPath "-hccs gch" path
-        currentSolver = Horn.rcamlSolver hccsSolverPath (hornOption conf) path
+    let defaultSolver = Horn.rcamlSolver "rcaml.opt" "-hccs it" path
+        currentSolver = getHCCSSolver conf path
 
     -- parsing
     let prettyPrint :: Pretty a => Text.Text -> String -> a -> ExceptT MainError (FreshIO c) ()
@@ -331,9 +340,12 @@ verify conf = setup doit
         refine :: CEGARContext method -> Int -> SExec.Trace -> Maybe Bool -> FilePath -> 
                     ExceptT MainError (FreshIO (Dict CEGAR)) (CEGARContext method)
         refine (FusionContext cegarProgram hContext) k trace _ _ = do
+            let rconf = AbstSem.RefineConf { AbstSem.solver = currentSolver
+                                           , AbstSem.decompose =
+                                                predicateGen conf || Hoice /= hornSolver conf }
             refinedProg <- mapExceptT (zoom (access' #abstractsemantics Dict.empty)) 
                       $ withExceptT RefinementFailed 
-                      $ AbstSem.refine hContext currentSolver k trace cegarProgram
+                      $ AbstSem.refine hContext rconf k trace cegarProgram
             if predicateGen conf 
                 then do
                     refinedProg <- lift $ zoom (access' #predicategeneralizer Dict.empty) $

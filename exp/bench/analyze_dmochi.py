@@ -10,7 +10,7 @@ def get_size(file):
     s = subprocess.check_output(['ocamlwc', file ], universal_newlines = True)
     return int(s.split()[0])
 
-lazy_keys  = [ 'total', 'result', 'cycles', 'fusion', 'refine', 'smt_calls']
+lazy_keys  = [ 'total', 'result', 'cycles', 'fusion', 'refine'] #, 'smt_calls']
 testcases = open('testcases', 'r').read().split()
 
 log_dir = 'log'
@@ -35,7 +35,7 @@ def analyze_fusion(logfile):
                , 'total'  : data['total']
                , 'fusion'   : fold(lambda d: d['fusion'])
                , 'refine' : fold(lambda d: d.get('refine',0))
-               , 'smt_calls' : fold(lambda d: d['fusion_sat']['number_smt_call'])
+               #, 'smt_calls' : fold(lambda d: d['fusion_sat']['number_smt_call'])
                }
 
 colums = ['name'] + [ key for key in lazy_keys]
