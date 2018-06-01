@@ -13,7 +13,7 @@ DMOCHI=dmochi
 TIMEOUT=100
 TIMEOUT_CMD=timeout
 
-LOG_DIR=log/dmochi_ml
+LOG_DIR=log/dmochi_ml_hoice_no_embed
 
 
 if [ ! -e work ]; then
@@ -36,7 +36,7 @@ do
     rm -f work/$testcase*
     src=$testcase.ml
     cp $SRC_DIR/$src work/$src
-    DMOCHI_FLAG="--cegar abst --hccs hoice"
+    DMOCHI_FLAG="--cegar abst --no-embed-cur-cond --hccs hoice"
     $TIMEOUT_CMD $TIMEOUT $DMOCHI $DMOCHI_FLAG work/$src > $LOG_DIR/$testcase.log
     cp work/$src.result.json $LOG_DIR/$testcase.result.json
 done

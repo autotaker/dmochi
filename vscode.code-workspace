@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": { 
+		"languageServerHaskell.enableHIE": true,
+		"languageServerHaskell.useHieWrapper": true
+	}
+}

@@ -8,13 +8,11 @@
 *log.txt
 .cabal-sandbox/
 .stack-work/
+.vscode
 dist/
 cabal.sandbox.config
 activate.sh
 tmp/
-sample/*.log
-sample/*.bool
-sample/*.hrs
 Boolean/cpstest/
 ML/sample/
 tests/work

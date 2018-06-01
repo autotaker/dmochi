@@ -2,3 +2,5 @@
 *.dot
 *.hcs
 *.ans
+*.result.json
+*.smt2

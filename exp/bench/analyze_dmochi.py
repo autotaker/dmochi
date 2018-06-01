@@ -13,7 +13,7 @@ def get_size(file):
 lazy_keys  = [ 'total', 'result', 'cycles', 'fusion', 'refine'] #, 'smt_calls']
 testcases = open('testcases', 'r').read().split()
 
-log_dir = 'log'
+log_dir = 'log/dmochi_ml/'
 
 def analyze(name):
     result_lazy = analyze_fusion(os.path.join(log_dir, name + '.result.json'))
