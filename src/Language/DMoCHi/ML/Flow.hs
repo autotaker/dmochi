@@ -1,4 +1,3 @@
-{-# LANGUAGE ViewPatterns, LambdaCase #-}
 module Language.DMoCHi.ML.Flow( FlowMap, flowAnalysis ) where
 import           Control.Monad.Writer hiding ((<>))
 import           Control.Monad.State
@@ -186,7 +185,7 @@ saturate appTbl graph cache = pop >>= \case
     Nothing -> return ()
 
 pop :: MonadState Queue m => m (Maybe (Key,[Func]))
-pop = (Q.viewl <$> get) >>= \case 
+pop = gets Q.viewl >>= \case 
     v Q.:< queue -> put queue >> return (Just v)
     Q.EmptyL -> return Nothing
     
@@ -219,8 +218,8 @@ flowAnalysis (Program e0) = do
     let keys = S.toList $ S.fromList $ concat $ 
             map (\case 
                 ELabel l1 l2 -> decompLabel l1 ++ decompLabel l2
-                EApp _ k ls l -> k : concat (map decompLabel (l:ls))) cs ++
-            map (\(Func ident ls l) -> KFun ident : concat (map decompLabel (l:ls))) funcs
+                EApp _ k ls l -> k : concatMap decompLabel (l:ls)) cs ++
+            map (\(Func ident ls l) -> KFun ident : concatMap decompLabel (l:ls)) funcs
     graph <- liftIO H.new
     cache <- liftIO H.new
     appTbl <- liftIO H.new
@@ -243,7 +242,7 @@ flowAnalysis (Program e0) = do
             let vs = map funcIdent $ S.toList values
             let !acc' = M.insert f vs acc
                 !acc_doc' = acc_doc $+$ pPrint f <+> text "->" <+> hsep (map pPrint vs)
-            return $! (acc', acc_doc')
+            return (acc', acc_doc')
         _ -> return (acc,acc_doc)) (M.empty, empty) cs
     logPretty "flow" LevelDebug "result" (PPrinted doc)
     return r

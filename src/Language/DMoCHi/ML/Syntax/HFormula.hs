@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, RecordWildCards #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, RecordWildCards #-}
 module Language.DMoCHi.ML.Syntax.HFormula(
   HFormula(..), HFormulaFactory(..)
   , getIdent, getIValue, Context(..), HFormulaT, runHFormulaT, newContext
@@ -116,7 +116,7 @@ data Context =
       , ctxSMTCountHit   :: IORef Int
     }
 
-newtype HFormulaT m a = HFormulaT { unHFRomulaT :: ReaderT Context m a }
+newtype HFormulaT m a = HFormulaT (ReaderT Context m a)
     deriving (Monad, Applicative, Functor, MonadFix, MonadIO, MonadLogger, MonadReader Context, MonadTrans, MonadId)
 
 runHFormulaT :: HFormulaT m a -> Context -> m a
@@ -140,8 +140,8 @@ newContext = do
     
 
 instance MonadIO m => Z3.MonadZ3 (HFormulaT m) where
-    getSolver = ctxSMTSolver <$> ask
-    getContext = ctxSMTContext <$> ask
+    getSolver = asks ctxSMTSolver
+    getContext = asks ctxSMTContext
 
 
 class (Z3.MonadZ3 m, BFormulaFactory m) => HFormulaFactory m where
@@ -150,7 +150,7 @@ class (Z3.MonadZ3 m, BFormulaFactory m) => HFormulaFactory m where
 
 
 instance MonadIO m => HFormulaFactory (HFormulaT m) where
-    getHFormulaCache = ctxHFormulaCache <$> ask
+    getHFormulaCache = asks ctxHFormulaCache
     {-# INLINE checkSat #-}
     checkSat p1 p2 = {- measureTime CheckSat $-} do
         ctx <- ask
@@ -184,7 +184,7 @@ genHFormula key@(HFormulaKey l arg) m_iv = do
 
 
 instance MonadIO m => BFormulaFactory (HFormulaT m) where
-    getBFormulaCache = ctxBFormulaCache <$> ask
+    getBFormulaCache = asks ctxBFormulaCache
 
 
 {-# INLINE mkBin #-}
@@ -285,9 +285,7 @@ instance Show HFormula where
 -- assertion: phi |- fromBFormula ps ret
 {-# INLINE calcCondition #-}
 calcCondition :: HFormulaFactory m => HFormula -> [HFormula] -> m BFormula
-calcCondition _fml _ps = {- measureTime CalcCondition $ -} do
-    phi <- go 1 _fml _ps
-    return phi
+calcCondition = {- measureTime CalcCondition $ -} go 1
     where
     go _ _ [] = mkBLeaf True
     go i fml (p:ps) = do

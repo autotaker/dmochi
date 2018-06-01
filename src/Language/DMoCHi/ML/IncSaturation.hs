@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, RecordWildCards #-}
 module Language.DMoCHi.ML.IncSaturation(saturate,IncSat) where
 import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.HFormula
@@ -8,7 +7,6 @@ import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.IncSaturationPre
 import           Language.DMoCHi.Common.Cache hiding(ident)
-import qualified Language.DMoCHi.ML.SMT as SMT
 -- import qualified Language.DMoCHi.ML.AbstractSemantics as AbsSemantics
 
 -- import Control.Monad
@@ -23,23 +21,22 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
 import           Text.PrettyPrint.HughesPJClass
-import           Debug.Trace
+--import           Debug.Trace
 import           GHC.Stack
 import           Data.PolyDict(Dict)
 
 getFlow :: UniqueKey -> R [([IType], BFormula)]
 getFlow i = do
-    tbl <- ctxFlowTbl <$> ask
-    l <- liftIO (H.lookup tbl i) >>= \case
+    tbl <- asks ctxFlowTbl 
+    liftIO (H.lookup tbl i) >>= \case
         Just v -> return (S.toList v)
         Nothing -> return []
     -- liftIO $ print ("getFlow", i, l)
-    return l
 
 addFlow :: UniqueKey -> ([IType], BFormula) -> R ()
 addFlow i v = do
-    tbl <- ctxFlowTbl <$> ask
-    reg <- ctxFlowReg <$> ask
+    tbl <- asks ctxFlowTbl
+    reg <- asks ctxFlowReg
     let cont :: S.Set ([IType], BFormula) -> R ()
         cont !vs' = do
             liftIO (H.insert tbl i vs')
@@ -299,7 +296,7 @@ calcApp env fml pId (f, _abstInfo, vs) = do
     let ps = abstFormulas _abstInfo
     phi <- calcCondition fml ps
     nodes <- forM vs $ \v -> calcValue env fml v >>= setParent pId
-    flow <- (!f) . ctxFlowMap <$> ask
+    flow <- asks $ (!f) . ctxFlowMap 
 
     let recalc = do
             thetas <- mapM getTypes nodes
@@ -327,12 +324,13 @@ calcApp env fml pId (f, _abstInfo, vs) = do
                 CRec cenv_f g hist -> do
                     node <- liftIO $ H.lookup hist (g, (thetas, phi), iota) >>= \case
                         Just node -> return node
-                        Nothing -> H.foldM (\acc ((g', (thetas', phi'), iota'), val) -> do
+                        Nothing -> H.foldM (\acc ((g', (thetas', phi'), iota'), val) -> 
+                            return $!
                             if g == g' && phi == phi' && 
                              and (zipWith subTypeOf thetas thetas') &&
                                iota' `subTermTypeOf` iota
-                            then return val
-                            else return acc) (error "no match") hist
+                            then val
+                            else acc) (error "no match") hist
                     closureCase (extractor node cenv_f)
                 cv_f -> closureCase cv_f
     tys <- recalc
@@ -393,7 +391,7 @@ calcExp env fml exp =
             EOther SOmega _ -> 
                 let extract _ _ = error "extract@SOmega_calcExp: omega never returns value nor fails"
                 in return ([], return [], extract, return ())
-        let extract' cenv iota = do
+        let extract' cenv iota = 
                 {-
                 liftIO $ do
                     putStrLn $ "extracting: " ++ show (pPrint iota)
@@ -436,7 +434,7 @@ calcLExp env fml x lexp = -- genNode $ \nodeIdent -> do
                 itypeRef <- liftIO $ newIORef itys
                 alive <- liftIO $ newIORef True
                 let destruct' = (destruct :: R ()) >> liftIO (writeIORef alive False)
-                let extract' cenv iota = do
+                let extract' cenv iota = 
                         {-
                         liftIO $ do
                             putStrLn $ "extracting: " ++ show (pPrint iota)
@@ -462,14 +460,14 @@ updateLoop = popQuery >>= \case
     Just (UpdateQuery _ nodeId) -> do
         SomeNode node <- getNode nodeId
         case node of
-            Node {ident = ident, alive = alive} -> do
+            Node {ident = ident, alive = alive} -> 
                 liftIO (readIORef alive) >>= \case
                     True -> do
                         new_ity <- recalcator node
                         old_ity <- getTypes node
                         setTypes node new_ity
                         when (new_ity /= old_ity) $ do
-                            tbl <- ctxNodeDepG <$> ask
+                            tbl <- asks ctxNodeDepG
                             liftIO (H.lookup tbl ident) >>= \case
                                 Nothing -> pure ()
                                 Just ns -> forM_ ns $ pushQuery . UpdateQuery QEdge
@@ -481,7 +479,6 @@ saturate hctx prog = do
     ctx <- lift $ initContext prog
     let doit :: R (Bool, ([ITermType], Maybe [Bool]))
         doit = do
-            SMT.initSMTContext
             logPretty "saturate" LevelDebug "Abstraction Annotated Program" (PPrinted (pPrint prog))
             root <- mkLiteral (CBool True) >>= \fml0 -> calcExp M.empty fml0 (mainTerm prog)
             updateLoop
@@ -492,7 +489,7 @@ saturate hctx prog = do
                 --hcs <- AbsSemantics.genConstraints bs (mainTerm prog)
                 -- liftIO $ print hcs
                 return (True, (tys, Just bs))
-            else do
+            else 
                 return (False, (tys, Nothing))
     res <- lift $ runHFormulaT (evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)) hctx
     dict <- liftIO $ getStatistics ctx

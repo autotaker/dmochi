@@ -78,7 +78,7 @@ matchType = go M.empty
     go !acc (TFun (ty1:tys1) ty2) (TFun (ty3:tys3) ty4) = do
         acc' <- go acc ty1 ty3
         go acc' (TFun tys1 ty2) (TFun tys3 ty4)
-    go !acc (TSyn tys1 _) (TSyn tys2 _) = do
+    go !acc (TSyn tys1 _) (TSyn tys2 _) = 
         if length tys1 /= length tys2
         then Nothing
         else foldM (\acc (ty1, ty2) -> go acc ty1 ty2) acc (zip tys1 tys2)
@@ -111,7 +111,7 @@ matchTypeScheme (TypeScheme fvs1 ty1) (TypeScheme _ ty2) = doit
     go !acc (TFun (ty1:tys1) ty2) (TFun (ty3:tys3) ty4) = do
         acc' <- go acc ty1 ty3
         go acc' (TFun tys1 ty2) (TFun tys3 ty4)
-    go !acc (TSyn tys1 _) (TSyn tys2 _) = do
+    go !acc (TSyn tys1 _) (TSyn tys2 _) = 
         if length tys1 /= length tys2
         then Nothing
         else foldM (\acc (ty1, ty2) -> go acc ty1 ty2) acc (zip tys1 tys2)

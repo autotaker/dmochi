@@ -18,7 +18,7 @@ module Language.DMoCHi.ML.Syntax.IType(
 import           Data.Hashable
 import           Text.PrettyPrint.HughesPJClass
 import           GHC.Generics (Generic)
-import           Language.DMoCHi.Common.Util
+-- import           Language.DMoCHi.Common.Util
 import           Control.Monad.IO.Class
 import           Data.List(sort,foldl')
 import           Language.DMoCHi.Common.Cache
@@ -35,6 +35,7 @@ data ITypeBody
 pattern IBase <- Identified { body = IBase' }
 pattern IPair v1 v2 <- Identified { body = IPair' v1 v2 }
 pattern IFun as <- Identified { body = IFun' as }
+{-# COMPLETE IBase, IPair, IFun #-}
 
 instance Hashable ITypeBody
 instance Show ITypeBody where
@@ -49,6 +50,7 @@ data ITermTypeBody
 
 pattern IFail <- Identified { body = IFail' }
 pattern ITerm ty fml <- Identified { body = ITerm' ty fml }
+{-# COMPLETE IFail, ITerm #-}
 
 instance Hashable ITermTypeBody
 

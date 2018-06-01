@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns, GADTs #-}
-module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..), initSMTContext, mkUMul, mkUDiv,
+module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..), mkUMul, mkUDiv,
                               getSMTCount, resetSMTCount,IValue(..), toIValueId, mkEqIValue) where
 
 import Language.DMoCHi.ML.Syntax.PNormal hiding(mkApp)
@@ -13,20 +13,10 @@ import Data.IORef
 import Debug.Trace
 import System.IO.Unsafe
 
+{-# NOINLINE smtCounter #-}
 smtCounter :: IORef Int
 smtCounter = unsafePerformIO (newIORef 0)
 
-data SMTContext = SMTContext { mulFD :: FuncDecl
-                             , divFD :: FuncDecl }
-smtContext :: IORef SMTContext
-smtContext = unsafePerformIO (newIORef (SMTContext undefined undefined))
-
-initSMTContext :: MonadZ3 z3 => z3 ()
-initSMTContext = do
-    int <- mkIntSort
-    fd1 <- mkFreshFuncDecl "mul" [int, int] int
-    fd2 <- mkFreshFuncDecl "div" [int, int] int
-    liftIO $ writeIORef smtContext $ SMTContext fd1 fd2
 
 data IValue = Func | ASTValue AST | IPair IValue IValue deriving(Show)
 
@@ -44,21 +34,11 @@ toIValue v = case valueView v of
 
 mkUDiv :: MonadZ3 z3 => IValue -> IValue -> z3 IValue
 mkUDiv (ASTValue v1) (ASTValue v2) = ASTValue <$> mkDiv v1 v2
-{-
-mkUDiv (ASTValue v1) (ASTValue v2) = do
-    ctx <- liftIO $ readIORef smtContext
-    ASTValue <$> mkApp (divFD ctx) [v1, v2] 
-    -}
 mkUDiv _ _ = error "unexpected pattern"
 
 {- the first boolean argument represents that this is scalar or not -}
 mkUMul :: MonadZ3 z3 => Bool -> IValue -> IValue -> z3 IValue
 mkUMul _ (ASTValue v1) (ASTValue v2) = ASTValue <$> mkMul [v1, v2]
-{-
-mkUMul False (ASTValue v1) (ASTValue v2) = do
-    ctx <- liftIO $ readIORef smtContext
-    ASTValue <$> mkApp (mulFD ctx) [v1, v2] 
-    -}
 mkUMul _ _ _ = error "unexpected pattern"
     
 
@@ -134,7 +114,6 @@ mkAnd' l  = mkAnd l
 
 sat :: [Value] -> IO Bool
 sat vs = evalZ3 $ do
-    initSMTContext
     ivs <- mapM toIValue vs
     {-
     forM_ ivs $ \(ASTValue v) -> do
@@ -144,13 +123,7 @@ sat vs = evalZ3 $ do
     (res, _model) <- getModel
     -- liftIO $ print res
     case res of
-        Sat -> do 
-            {-
-            case model of 
-                Just m -> showModel m >>= liftIO . putStrLn
-                Nothing -> return ()
-            -}
-            return True
+        Sat -> return True
         Unsat -> return False
         Undef -> return True
 
@@ -197,7 +170,6 @@ abst :: [Atom] -> [Atom] -> IO (BDDNode Atom)
 abst constraints predicates = evalZ3 $ do
     let f (ASTValue v) = v
         f _ = error "Expecting an SMT value"
-    initSMTContext
     assert =<< mkAnd' =<< mapM (toIValueA >=> (return . f)) constraints
     z3_predicates  <- mapM (toIValueA >=> (return . f)) predicates
     hashTable <- liftIO $ HT.new :: Z3 (HT.BasicHashTable BDDHashKey (BDDNode Atom))

@@ -376,7 +376,7 @@ genericPPrint pp pLevel prec op arg =
             pPrintExp pp pLevel 0 e2
         (SLetRec, (fs,e)) -> maybeParens (prec > 0) $
             let drec = vcat $ 
-                    zipWith (\d1 d2 -> d1 $$ d2) 
+                    zipWith ($$) 
                         (text "let rec" : repeat (text "and"))
                         [ nest 8 $ hang (pPrintIdent pp prettyBind 0 x <+> text "=") 4 (pPrintExp pp pLevel 0 e1) | (x,e1) <- fs ]
                 in

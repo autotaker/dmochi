@@ -1,7 +1,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Language.DMoCHi.ML.Alpha(alpha,AlphaError, Exp(..), Program(..), refresh, Var) where
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
-import Language.DMoCHi.ML.Syntax.UnTyped(Type(..), TypeScheme, SynonymDef(..), AType)
+import Language.DMoCHi.ML.Syntax.UnTyped(Type(..), TypeScheme, SynonymDef(..))
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.Common.Id hiding(identify, refresh)
 import Language.DMoCHi.Common.Util
@@ -167,7 +167,7 @@ instance Traversable Exp where
 type M a = ReaderT (M.Map String (Var (Maybe Type))) (ExceptT AlphaError FreshLogging) a
 
 alpha :: U.Program -> ExceptT AlphaError FreshLogging (Program (Maybe Type))
-alpha (U.Program fs syns specs t0) = do
+alpha (U.Program fs syns _ t0) = do
     env <- M.fromList <$> mapM (\(x,_,_) -> fmap (U.varName x,) (identify x)) fs
     when (M.size env /= length fs) $ do
         let fs' = map head $ filter ((>1).length) $ group $ sort $ map (\(x,_,_) -> U.varName x) fs
@@ -252,6 +252,6 @@ register x m = do
 
 register' :: [U.AnnotVar String (Maybe Type)] -> M a -> M ([U.AnnotVar (Id String) (Maybe Type)],a)
 register' xs m = do
-    xs' <- mapM (\x -> identify x) xs
+    xs' <- mapM identify xs
     v  <- local (\env -> foldr (\(x,x') -> M.insert (U.varName x) x') env (zip xs xs')) m
     return (xs',v)

@@ -1,4 +1,4 @@
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE MultiParamTypeClasses, PatternSynonyms #-}
 module Language.DMoCHi.ML.Syntax.CEGAR(
       Program(..)
     , Exp(..), Value(..), Atom(..), LExp(..), Normalized, AbstInfo(..)
@@ -26,7 +26,7 @@ import Data.MonoTraversable
 import Control.Monad
 import Data.Maybe
 import Text.Printf
-import Debug.Trace
+--import Debug.Trace
 
 
 data AbstInfo 

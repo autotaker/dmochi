@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, BangPatterns, GADTs, TypeFamilies, DataKinds #-}
+{-# LANGUAGE FlexibleContexts, GADTs, TypeFamilies, DataKinds #-}
 module Language.DMoCHi.ML.Syntax.Typed  where
 -- import qualified Data.Map as M
 -- import qualified Data.Set as S
