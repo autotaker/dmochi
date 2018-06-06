@@ -28,9 +28,8 @@ abstFormulae cs pvs fml = do
     bdd <- liftIO $ SMT.abst cs ps
     let sort = B.Tuple [ B.Bool | _ <- fml ]
     let gen qs (SMT.Leaf _ True) = return $ B.T $ reverse qs
-        gen _ (SMT.Leaf _ False) = do
-            omega <- B.Symbol sort <$> freshId "Omega"
-            return $ B.Omega omega
+        gen _ (SMT.Leaf _ False) = 
+            B.Omega . B.Symbol sort <$> freshId "Omega"
         gen qs (SMT.Node _ _ hi lo) 
             | hi == lo = do
                 let q = (B.f_branch (B.C True) (B.C False))
@@ -40,9 +39,8 @@ abstFormulae cs pvs fml = do
                 term_lo <- gen (B.C False : qs) lo
                 return $ B.f_branch term_hi term_lo
         go [] bdd = gen [] bdd
-        go (_:_) (SMT.Leaf _ False) = do
-            omega <- B.Symbol sort <$> freshId "Omega1"
-            return $ B.Omega omega
+        go (_:_) (SMT.Leaf _ False) = 
+            B.Omega . B.Symbol sort <$> freshId "Omega1"
         go (_:_) (SMT.Leaf _ True) = error "abstFormulae: unexpected satisfiable leaf"
         go ((term_p, _):pvs') (SMT.Node _ _ hi lo) 
             | hi == lo = go pvs' hi
@@ -54,9 +52,9 @@ abstFormulae cs pvs fml = do
 
     term <- go pvs bdd
     let doc = 
-            let doc_cs = brackets $ hsep $ punctuate comma (map (pPrint) cs)
+            let doc_cs = brackets $ hsep $ punctuate comma (map pPrint cs)
                 doc_pvar = brackets $ hsep $ punctuate comma (map (pPrint . snd) pvs)
-                doc_fml = brackets $ hsep $ punctuate comma (map (pPrint) fml)
+                doc_fml = brackets $ hsep $ punctuate comma (map pPrint fml)
                 doc_term = B.pprintTerm 0 term
             in braces $
                text "constraints:" <+> doc_cs $+$ 
@@ -84,7 +82,7 @@ abstFormula cs pvs fml = do
 
 cast :: (MonadIO m, MonadLogger m, MonadId m) => Constraints -> PVar -> B.Term -> PType -> PType -> m B.Term
 cast cs pv e curTy newTy = do
-    let doc_cs = brackets $ hsep $ punctuate comma (map (pPrint) cs)
+    let doc_cs = brackets $ hsep $ punctuate comma (map pPrint cs)
         doc_pvar = brackets $ hsep $ punctuate comma (map (pPrint . snd) pv)
         doc_e = B.pprintTerm 0 e
         doc_curTy = pprintPType 0 curTy
@@ -226,13 +224,11 @@ abstTerm tbl env cs pv e tau =
         ML.EOther ML.SAssume (v,e) -> do
             e_v <- abstValue tbl env cs pv (ML.cast v) PBool
             B.f_assume e_v <$> abstTerm tbl env (v : cs) pv e tau
-        ML.EOther ML.SFail _ -> do
-            fail <- B.freshSym "fail" (toSortTerm tau)
-            return $ B.Fail fail
-        ML.EOther ML.SOmega _ -> do
-            fail <- B.freshSym "omega" (toSortTerm tau)
-            return $ B.Omega fail
-        ML.EOther ML.SBranch (t1, t2) -> do
+        ML.EOther ML.SFail _ -> 
+            B.Fail <$> B.freshSym "fail" (toSortTerm tau)
+        ML.EOther ML.SOmega _ -> 
+            B.Fail <$>  B.freshSym "omega" (toSortTerm tau)
+        ML.EOther ML.SBranch (t1, t2) -> 
             B.f_branch_label <$> abstTerm tbl env cs pv t1 tau
                              <*> abstTerm tbl env cs pv t2 tau
 

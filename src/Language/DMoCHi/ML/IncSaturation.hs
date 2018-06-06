@@ -1,3 +1,5 @@
+{-# LANGUAGE RecordWildCards #-}
+
 module Language.DMoCHi.ML.IncSaturation(saturate,IncSat) where
 import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.HFormula
@@ -6,11 +8,10 @@ import           Language.DMoCHi.ML.Syntax.IType
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.ML.IncSaturationPre
-import           Language.DMoCHi.Common.Cache hiding(ident)
 -- import qualified Language.DMoCHi.ML.AbstractSemantics as AbsSemantics
 
 import           Control.Monad.Reader
-import           Control.Monad.Writer hiding((<>))
+import           Control.Monad.Writer 
 import           Control.Monad.State.Strict
 import           Data.IORef
 import           Data.Maybe(isNothing)
@@ -150,7 +151,6 @@ bindTermType :: (IType -> BFormula -> R [ITermType])  -> [ITermType] -> R [ITerm
 bindTermType f tys = fmap concatMerge $ forM tys $ \case
     IFail -> return [mkIFail]
     ITerm ity phi -> f ity phi
-    _ -> undefined -- impossible
 
 calcLet :: IEnv -> HFormula -> Int -> (TId, LExp, AbstInfo, Exp) 
             -> R ([ITermType], R [ITermType], TermExtractor, R ())
@@ -329,33 +329,28 @@ calcApp env fml pId (f, _abstInfo, vs) = do
 
 calcValue :: IEnv -> HFormula -> Value -> R ValueNode
 calcValue env fml value = genNode $ \nodeIdent -> do
-    (recalc, extract, destruct) <- case valueView value of
+    (recalcator, extractor, destruct) <- case valueView value of
         VAtom atom -> do
             let extract cenv = evalAtom cenv atom
                 ity = calcAtom env atom
             return (return ity, extract, return ())
         VOther SPair arg -> calcPair env fml nodeIdent arg
         VOther SLambda arg -> calcLambda env fml nodeIdent (getUniqueKey value) arg
-    ity <- recalc
-    itypeRef <- liftIO $ newIORef ity
-    let pp = genericPrint env fml value itypeRef nodeIdent pPrint pPrint
+    ity <- recalcator
+    types <- liftIO $ newIORef ity
+    let pprinter = genericPrint env fml value types nodeIdent pPrint pPrint
     alive <- liftIO $ newIORef True
-    let destruct' = (destruct :: R ()) >> liftIO (writeIORef alive False)
+    let destructor = (destruct :: R ()) >> liftIO (writeIORef alive False)
     return $ Node { typeEnv = env
                   , constraint = fml
                   , ident = nodeIdent
                   , term = value
-                  , types = itypeRef
-                  , recalcator = recalc
-                  , extractor  = extract 
-                  , destructor = destruct'
-                  , alive    = alive
-                  , pprinter = pp}
+                  , .. }
 
 calcExp :: IEnv -> HFormula -> Exp -> R ExpNode
 calcExp env fml exp = 
     genNode $ \nodeIdent -> do
-        (itys,recalc, extract, destruct) <- case expView exp of
+        (itys,recalcator, extract, destruct) <- case expView exp of
             EValue v _info -> 
                 let ps = abstFormulas _info in
                 case valueView v of
@@ -379,7 +374,7 @@ calcExp env fml exp =
             EOther SOmega _ -> 
                 let extract _ _ = error "extract@SOmega_calcExp: omega never returns value nor fails"
                 in return ([], return [], extract, return ())
-        let extract' cenv iota = 
+        let extractor cenv iota = 
                 {-
                 liftIO $ do
                     putStrLn $ "extracting: " ++ show (pPrint iota)
@@ -387,26 +382,21 @@ calcExp env fml exp =
                     printNode _node
                     -}
                 extract cenv iota
-        itypeRef <- liftIO $ newIORef itys
+        types <- liftIO $ newIORef itys
         alive <- liftIO $ newIORef True
-        let destruct' = (destruct :: R ()) >> liftIO (writeIORef alive False)
-        let pp = genericPrint env fml exp itypeRef nodeIdent pPrint pPrint
-        return $ Node { typeEnv = env
-                      , constraint = fml
-                      , ident = nodeIdent
-                      , term = exp
-                      , types = itypeRef
-                      , recalcator = recalc
-                      , extractor = extract'
-                      , destructor = destruct'
-                      , alive = alive
-                      , pprinter = pp }
+        let destructor = destruct >> liftIO (writeIORef alive False)
+            pprinter = genericPrint env fml exp types nodeIdent pPrint pPrint
+        return Node{ typeEnv = env
+                    , constraint = fml
+                    , ident = nodeIdent
+                    , term = exp
+                    , .. }
 
 calcLExp :: IEnv -> HFormula -> TId -> LExp -> R (Either (IType, HFormula, (CEnv -> CValue)) LExpNode)
-calcLExp env fml x lexp = -- genNode $ \nodeIdent -> do
+calcLExp env fml x lexp = 
     case lexpView lexp of
         LAtom atom -> do
-            fml' <- (join $ mkBin SEq <$> mkVar x <*> toHFormula atom) 
+            fml' <- join (mkBin SEq <$> mkVar x <*> toHFormula atom) 
                     >>= mkBin SAnd fml
             let ity = calcAtom env atom
             return $ Left (ity, fml', \cenv -> evalAtom cenv atom)
@@ -417,30 +407,26 @@ calcLExp env fml x lexp = -- genNode $ \nodeIdent -> do
         LOther SApp arg -> 
             Right <$> genNode (\nodeIdent -> 
                 calcApp env fml nodeIdent arg >>= cont nodeIdent)
-    where cont :: NodeId -> ([ITermType], R [ITermType], TermExtractor, R ()) -> R LExpNode
-          cont nodeIdent (itys,recalc, extract, destruct) = do
-                itypeRef <- liftIO $ newIORef itys
-                alive <- liftIO $ newIORef True
-                let destruct' = (destruct :: R ()) >> liftIO (writeIORef alive False)
-                let extract' cenv iota = 
-                        {-
-                        liftIO $ do
-                            putStrLn $ "extracting: " ++ show (pPrint iota)
-                            putStrLn $ "cenv: " ++ show (M.keys cenv)
-                            printNode _node
-                        -}
-                        extract cenv iota
-                let pp = genericPrint env fml lexp itypeRef nodeIdent pPrint pPrint
-                return $ Node { typeEnv = env
-                              , constraint = fml
-                              , ident = nodeIdent
-                              , term = lexp
-                              , types = itypeRef
-                              , recalcator = recalc 
-                              , extractor = extract'
-                              , destructor = destruct'
-                              , alive = alive
-                              , pprinter = pp}
+    where 
+    cont :: NodeId -> ([ITermType], R [ITermType], TermExtractor, R ()) -> R LExpNode
+    cont nodeIdent (itys,recalcator, extract, destruct) = do
+        types <- liftIO $ newIORef itys
+        alive <- liftIO $ newIORef True
+        let destructor = destruct  >> liftIO (writeIORef alive False)
+            extractor cenv iota = 
+                {-
+                liftIO $ do
+                    putStrLn $ "extracting: " ++ show (pPrint iota)
+                    putStrLn $ "cenv: " ++ show (M.keys cenv)
+                    printNode _node
+                -}
+                extract cenv iota
+            pprinter = genericPrint env fml lexp types nodeIdent pPrint pPrint
+        return Node{ typeEnv = env
+                    , constraint = fml
+                    , ident = nodeIdent
+                    , term = lexp
+                    , ..}
 
 updateLoop :: R ()
 updateLoop = 
@@ -466,19 +452,16 @@ saturate hctx prog = do
     ctx <- lift $ initContext prog
     let doit :: R (Bool, ([ITermType], Maybe [Bool]))
         doit = do
-            logPretty "saturate" LevelDebug "Abstraction Annotated Program" (PPrinted (pPrint prog))
             root <- mkLiteral (CBool True) >>= \fml0 -> calcExp M.empty fml0 (mainTerm prog)
             updateLoop
             tys <- getTypes root
             if any isFail tys
             then do
                 bs <- execWriterT $ extractor root M.empty mkIFail
-                --hcs <- AbsSemantics.genConstraints bs (mainTerm prog)
-                -- liftIO $ print hcs
                 return (True, (tys, Just bs))
             else 
                 return (False, (tys, Nothing))
     res <- lift $ runHFormulaT (evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)) hctx
-    dict <- liftIO $ getStatistics ctx
+    dict <- liftIO $ getStatistics hctx ctx
     update (id .~ dict)
     return res

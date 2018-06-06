@@ -13,7 +13,8 @@ import           Control.Monad
 import qualified Data.Map as M
 
 convert :: Context -> TypeMap -> From.Program -> IO To.Program
-convert ctx typeMap prog = runHFormulaT (To.Program <$> (convertE typeMap M.empty (From.mainTerm prog) tau)) ctx
+convert ctx typeMap prog = 
+    runHFormulaT (To.Program <$> convertE typeMap M.empty (From.mainTerm prog) tau) ctx
     where
     tau = (TId TInt (reserved "main"), PInt, [], dummyPredTemplate)
 

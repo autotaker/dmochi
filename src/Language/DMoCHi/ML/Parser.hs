@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 module Language.DMoCHi.ML.Parser where
 import Text.Parsec
 import Text.Parsec.String
@@ -94,7 +93,7 @@ synDefP = do
     reserved "type"
     tvs <- (\x -> [x]) <$> typVar 
        <|> parens (commaSep1 typVar) 
-       <|> pure ([])
+       <|> pure []
     syn <- identifier
     reservedOp "="
     ty <- typeP
@@ -150,9 +149,7 @@ letP = (do reserved "let"
             return (V f Nothing, v)
         bind = do 
             x <- identifier
-            mty <- optionMaybe $ do 
-                ty <- reservedOp ":" *> typeP
-                return ty
+            mty <- optionMaybe $ reservedOp ":" *> typeP
             e <- reservedOp "=" *> (exprP <|> 
                 (reservedOp "*" >> return mkRand))
             return (V x mty, e)
@@ -221,9 +218,7 @@ typeP = prim <|> func
     syms = do
         tys <- parens (commaSep1 typeP) <|> (\x -> [x]) <$> base
         case tys of
-            [ty] -> do
-                ss <- many identifier
-                return $ foldl (\acc syn -> TSyn [acc] syn) ty ss
+            [ty] -> foldl (\acc syn -> TSyn [acc] syn) ty <$> many identifier
             tys -> do
                 s:ss <- many1 identifier
                 return $ foldl (\acc syn -> TSyn [acc] syn) (TSyn tys s) ss

@@ -1,4 +1,6 @@
-module Language.DMoCHi.Common.Cache where
+module Language.DMoCHi.Common.Cache(
+    Cache, Identified(..), Key
+    ,newCache, reserved, genEntry, genIdentified, getCacheSize ) where
 import Data.IORef
 import qualified Data.HashTable.IO as H
 import Text.PrettyPrint.HughesPJClass
@@ -52,6 +54,10 @@ genEntry cache key cnstr =
             v <- cnstr i
             liftIO $ H.insert (entries cache) key $! v
             return v
+
+getCacheSize :: Cache e -> IO Int
+getCacheSize cache = readIORef (counter cache)
+
 
 genIdentified :: (Eq e, Hashable e) => Cache (Identified e) -> e -> IO (Identified e) 
 genIdentified cache key = genEntry cache key (return . Identified key)

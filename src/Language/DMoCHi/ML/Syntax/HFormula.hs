@@ -23,6 +23,7 @@ import           Language.DMoCHi.ML.Syntax.Atom hiding(mkBin, mkUni, mkVar, mkLi
 import           Language.DMoCHi.ML.Syntax.BFormula
 import qualified Language.DMoCHi.ML.SMT as SMT
 
+type HashTable k v = H.BasicHashTable k v
 
 data HFormula where
     HFormula :: (WellFormed l HFormula arg, Supported l (Labels HFormula)) => 

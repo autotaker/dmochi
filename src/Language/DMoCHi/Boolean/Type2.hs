@@ -8,7 +8,8 @@ import Language.DMoCHi.Boolean.Syntax
 import Language.DMoCHi.Boolean.Flow(FlowGraph,Id)
 import Language.DMoCHi.Common.Util
 import Control.Monad
-import Data.Array
+import Data.Array hiding((!))
+import qualified Data.Array as A
 import Data.Array.IO
 import Data.Maybe
 import Data.IORef
@@ -91,8 +92,8 @@ saturateFlow (edgeTbl,symMap,leafTbl) env arr = do
     let depTbl :: Array Id [Id]
         depTbl = accumArray (flip (:)) [] bb $
                  [ (t,s) | (s,ts) <- assocs edgeTbl, t <- ts ] ++
-                 [ (symMap M.! x, s) | (s, Just _) <- assocs leafTbl, 
-                                       x <- nub $ fvarMap M.! s ++ bvarMap M.! s ]
+                 [ (symMap ! x, s) | (s, Just _) <- assocs leafTbl, 
+                                       x <- nub $ fvarMap ! s ++ bvarMap ! s ]
     stat <- liftIO $ (newArray bb (0,0) :: IO (IOArray Id (Int,NominalDiffTime)))
     {-
     nil <- buildTypeList lnil
@@ -104,19 +105,19 @@ saturateFlow (edgeTbl,symMap,leafTbl) env arr = do
             ty <- liftIO $ readArray arr v
             --liftIO $ printf "updating %s %s..\n" (show (v,fmap getValue (leafTbl ! v))) (take 50 $ show (leafTbl ! v))
             time_st <- liftIO $ getCurrentTime
-            ty' <- case leafTbl ! v of
+            ty' <- case leafTbl A.! v of
                 Nothing -> do
-                    tys <- forM (edgeTbl ! v) $ liftIO . readArray arr
+                    tys <- forM (edgeTbl A.! v) $ liftIO . readArray arr
                     concatTypeList $ ty : tys
                 Just (V _ _) -> do
-                    tys <- forM (edgeTbl ! v) $ liftIO . readArray arr
+                    tys <- forM (edgeTbl A.! v) $ liftIO . readArray arr
                     r <- concatTypeList $ ty : tys
                     return r
                 Just t -> do
-                    let fvars = fvarMap M.! v
-                    let bvars = bvarMap M.! v
-                    tys <- forM fvars $ liftIO . readArray arr . (symMap M.!)
-                    m <- M.fromList <$> forM bvars (\x -> (x,) <$> liftIO (readArray arr (symMap M.! x)))
+                    let fvars = fvarMap ! v
+                    let bvars = bvarMap ! v
+                    tys <- forM fvars $ liftIO . readArray arr . (symMap !)
+                    m <- M.fromList <$> forM bvars (\x -> (x,) <$> liftIO (readArray arr (symMap ! x)))
                     let cands = sequence $ map unfoldV tys
                     ls <- forM cands $ \l -> do
                         let env' = updateEnv env (zip fvars l)
@@ -135,7 +136,7 @@ saturateFlow (edgeTbl,symMap,leafTbl) env arr = do
                 then go vs
                 else do
                     liftIO (writeArray arr v ty')
-                    go (foldr S.insert vs (depTbl ! v))
+                    go (foldr S.insert vs (depTbl A.! v))
     go $ S.fromList $ [ i | (i,Just _) <- assocs leafTbl]
     l <- forM (assocs leafTbl) $ \(v,_) -> liftIO $ do
         (c,t) <- readArray stat v

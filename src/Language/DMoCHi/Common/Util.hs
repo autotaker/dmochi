@@ -9,6 +9,7 @@ module Language.DMoCHi.Common.Util( rec
                                   , logPretty
                                   , PPrinted(..)
                                   , extendEnv
+                                  , (!)
                                   , module Control.Monad.Logger
                                   , module Control.Monad.CTrace
                                   , measureWithLens) where
@@ -26,18 +27,20 @@ import Language.DMoCHi.Common.Id
 import Text.PrettyPrint.HughesPJClass
 import Data.Text(pack)
 import Data.PolyDict
+import Data.Maybe(fromMaybe)
+import GHC.Stack(HasCallStack)
 import qualified Data.Map as M
 
 rec :: a -> ((a -> b) -> a -> b) -> b
 rec = flip fix
 
+{-# INLINE measure #-}    
 measure :: (MonadIO m, MonadLogger m
            , MonadTrace (Dict n) m
            , Assoc n k ~ NominalDiffTime
            , KnownSymbol k) => Key k -> m a -> m a
 measure key doit = 
     measureWithLens (pack (symbolVal key)) (access' key 0) doit
-{-# INLINE measure #-}    
 
 newtype PPrinted = PPrinted Doc
 
@@ -56,6 +59,7 @@ measureWithLens header lens doit = do
     update (lens %~ (+time))
     return v
     
+{-# INLINE logPretty #-}
 logPretty :: (MonadLogger m, Pretty a) => LogSource -> LogLevel -> String -> a -> m ()
 logPretty header level title body = 
     logWithoutLoc header level (pack (render (hang (text title) 4 (pPrint body))))
@@ -75,7 +79,11 @@ instance MonadFix m => MonadFix (LoggingT m) where
 extendEnv :: Ord a => M.Map a b -> [(a, b)] -> M.Map a b
 extendEnv = foldr (uncurry M.insert)
 
-{-
+(!) :: (Ord k, Show k, HasCallStack) => M.Map k v -> k -> v
+(!) f a = fromMaybe err (M.lookup a f)
+    where err = error $ "no assoc found for key: " ++ show a 
+
+    {-
 measureError :: (MonadIO m, MonadError e m) => String -> m a -> m a
 measureError header doit = do
     let f t = fromRational (toRational t) :: Double

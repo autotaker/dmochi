@@ -27,7 +27,7 @@ convertTrace !trace (op:ops) = case op of
     'R' -> convertTrace (trace ++ [False]) ops
     'U' -> case trace of
         [] -> trace
-        _ -> convertTrace (reverse (tail (reverse trace))) ops
+        _ -> convertTrace (init trace) ops
     'C' -> convertTrace [] ops
     _ -> convertTrace trace ops
 
@@ -40,7 +40,7 @@ interactiveCEGen prog path = loop
         liftIO $ writeFile path (renderCompTree tree)
         liftIO $ callCommand $ dotCommand path
         liftIO $ callCommand $ viewerCommand path
-        s <- liftIO $ getLine
+        s <- liftIO getLine
         case s of
             "OK" ->
                 return (trace, Nothing)
@@ -51,7 +51,8 @@ interactiveCEGen prog path = loop
             _ -> do
                 let trace' = convertTrace trace s
                 loop trace'
-        
-    
-    
+
+
+
+
 

@@ -1,13 +1,14 @@
-{-# LANGUAGE BangPatterns, GADTs #-}
+{-# LANGUAGE TypeApplications #-}
 module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..), mkUMul, mkUDiv,
                               getSMTCount, resetSMTCount,IValue(..), toIValueId, mkEqIValue) where
 
-import Language.DMoCHi.ML.Syntax.PNormal hiding(mkApp)
+import Language.DMoCHi.ML.Syntax.PNormal 
 import Z3.Monad 
 import Control.Monad.IO.Class
 import Control.Monad
 import Data.Function(on)
 import qualified Data.HashTable.IO as HT
+import qualified Data.HashTable.ST.Basic as HTBasic
 import Data.Hashable
 import Data.IORef
 import Debug.Trace
@@ -172,8 +173,8 @@ abst constraints predicates = evalZ3 $ do
         f _ = error "Expecting an SMT value"
     assert =<< mkAnd' =<< mapM (toIValueA >=> (return . f)) constraints
     z3_predicates  <- mapM (toIValueA >=> (return . f)) predicates
-    hashTable <- liftIO $ HT.new :: Z3 (HT.BasicHashTable BDDHashKey (BDDNode Atom))
-    nodeCounter <- liftIO $ newIORef (0 :: Int)
+    hashTable <- liftIO $ HT.new @HTBasic.HashTable 
+    nodeCounter <- liftIO $ newIORef @Int 0
     let mkPVar d = do
             x <- mkStringSymbol $ "p_" ++ show d
             s <- mkBoolSort

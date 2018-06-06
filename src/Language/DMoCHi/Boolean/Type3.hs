@@ -1,10 +1,9 @@
-{-# LANGUAGE FlexibleContexts, LambdaCase #-}
 module Language.DMoCHi.Boolean.Type3 where
 import Language.DMoCHi.Boolean.IType
 import Language.DMoCHi.Boolean.Flow2 hiding(getId,varId,Context)
 import Language.DMoCHi.Boolean.PrettyPrint.Typed
 import qualified Language.DMoCHi.Boolean.Flow2 as Flow
-import Language.DMoCHi.Common.Util
+import Language.DMoCHi.Common.Util hiding((!))
 import Control.Monad
 import Data.Array
 import Data.Array.IO

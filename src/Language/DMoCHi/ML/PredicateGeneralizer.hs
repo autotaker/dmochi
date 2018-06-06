@@ -59,7 +59,7 @@ calc ctx solver traces prog = runHFormulaT doit ctx
     doit = do
         v_true <- mkLiteral (CBool True)
         let initState = AState { stTrace = [], stConditions = M.empty }
-        st <- flip execStateT initState $ do
+        st <- flip execStateT initState $ 
             forM_ traces $ \trace -> do
                 setTrace trace
                 calcExp M.empty v_true (mainTerm prog)
@@ -116,7 +116,7 @@ calcExp env c e =
             phi <- lift $ calcCondition c (abstFormulas info)
             addCondition info phi
             return $ Just (av, phi)
-        EOther SLet (x, e1, info, e2) -> do
+        EOther SLet (x, e1, info, e2) -> 
             calcLExp env c x e1 info >>= \case
                 Nothing -> return Nothing
                 (Just (env', c')) -> calcExp env' c' e2

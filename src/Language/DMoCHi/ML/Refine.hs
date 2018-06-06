@@ -10,7 +10,7 @@ import qualified Data.IntMap as IM
 import           Data.List(intersperse,foldl',sortBy)
 import           Text.PrettyPrint.HughesPJClass hiding(first)
 import           Text.Printf
-import Debug.Trace
+--import Debug.Trace
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
 -- import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
@@ -216,12 +216,14 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
             branchMap = M.fromList [ ((bCallId info,branchId info),direction info) | info <- branches ]
             letMap :: M.Map (CallId, UniqueKey) (CompTreePath, Maybe SValue)
             letMap = M.fromList [ ((lCallId info,lLabel info),(lContext info,evalValue info)) | info <- letexps ]
-
+ 
+        {-
         let showC :: Either SValue LFormula -> String
             showC (Left sv) = show sv
             showC (Right fml) = show fml
             showCs :: [Either SValue LFormula] -> String
             showCs = concat . intersperse ", " . map showC
+        -}
         let genClause :: Maybe LFormula -> [Either SValue LFormula] -> Horn.Clause
             genClause hd body = Horn.Clause chd cbody
                 where
@@ -370,20 +372,20 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                 -- liftIO $ printf "Clause: %s ==> %s\n" (showCs cs) (show fml)
                 let Formula _ _ path _ = fml
                 addClause (path,genClause (Just fml) cs)
-            subType cs ty1 ty2 = do
+            subType cs ty1 ty2 = 
                 -- liftIO $ printf "SubType: %s |- %s <: %s\n" (showCs cs) (show ty1) (show ty2)
                 case (ty1,ty2) of
                     (RInt,RInt) -> return ()
                     (RBool,RBool) -> return ()
                     (RPair t1 t2,RPair t3 t4) -> subType cs t1 t3 >> subType cs t2 t4
-                    (RFun fs1,RFun fs2) -> do
+                    (RFun fs1,RFun fs2) -> 
                         forM_ (IM.assocs fs2) $ \(i,RFunAssoc xs2 rtys2 cond2 pty2) -> do
                             let RFunAssoc xs1 rtys1 cond1 pty1  = fs1 IM.! i
                             let cs' = Right cond2 : cs
                             let subst = M.fromList $ zip xs1 (map decompose xs2)
                             clause cs' (substLFormula subst cond1)
                             let rtys1' = map (substRType subst) rtys1
-                            zipWithM (subType cs') rtys2 rtys1'
+                            zipWithM_ (subType cs') rtys2 rtys1'
                             subTypePost cs' (substPostType subst pty1) pty2
                     (_, _) -> error "subType: unexpected pattern"
             subTypePost cs (RPostType r1 ty1 cond1) (RPostType r2 ty2 cond2) = do
@@ -393,7 +395,7 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                 subType cs' (substRType subst ty1) ty2
             subTypePost _ RPostTypeFailure RPostTypeFailure = return ()
             subTypePost cs ty1 ty2 = error $ "subTypePost: unexpected subtyping:" ++ show (cs,ty1,ty2) 
-            failClause cs = do
+            failClause cs = 
                 -- liftIO $ printf "Clause: %s ==> _|_\n" (showCs cs) 
                 addClause ([10],genClause Nothing cs)
         

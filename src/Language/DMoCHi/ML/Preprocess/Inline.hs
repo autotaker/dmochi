@@ -3,13 +3,13 @@ module Language.DMoCHi.ML.Preprocess.Inline(inline) where
 
 import Language.DMoCHi.ML.Syntax.PNormal
 import Language.DMoCHi.Common.Id
-import Language.DMoCHi.Common.Util
+import Language.DMoCHi.Common.Util hiding((!))
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.Graph
 import Data.Tree
 import Control.Monad
-import Data.Array
+import Data.Array 
 import Text.Printf
 import qualified Data.Text as Text
 

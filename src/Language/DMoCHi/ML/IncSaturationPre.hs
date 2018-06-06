@@ -32,6 +32,7 @@ import qualified Data.PolyDict as Dict
 import           Data.PolyDict(Dict,access)
 
 type NodeId = Int
+type HashTable k v = H.BasicHashTable k v
 
 data Context = 
   Context { 
@@ -91,11 +92,6 @@ instance ITypeFactory R where
 
 type PEnv = M.Map TId PType
 type IEnv = M.Map TId IType
-
-(!) :: (Ord k, Show k) => M.Map k v -> k -> v
-(!) f a = case M.lookup a f of
-    Just v -> v
-    Nothing -> error $ "no assoc found for key: " ++ show a
 
 initContext :: Program -> LoggingT IO Context
 initContext prog = do
@@ -217,27 +213,23 @@ type instance Dict.Assoc IncSat "number_smt_call" = Int
 type instance Dict.Assoc IncSat "number_smt_hit" = Int
 type instance Dict.Assoc IncSat "time" = M.Map String NominalDiffTime
 
-getStatistics :: Context -> IO (Dict IncSat)
-getStatistics ctx = do
+getStatistics :: HFormula.Context -> Context -> IO (Dict IncSat)
+getStatistics hctx ctx = do
     nodeSize <- readIORef (ctxNodeCounter ctx)
-    {-
-    hfmlSize <- readIORef (ctxHFormulaSize ctx)
-    bfmlSize <- readIORef (ctxBFormulaSize ctx)
-    itypSize <- readIORef (ctxITypeSize ctx)
-    itrmSize <- readIORef (ctxITermSize ctx)
-    smtCalls <- readIORef (ctxSMTCount ctx)
-    smtHits  <- readIORef (ctxSMTCountHit ctx)
-    -}
+    hfmlSize <- getCacheSize (ctxHFormulaCache hctx)
+    bfmlSize <- getCacheSize (ctxBFormulaCache hctx)
+    itypSize <- getCacheSize (ctxITypeCache ctx)
+    itrmSize <- getCacheSize (ctxITermCache ctx)
+    smtCalls <- readIORef (ctxSMTCount hctx)
+    smtHits  <- readIORef (ctxSMTCountHit hctx)
     times <- M.fromList . map (\(a,b) -> (show a, b))<$> H.toList (ctxTimer ctx)
     return $ Dict.empty & access #graph_size ?~ nodeSize
-                       {-
                         & access #number_hformula ?~ hfmlSize
                         & access #number_bformula ?~ bfmlSize
                         & access #number_itype    ?~ itypSize
                         & access #number_iterm    ?~ itrmSize
                         & access #number_smt_call ?~ smtCalls
                         & access #number_smt_hit  ?~ smtHits
-                        -}
                         & access #time ?~ times
 
 genericPrint :: IEnv -> HFormula -> e -> IORef (SatType e) -> Int -> (e -> Doc) -> (SatType e -> Doc) -> IO Doc
