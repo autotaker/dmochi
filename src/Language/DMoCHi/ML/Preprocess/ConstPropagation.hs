@@ -1,4 +1,4 @@
-module Language.DMoCHi.ML.ConstPropagation where
+module Language.DMoCHi.ML.Preprocess.ConstPropagation where
 
 
 import Language.DMoCHi.ML.Syntax.PNormal

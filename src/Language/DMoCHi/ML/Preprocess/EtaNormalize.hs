@@ -1,4 +1,4 @@
-module Language.DMoCHi.ML.EtaNormalize(normalize) where
+module Language.DMoCHi.ML.Preprocess.EtaNormalize(normalize) where
 
 import Language.DMoCHi.ML.Syntax.PNormal hiding(normalize)
 import Language.DMoCHi.Common.Id

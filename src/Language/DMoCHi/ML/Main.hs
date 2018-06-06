@@ -1,13 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Language.DMoCHi.ML.Main(run, verify, Config(..), defaultConfig, CEGARMethod(..)) where
-import System.Environment
-import System.IO
 import System.Exit
-import System.Console.GetOpt
 import Control.Monad.Except
 import Data.Monoid
-import Data.List(isSuffixOf)
 import Data.Maybe(fromMaybe)
+import Data.List(isSuffixOf)
 import Text.PrettyPrint.HughesPJClass hiding((<>))
 import Text.Printf
 import qualified Data.Text as Text
@@ -21,16 +18,13 @@ import Data.PolyDict(Dict, access',Assoc,access)
 import qualified Data.ByteString.Lazy.Char8 as ByteString
 import Data.Aeson(encode)
 
+import           Language.DMoCHi.ML.Config
 import           Language.DMoCHi.Boolean.Syntax.Typed as B(tCheck)
 import           Language.DMoCHi.Boolean.PrettyPrint.Typed as B(pprintProgram)
 import           Language.DMoCHi.Boolean.LiftRec as B(liftRec)
 import           Language.DMoCHi.Boolean.Test 
 import qualified Language.DMoCHi.ML.Parser as Parser
 import qualified Language.DMoCHi.ML.MLParser as MLParser
-import           Language.DMoCHi.ML.Alpha
-import qualified Language.DMoCHi.ML.Inline  as Inline
-import qualified Language.DMoCHi.ML.ElimUnreachable  as Unreachable
-import qualified Language.DMoCHi.ML.TypeCheck as Typed
 import qualified Language.DMoCHi.ML.Syntax.PNormal as PNormal
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as UnTyped
@@ -44,10 +38,8 @@ import qualified Language.DMoCHi.ML.Syntax.PType as PAbst
 import qualified Language.DMoCHi.ML.Refine as Refine
 import qualified Language.DMoCHi.ML.SymbolicExec as SExec
 import qualified Language.DMoCHi.ML.InteractiveCEGen as Refine
-import qualified Language.DMoCHi.ML.EtaNormalize as Eta
-import qualified Language.DMoCHi.ML.ConstPropagation as ConstProp
+import Language.DMoCHi.ML.Preprocess(preprocess, PreprocessError)
 import qualified Language.DMoCHi.ML.PredicateGeneralizer as PredicateGen
-import qualified Language.DMoCHi.ML.TailOptimization as TailOpt
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import qualified Language.DMoCHi.ML.ConvexHull.Solver as ConvexHull
@@ -59,8 +51,7 @@ import Control.Exception(bracket)
 data MainError = NoInputSpecified
                | ParseFailed String
                | RefinementFailed Horn.SolverError
-               | AlphaFailed AlphaError
-               | IllTyped Typed.TypeError 
+               | PreprocessFailed PreprocessError
                | CEGARLimitExceeded
                | Debugging
                | OtherError String
@@ -70,78 +61,12 @@ data MainError = NoInputSpecified
 instance Show MainError where
     show NoInputSpecified = "NoInputSpecified"
     show (ParseFailed err) = "ParseFailed: " ++ err
-    show (AlphaFailed err) = "AlphaFailed: " ++ show err
-    show (IllTyped err)    = "IllTyped: " ++ show err
+    show (PreprocessFailed err) = "PreprocessFailed: " ++ show err
     show (RefinementFailed err)    = "RefinementFailed: " ++ show err
     show (BooleanError s) = "Boolean: " ++ s
     show (OtherError s) = "Other: " ++ s
     show CEGARLimitExceeded = "CEGARLimitExceeded"
     show Debugging = "Debugging"
-
-data Flag = Help 
-          | HCCS HCCSSolver 
-          | CEGARLimit Int 
-          | AccErrTraces 
-          | ContextSensitive 
-          | Interactive
-          | FoolTraces Int
-          | PredicateGen
-          | NoEmbedCurCond
- --         | Fusion
- --         | Incremental
-          | Verbose
-          | CEGARMethod CEGARMethod
-          deriving Eq
-data HCCSSolver = Fpat FpatSolver | Hoice  deriving Eq
-data FpatSolver = IT | GCH
-  deriving Eq
-
-data CEGARMethod = DepType | AbstSemantics deriving Eq
-
-data Config = Config { targetProgram :: FilePath
-                     , hornOption :: String
-                     , hornSolver :: HCCSSolver
-                     , cegarLimit :: Int
-                     , accErrTraces :: Bool
-                     , contextSensitive :: Bool
-                     , foolTraces :: Bool
-                     , foolThreshold :: Int
-                     , predicateGen :: Bool
-                     , embedCurCond :: Bool
- --                    , fusion :: Bool
- --                    , incremental :: Bool
-                     , cegarMethod :: CEGARMethod
-                     , verbose :: Bool
-                     , interactive :: Bool }
-
-
-getHCCSSolver :: Config -> FilePath -> Horn.Solver
---getHCCSSolver = Paths_dmochi.getDataFileName "hcsolver"
-getHCCSSolver (Config { hornSolver = Fpat _
-                      , hornOption = option }) basename =
-  Horn.rcamlSolver "rcaml.opt" option basename
-getHCCSSolver (Config { hornSolver = Hoice }) basename =
-  Horn.hoiceSolver "hoice" basename
-
-getConvexHullSolver :: IO FilePath
-getConvexHullSolver = return "convex-hull"
-
-defaultConfig :: FilePath -> Config
-defaultConfig path = Config { targetProgram = path
-                            , hornOption = ""
-                            , hornSolver = Fpat IT
-                            , cegarLimit = 20
-                            , accErrTraces = False
-                            , contextSensitive = False
-                            , foolTraces = False
-                            , foolThreshold = 1
-                            , predicateGen = False
-                            , embedCurCond = True
-  --                          , fusion = False
-  --                          , incremental = False
-                            , verbose = False
-                            , cegarMethod = DepType
-                            , interactive = False }
 
 run :: IO ()
 run = do
@@ -149,73 +74,11 @@ run = do
     conf <- parseArgs
     (r, d) <- verify conf
     ByteString.writeFile (targetProgram conf ++ ".result.json") (encode d <> ByteString.pack "\n")
-    putStrLn ""
+    putStrLn "### Verification Result ###"
     case r of
         Left err -> putStr "Error: " >> print err >> exitFailure
         Right _ -> return ()
         
-options :: [ OptDescr Flag ]
-options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
-          , Option [] ["hccs"] (ReqArg parseSolver "it|gch|hoice") "Set hccs solver"
-          , Option ['l'] ["limit"] (ReqArg (CEGARLimit . read) "N") "Set CEGAR round limit (default = 20)"
-          , Option [] ["acc-traces"] (NoArg AccErrTraces) "Accumrate error traces"
-          , Option [] ["pred-gen"] (NoArg PredicateGen) "Generalize Predicate based on AI"
-          , Option [] ["no-embed-cur-cond"] (NoArg NoEmbedCurCond) "Disable Embed current condition in Horn clauses"
-          , Option [] ["context-sensitive"] (NoArg ContextSensitive) 
-                   "Enable context sensitive predicate discovery, this also enables --acc-traces flag"
-          , Option [] ["fool-traces"] (OptArg (FoolTraces . fromMaybe 1 . fmap read) "N")  "Distinguish fool error traces in refinement phase, and set threshold (default = 1)"
---          , Option [] ["fusion"] (NoArg Fusion) "enable model checking fusion"
---          , Option [] ["incremental"] (NoArg Incremental) "enable incremental saturation algorithm"
-          , Option ['v'] ["verbose"] (NoArg Verbose) "set pretty level to verbose"
-          , Option [] ["cegar"] (ReqArg parseMethod "dep|abst") "Set CEGAR method (default = dep)"  
-          , Option [] ["interactive"] (NoArg Interactive) "interactive counterexample generation" ]
-    where
-    parseSolver "it" = HCCS (Fpat IT)
-    parseSolver "gch" = HCCS (Fpat GCH)
-    parseSolver "hoice" = HCCS Hoice
-    parseSolver s = error $ "Non Supported Parameter for --hccs: " ++ s
-    parseMethod "dep" = CEGARMethod DepType
-    parseMethod "abst" = CEGARMethod AbstSemantics
-    parseMethod s = error $ "Non Supported Parameter for --cegar: " ++ s
-
-parseArgs :: IO Config
-parseArgs = doit
-  where
-  parse argv = getOpt RequireOrder options argv
-  header = "Usage: dmochi [OPTION..] target"
-  dump = hPutStrLn stderr
-  info = usageInfo header options
-  die errs = dump (concat errs ++ info) >> exitFailure
-  help = dump info >> exitSuccess
-  doit = do
-    pname <- getProgName
-    argv <- getArgs
-    printf "Command: %s %s\n" pname (unwords $ map show argv)
-    case parse argv of
-        (opts, _, []) | Help `elem` opts -> help
-        (opts, [file], []) -> return $
-            foldl (\acc opt -> case opt of
-                     HCCS (Fpat IT) -> acc { hornSolver = Fpat IT, hornOption = "-hccs it" }
-                     HCCS (Fpat GCH) -> acc { hornSolver = Fpat GCH, hornOption = "-hccs gch" }
-                     HCCS Hoice -> acc { hornSolver = Hoice, hornOption = ""}
-                     CEGARLimit l -> acc { cegarLimit = l }
-                     CEGARMethod m -> acc { cegarMethod = m }
-                     AccErrTraces -> acc { accErrTraces = True }
-                     ContextSensitive -> acc { accErrTraces = True, contextSensitive = True }
-                     FoolTraces n -> acc { foolTraces = True, foolThreshold = n }
-                     PredicateGen -> acc { predicateGen = True }
-                     NoEmbedCurCond -> acc { embedCurCond = False }
-   --                  Fusion -> acc { fusion = True }
-   --                  Incremental -> acc { fusion = True, incremental = True }
-                     Interactive -> acc { interactive = True } 
-                     Help -> error "unexpected"
-                     Verbose -> acc { verbose = True }
-                     ) 
-                  (defaultConfig file) opts
-        (_, [], []) -> die ["No target specified\n"]
-        (_, _, []) -> die ["Multiple targets Specified\n"]
-        (_,_,errs) -> die errs
-
 data CEGARResult a = Safe | Unsafe | Refine a
     deriving(Eq,Show)
 
@@ -234,7 +97,7 @@ type instance Assoc CEGAR "abst" = Dict PAbst.Abst
 type instance Assoc CEGAR "fusion" = NominalDiffTime
 type instance Assoc CEGAR "fusion_sat" = Dict IncSat.IncSat
 type instance Assoc CEGAR "modelchecking" = Dict Boolean
-type instance Assoc CEGAR "predicategeneralizer" = Dict (PredicateGen.PredicateGeneralizer)
+type instance Assoc CEGAR "predicategeneralizer" = Dict PredicateGen.PredicateGeneralizer
 type instance Assoc CEGAR "abstractsemantics" = Dict AbstSem.AbstractSemantics
 
 data CEGARContext (method :: CEGARMethod) where
@@ -245,17 +108,22 @@ data CEGARContext (method :: CEGARMethod) where
 verify :: Config -> IO (Either MainError (CEGARResult ()), Dict Main)
 verify conf = setup doit
   where 
-  setup cont = 
-    bracket 
-        (getConvexHullSolver >>= ConvexHull.convexHullSolver)
-        (\(_, exit) -> exit)
-        (\(solver, _) -> 
-            if verbose conf 
-                then runStdoutLoggingT (cont solver)
-                else runStdoutLoggingT 
-                        $ filterLogger (\_ level -> level >= LevelInfo) 
-                        $ cont solver)
-  doit convexHullSolver = runFreshT $ ioTracerT Dict.empty $ measure #total $ runExceptT $ do
+  logFilter | verbose conf = id
+            | otherwise = filterLogger (\_ level -> level >= LevelInfo)
+  setup cont 
+    | predicateGen conf = 
+        bracket 
+            (ConvexHull.convexHullSolver $ convexHullCommand conf)
+            snd
+            (cont . fst)
+    | otherwise = cont (error "convex full is not required")
+  doit convexHullSolver = 
+        runStdoutLoggingT 
+        $ logFilter 
+        $ runFreshT 
+        $ ioTracerT Dict.empty 
+        $ measure #total 
+        $ runExceptT $ do
     -- ExceptT MainError (FreshT (TracerT c (LoggingT IO))) a
     let path = targetProgram conf
     
@@ -271,44 +139,16 @@ verify conf = setup doit
                     -}
     parsedProgram <- measure #parse $ do
         program <- if ".ml" `isSuffixOf` path
-            then withExceptT ParseFailed $ ExceptT $ liftIO $ MLParser.parseProgramFromFile path
-            else withExceptT (ParseFailed. show) $ ExceptT $ liftIO $ Parser.parseProgramFromFile path
+            then withExceptT ParseFailed 
+                $ ExceptT $ liftIO $ MLParser.parseProgramFromFile path
+            else withExceptT (ParseFailed. show) 
+                $ ExceptT $ liftIO $ Parser.parseProgramFromFile path
         program <$ prettyPrint "parse" "Parsed Program" program
     let specs = UnTyped.specs parsedProgram
-    normalizedProgram <- measure #preprocess $ (do
-        -- alpha conversion
-        alphaProgram <- mapExceptT lift $ withExceptT AlphaFailed $ alpha parsedProgram
-        prettyPrint "preprocess" "Alpha Converted alphaProgram" alphaProgram
 
-        -- type checking
-        typedProgram <- withExceptT IllTyped $ Typed.fromUnTyped alphaProgram
-        prettyPrint "preprocess" "Typed Program" typedProgram
-
-        -- normalizing
-        _normalizedProgram <- lift $ lift $ PNormal.normalize typedProgram
-        prettyPrint "preprocess" "Normalized Program" _normalizedProgram
-        
-        -- inlining
-        _normalizedProgram <- lift $ lift $ Inline.inline 1000 _normalizedProgram
-        prettyPrint "preprocess" "Inlined Program" _normalizedProgram
-        
-        -- unreachable code elimination
-        _normalizedProgram <- return $ Unreachable.elimUnreachable _normalizedProgram
-        prettyPrint "preprocess" "Unreachable Code Elimination" _normalizedProgram
-
-
-        _normalizedProgram <- lift $ Eta.normalize _normalizedProgram
-        prettyPrint "preprocess" "Eta normalization" _normalizedProgram
-        
-        -- const propagation
-        _normalizedProgram <- return $ ConstProp.simplify _normalizedProgram
-        prettyPrint "preprocess" "Constant Propagation" _normalizedProgram
-        
-        -- tail optimization
-        _normalizedProgram <- return $ TailOpt.simplify _normalizedProgram
-        prettyPrint "preprocess" "Tail optimization" _normalizedProgram
-
-        return _normalizedProgram) :: ExceptT MainError (FreshIO (Dict Main)) PNormal.Program
+    normalizedProgram <- measure #preprocess 
+                    $ withExceptT PreprocessFailed 
+                    $ preprocess parsedProgram
     
     (typeMap0, fvMap) <- lift $ PAbst.initTypeMap specs normalizedProgram
     prettyPrint "PAbst" "initial type map" $ PPrinted (PAbst.pprintTypeMap typeMap0)
@@ -330,14 +170,16 @@ verify conf = setup doit
                 Left (s1,s2,str,ctx) -> do
                     logErrorNS "typecheck" $ Text.pack 
                         $ printf "type mismatch: %s. %s <> %s\n" str (show s1) (show s2)
-                    forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> do
-                        logErrorNS "typecheck" $ Text.pack $ printf "Context %d: %s\n" i (show t)
+                    forM_ (zip [(0::Int)..] ctx) $ \(i,t) -> 
+                        logErrorNS "typecheck" 
+                            $ Text.pack $ printf "Context %d: %s\n" i (show t)
                     throwError $ BooleanError "Abstracted Program is ill-typed"
                 Right _ -> return ()
             boolProgram' <- lift $ B.liftRec boolProgram
             prettyPrint "modelchecking" "Recursion lifted program" boolProgram'
             let file_boolean = printf "%s_%d.bool" path k
-            liftIO $ writeFile file_boolean $ (++"\n") $ render $ B.pprintProgram boolProgram'
+            liftIO $ writeFile file_boolean $ (++"\n") 
+                   $ render $ B.pprintProgram boolProgram'
             mapExceptT (zoom (access' #modelchecking Dict.empty)) 
                 $ withExceptT BooleanError $ testTyped file_boolean boolProgram'
 
@@ -361,7 +203,7 @@ verify conf = setup doit
 
         refine (EagerContext castFreeProgram typeMap typeMapFool hcs
                              rtyAssoc0 rpostAssoc0) k trace isFoolI traceFile = do
-            (isFool, clauses, assoc) <- do
+            (isFool, clauses, assoc) <- 
                 Refine.refineCGen normalizedProgram 
                               traceFile 
                               (contextSensitive conf) 
@@ -369,9 +211,7 @@ verify conf = setup doit
                     Nothing -> throwError (RefinementFailed Horn.NoSolution)
                     Just (isFool,(clauses, assoc)) -> return (isFool, clauses, assoc)
             
-            let bf = case isFoolI of
-                    Just b -> b
-                    Nothing -> foolTraces conf && isFool
+            let bf = fromMaybe (foolTraces conf && isFool) isFoolI
             if bf then do
                 logInfoNS "refinement" "Fool counterexample refinement"
                 let hcs' = clauses
@@ -403,25 +243,29 @@ verify conf = setup doit
         cegarLoop k _ _ | k >= cegarLimit conf = throwError CEGARLimitExceeded
         cegarLoop k cegarContext traces = do
             update $ access' #cycles 0 %~ succ
-            res <- mapExceptT (zoom (access' #cegar IM.empty . at k . non Dict.empty)) $ do
-                mc cegarContext k >>= \case 
-                    Nothing -> return Safe
-                    Just trace -> measure #refine $ do
+            res <- mapExceptT (zoom (access' #cegar IM.empty 
+                                    . at k 
+                                    . non Dict.empty)) $ 
+                mc cegarContext k >>= 
+                    maybe (return Safe) 
+                          (\trace -> measure #refine $ do
                         when (elem trace traces) $ throwError $ OtherError "No progress"
                         let traceFile = printf "%s_%d.trace.dot" path k
-                        (trace,isFoolI) <- case interactive conf of
-                            True -> Refine.interactiveCEGen normalizedProgram traceFile trace
-                            False -> return (trace, Nothing)
+                        (trace,isFoolI) <- 
+                            if interactive conf 
+                                then Refine.interactiveCEGen normalizedProgram traceFile trace
+                                else return (trace, Nothing)
                         (Refine . (,trace) <$> refine cegarContext k trace isFoolI traceFile)
                             `catchError` (\case
                                 err@(RefinementFailed _) -> do
-                                    (_, log, _compTree) <- SExec.symbolicExec normalizedProgram trace
+                                    (_, log, _compTree) <- 
+                                        SExec.symbolicExec normalizedProgram trace
                                     let cs = map SExec.fromSValue $ SExec.logCnstr log
                                     isFeasible <- liftIO $ SMT.sat cs
                                     if isFeasible
                                         then return Unsafe
                                         else throwError err
-                                err -> throwError err)
+                                err -> throwError err))
             case res of
                 Safe   -> do
                     update (access #result ?~ "Safe")
@@ -440,4 +284,3 @@ verify conf = setup doit
             cegarLoop 0 (FusionContext cegarProgram hContext) []
         DepType -> 
             cegarLoop 0 (EagerContext normalizedProgram typeMap0 typeMap0 [] [] []) []
-    

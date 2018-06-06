@@ -1,4 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables, FlexibleContexts, LambdaCase, BangPatterns, GADTs #-}
 module Language.DMoCHi.ML.SymbolicExec where
 
 import           Control.Monad.Writer

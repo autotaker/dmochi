@@ -10,6 +10,8 @@ import Control.Monad.State.Strict
 newtype HCCS = HCCS { clauses :: [Clause] }
 instance Monoid HCCS where
   mappend (HCCS a) (HCCS b) = HCCS (a ++ b)
+  mempty = HCCS []
+
 data Clause = Clause { cHead :: Head , cBody :: Body }
 
 data Head = Bot | PVar String [Term] deriving(Show)
@@ -191,8 +193,11 @@ instance Show Term where
     showsPrec _ (Bool True) = showString "true"
     showsPrec _ (Bool False) = showString "false"
     showsPrec _ (Int i) = shows i
-    showsPrec d (Var x) | d >= 1 = showString (show $ name x)
-                        | otherwise = showParen True (showString (show $ name x) . showChar ':' . showsPrec 0 (getType x))
+    showsPrec d (Var x) 
+        | d >= 1 = showString (show $ name x)
+        | otherwise = showParen True (showString (show $ name x) 
+                    . showChar ':' 
+                    . shows (getType x))
     -- showsPrec _ (Var x) = showString (name x)
     -- showsPrec _ (Pair t1 t2) = showParen True $ shows t1 . showChar ',' . showChar ' ' . shows t2
     showsPrec _ (Pred _ []) = showString "top"

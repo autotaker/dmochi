@@ -1,17 +1,17 @@
 {-# LANGUAGE FlexibleContexts #-}
-module Language.DMoCHi.ML.TypeInfer(infer,InferError) where
+module Language.DMoCHi.ML.Preprocess.TypeInfer(infer,InferError) where
 import qualified Data.Map as M
 --import           Prelude hiding(mapM)
 import           Control.Monad.Except
 import           Control.Monad.State.Strict
 import           Language.DMoCHi.ML.Syntax.Base
 --import Text.PrettyPrint.HughesPJClass
-import           Language.DMoCHi.ML.Alpha
+import           Language.DMoCHi.ML.Syntax.Alpha
 import           Language.DMoCHi.ML.Syntax.UnTyped(AnnotVar(..),SynName, SynonymDef(..), Type(..), TypeScheme(..), Lit(..), toTypeScheme, matchTypeScheme)
 import qualified Language.DMoCHi.Common.Id as Id
 import           Language.DMoCHi.Common.Id(MonadId(..))
 import           Language.DMoCHi.Common.Util
-import           Language.DMoCHi.ML.DesugarSynonym
+import           Language.DMoCHi.ML.Preprocess.DesugarSynonym
 -- import Debug.Trace
 
 type UExp = Exp (Maybe Type)
@@ -121,14 +121,13 @@ annotType :: Exp Type -> Type
 annotType (Exp _ _ (ty,_)) = ty
 
 freshType :: MonadId m => InferM m Type
-freshType = do
-    tname <- Id.freshId "ty"
-    return (TVar tname)
+freshType = TVar <$> Id.freshId "ty"
 
 infer :: Program (Maybe Type)-> ExceptT InferError (FreshIO c) (Program Type)
-infer prog = do
-    let synEnv = M.fromList [ (synName syn, syn) | syn <- synonyms prog ]
-    prog <- evalStateT (do
+infer prog = evalStateT doit M.empty
+    where
+    synEnv = M.fromList [ (synName syn, syn) | syn <- synonyms prog ]
+    doit = do
         let env = M.fromList [ (varName f, tyS) | (f, tyS, _) <- functions prog ]
         fs <- forM (functions prog) $ \(f,tyS,e) -> do
             e' <- inferE synEnv env e
@@ -143,8 +142,7 @@ infer prog = do
         e0 <- inferE synEnv env (mainTerm prog)
         unify synEnv (annotType e0) TUnit
         e0' <- traverse subst e0
-        return $ Program fs (synonyms prog) e0') M.empty
-    return prog
+        return $ Program fs (synonyms prog) e0'
 
 
 inferE :: (MonadId m, MonadIO m) => SynEnv -> M.Map (Id.Id String) TypeScheme -> UExp -> InferM m (Exp Type)

@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Language.DMoCHi.ML.Inline(inline) where
+module Language.DMoCHi.ML.Preprocess.Inline(inline) where
 
 import Language.DMoCHi.ML.Syntax.PNormal
 import Language.DMoCHi.Common.Id
@@ -57,7 +57,7 @@ alphaE renv e =
                 return (renv' M.! f, v_f')
             e2' <- alphaE renv' e2
             mkLetRec fs' e2' <$> freshKey
-        EOther SAssume (cond, e) -> do
+        EOther SAssume (cond, e) -> 
             mkAssume (alphaA renv cond) <$> alphaE renv e <*> freshKey
         EOther SBranch (e1, e2) -> 
             mkBranch <$> alphaE renv e1 <*> alphaE renv e2 <*> freshKey

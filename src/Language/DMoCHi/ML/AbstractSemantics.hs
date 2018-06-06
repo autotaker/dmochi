@@ -221,7 +221,7 @@ calcExp env (fml, preds) e =
                     let env' = M.insert x av env
                         preds' = pGen' scope : preds
                     fml' <- ask >>= \conf ->
-                      if embedCurCond conf then do
+                      if embedCurCond conf then 
                         lift .lift $ mkBin SAnd fml =<< fromBFormula ps bfml
                       else pure fml
                     calcExp env' (fml', preds') e2

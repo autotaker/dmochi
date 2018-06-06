@@ -4,3 +4,7 @@
 *.ans
 *.result.json
 *.smt2
+*.annot
+*.trecs_out
+*.horsat_out
+*.hors

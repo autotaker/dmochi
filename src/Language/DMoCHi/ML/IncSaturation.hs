@@ -9,14 +9,11 @@ import           Language.DMoCHi.ML.IncSaturationPre
 import           Language.DMoCHi.Common.Cache hiding(ident)
 -- import qualified Language.DMoCHi.ML.AbstractSemantics as AbsSemantics
 
--- import Control.Monad
--- import           Control.Monad.Fix
---import Control.Arrow ((***),second)
 import           Control.Monad.Reader
 import           Control.Monad.Writer hiding((<>))
 import           Control.Monad.State.Strict
--- import Data.List
 import           Data.IORef
+import           Data.Maybe(isNothing)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
@@ -119,15 +116,15 @@ calcLambda env fml pId key (xs, _abstInfo, e) = do
     ask >>= \ctx -> liftIO $ insertTbl (ctxFlowReg ctx) key pId
     let recalc = do
             fs <- getFlow key
-            ty_assocs <- fmap mconcat $ forM fs $ \(thetas, phi) ->
-                liftIO (H.lookup tbl (thetas,phi)) >>= \case
-                    Just body -> map (thetas,phi,) <$> getTypes body
-                    Nothing -> whenSat fml ps phi [] $ \fml' -> do
+            ty_assocs <- fmap mconcat $ forM fs $ \(thetas, phi) -> do
+                let genBody = whenSat fml ps phi [] $ \fml' -> do
                         let env' = extendEnv env (zip xs thetas)
                         node_body <- calcExp env' fml' e >>= setParent pId
                         liftIO $ H.insert tbl (thetas,phi) node_body
-                        tys <- getTypes node_body
-                        return $ map ((,,) thetas phi) tys
+                        getTypes node_body
+                liftIO (H.lookup tbl (thetas,phi)) 
+                    >>= maybe genBody getTypes 
+                    >>= pure . map (thetas, phi,)
             mkIFun ty_assocs
         extract env = CCls env xs tbl
     let destruct = do
@@ -173,13 +170,12 @@ calcLet env fml pId  (x, e1, _abstInfo, e2) =
             tbl <- liftIO H.new :: R (HashTable (IType, BFormula) ExpNode)
             let calc :: [ITermType] -> R [ITermType]
                 calc = bindTermType $ \ity phi -> -- TODO: あるケースが参照されなくなったらdestructする
-                        liftIO (H.lookup tbl (ity,phi)) >>= \case
-                            Just node2 -> getTypes node2 
-                            Nothing -> whenSat fml ps phi [] $ \fml' -> do
+                        let doit = whenSat fml ps phi [] $ \fml' -> do
                                 let env' = M.insert x ity env
                                 node2 <- calcExp env' fml' e2  >>= setParent pId
                                 liftIO $ H.insert tbl (ity,phi) node2 
                                 getTypes node2
+                        in liftIO (H.lookup tbl (ity,phi)) >>= maybe doit getTypes
             let recalc = getTypes node1 >>= calc
                 extract, extractCont :: TermExtractor
                 extract cenv iota@IFail = do
@@ -191,15 +187,15 @@ calcLet env fml pId  (x, e1, _abstInfo, e2) =
                 extractCont cenv iota = go =<< getTypes node1
                     where
                     go (iota1: tys1) = case iota1 of
-                        ITerm ity phi -> liftIO (H.lookup tbl (ity, phi)) >>= \case
-                            Nothing -> go tys1 
-                            Just node2 -> do
-                                tys2 <- getTypes node2
-                                if any (flip subTermTypeOf iota) tys2
-                                then do
-                                    Just cv1 <- extractor node1 cenv iota1
-                                    extractor node2 (M.insert x cv1 cenv) iota
-                                else go tys1
+                        ITerm ity phi -> 
+                            liftIO (H.lookup tbl (ity, phi)) >>= 
+                                maybe (go tys1) (\node2 -> do
+                                    tys2 <- getTypes node2
+                                    if any (flip subTermTypeOf iota) tys2
+                                    then do
+                                        Just cv1 <- extractor node1 cenv iota1
+                                        extractor node2 (M.insert x cv1 cenv) iota
+                                    else go tys1)
                         _ -> go tys1
                     go [] = error "unexpected pattern"
                 destruct = do
@@ -235,20 +231,14 @@ calcLetRec env fml pId (fs, e) = do
             env0  <- liftIO $ readIORef letREnv
             nodes <- liftIO $ readIORef letRChildren
             updated <- liftIO $ newIORef False
-            env1 <- fmap M.fromList $ zipWithM (\node (f,_) -> do
-                    ity_cur <- getTypes node 
-                    let assocs = case ity_cur of
-                            IFun v -> v
-                            _ -> error $ "expect function type: " ++ show ity_cur
-                    forM_ assocs $ \(thetas, phi, iota) -> 
-                        liftIO $ H.lookup letRHistory (f, (thetas,phi), iota) >>= \case 
-                            Just _ -> return ()
-                            Nothing -> do
-                               H.insert letRHistory (f, (thetas,phi), iota) node
-                               writeIORef updated True
-                    let ity_old = env0 ! f
-                    ity_new <- mkIntersection ity_cur ity_old
-                    return (f, ity_new)
+            env1 <- M.fromList <$> zipWithM (\node (f,_) -> do
+                    ity_cur@(IFun assocs) <- getTypes node 
+                    forM_ assocs $ \(thetas, phi, iota) -> liftIO $ do
+                        mhist <- H.lookup letRHistory (f, (thetas,phi), iota)
+                        when (isNothing mhist) $ do
+                            H.insert letRHistory (f, (thetas,phi), iota) node
+                            writeIORef updated True
+                    (f,) <$> mkIntersection ity_cur (env0 ! f)
                 ) nodes fs
             liftIO (readIORef updated) >>= \case
                 True -> do
@@ -295,7 +285,7 @@ calcApp env fml pId (f, _abstInfo, vs) = do
     let ity_f = env ! f
     let ps = abstFormulas _abstInfo
     phi <- calcCondition fml ps
-    nodes <- forM vs $ \v -> calcValue env fml v >>= setParent pId
+    nodes <- forM vs $ calcValue env fml >=> setParent pId
     flow <- asks $ (!f) . ctxFlowMap 
 
     let recalc = do
@@ -304,38 +294,38 @@ calcApp env fml pId (f, _abstInfo, vs) = do
             return $ appType ity_f thetas phi
         destruct = forM_ nodes $ destructor
         extract cenv iota = do
-            let cvs = map (\node -> extractor node cenv) nodes
             thetas <- mapM getTypes nodes
             let closureCase (CCls cenv_f xs tbl) = do
-                    node <- liftIO $ H.lookup tbl (thetas, phi) >>= \case
-                        Just node -> return node
-                        Nothing -> H.foldM (\acc ((thetas',phi'),val) -> do
+                    let genNode = H.foldM (\acc ((thetas',phi'),val) -> do
                             tys <- getTypes val
                             if phi == phi' && 
                                and (zipWith subTypeOf thetas thetas') && 
                                any (flip subTermTypeOf iota) tys
                             then return val
                             else return acc) (error "no match") tbl
-                    let cenv_f' = extendEnv cenv_f (zip xs cvs)
+                        cvs = map (flip extractor cenv) nodes
+                        cenv_f' = extendEnv cenv_f (zip xs cvs)
+                    node <- liftIO $ H.lookup tbl (thetas, phi) 
+                        >>= maybe genNode return
                     extractor node cenv_f' iota
                 closureCase _ = error "unexpected pattern"
             
             case cenv ! f of
                 CRec cenv_f g hist -> do
-                    node <- liftIO $ H.lookup hist (g, (thetas, phi), iota) >>= \case
-                        Just node -> return node
-                        Nothing -> H.foldM (\acc ((g', (thetas', phi'), iota'), val) -> 
-                            return $!
-                            if g == g' && phi == phi' && 
-                             and (zipWith subTypeOf thetas thetas') &&
-                               iota' `subTermTypeOf` iota
-                            then val
-                            else acc) (error "no match") hist
+                    let genNode = 
+                            H.foldM (\acc ((g', (thetas', phi'), iota'), val) ->
+                                return $!
+                                    if g == g' && phi == phi' && 
+                                    and (zipWith subTypeOf thetas thetas') &&
+                                    iota' `subTermTypeOf` iota
+                                    then val
+                                    else acc) (error "no match") hist
+                    node <- liftIO $ H.lookup hist (g, (thetas, phi), iota) 
+                        >>= maybe genNode return
                     closureCase (extractor node cenv_f)
                 cv_f -> closureCase cv_f
     tys <- recalc
     return (tys, recalc, extract, destruct)
-
 
 calcValue :: IEnv -> HFormula -> Value -> R ValueNode
 calcValue env fml value = genNode $ \nodeIdent -> do
@@ -361,8 +351,6 @@ calcValue env fml value = genNode $ \nodeIdent -> do
                   , destructor = destruct'
                   , alive    = alive
                   , pprinter = pp}
-
-        
 
 calcExp :: IEnv -> HFormula -> Exp -> R ExpNode
 calcExp env fml exp = 
@@ -455,24 +443,23 @@ calcLExp env fml x lexp = -- genNode $ \nodeIdent -> do
                               , pprinter = pp}
 
 updateLoop :: R ()
-updateLoop = popQuery >>= \case
-    Nothing -> return ()
-    Just (UpdateQuery _ nodeId) -> do
-        SomeNode node <- getNode nodeId
-        case node of
-            Node {ident = ident, alive = alive} -> 
-                liftIO (readIORef alive) >>= \case
-                    True -> do
-                        new_ity <- recalcator node
-                        old_ity <- getTypes node
-                        setTypes node new_ity
-                        when (new_ity /= old_ity) $ do
-                            tbl <- asks ctxNodeDepG
-                            liftIO (H.lookup tbl ident) >>= \case
-                                Nothing -> pure ()
-                                Just ns -> forM_ ns $ pushQuery . UpdateQuery QEdge
-                        updateLoop
-                    False -> updateLoop
+updateLoop = 
+    popQuery >>= 
+        maybe (return ()) 
+              (\(UpdateQuery _ nodeId) -> doit nodeId >> updateLoop)
+    where
+    doit nodeId = do
+        SomeNode node@Node{ident = ident
+                          , alive = alive} <- getNode nodeId
+        nodeIsAlive <- liftIO (readIORef alive) 
+        when nodeIsAlive $ do
+            new_ity <- recalcator node
+            old_ity <- getTypes node
+            setTypes node new_ity
+            when (new_ity /= old_ity) $ do
+                tbl <- asks ctxNodeDepG
+                liftIO (H.lookup tbl ident) >>= 
+                    maybe (pure ()) (mapM_ (pushQuery . UpdateQuery QEdge))
 
 saturate :: HFormula.Context -> Program -> TracerT (Dict IncSat) (LoggingT IO) (Bool, ([ITermType], Maybe [Bool]))
 saturate hctx prog = do
@@ -495,4 +482,3 @@ saturate hctx prog = do
     dict <- liftIO $ getStatistics ctx
     update (id .~ dict)
     return res
-

@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns,TupleSections #-}
 module Language.DMoCHi.Boolean.Flow2 where
 
 import qualified Data.Map as M

@@ -1,5 +1,4 @@
-{-# LANGUAGE FlexibleContexts, ScopedTypeVariables, Rank2Types, GADTs, TypeOperators, BangPatterns #-}
-module Language.DMoCHi.ML.TypeCheck where
+module Language.DMoCHi.ML.Preprocess.TypeCheck where
 import qualified Data.Map as M
 import Prelude hiding(mapM)
 import Control.Monad.Except
@@ -8,12 +7,12 @@ import Data.IORef
 import Language.DMoCHi.ML.Syntax.Typed 
 import Language.DMoCHi.ML.Syntax.Base
 import Language.DMoCHi.ML.Syntax.Type
-import qualified Language.DMoCHi.ML.Alpha as U
+import qualified Language.DMoCHi.ML.Syntax.Alpha as U
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U(AnnotVar(..),SynName, SynonymDef(..), Type(..), TypeScheme(..), Lit(..), matchType)
 import qualified Language.DMoCHi.Common.Id as Id
-import Language.DMoCHi.ML.TypeInfer
+import Language.DMoCHi.ML.Preprocess.TypeInfer
 import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey)
-import Language.DMoCHi.ML.DesugarSynonym
+import Language.DMoCHi.ML.Preprocess.DesugarSynonym
 import Language.DMoCHi.Common.Util
 
 instance Show TypeError where
@@ -41,7 +40,7 @@ fromUnTyped _prog = do
     prog <- withExceptT Infer (infer _prog)
     prog <- copyPoly prog
     let synEnv = M.fromList [ (U.synName syn, syn) | syn <- U.synonyms prog ]
-    env <- fmap M.fromList $ forM (U.functions prog) $ \(f, tyS, _) -> do
+    env <- fmap M.fromList $ forM (U.functions prog) $ \(f, tyS, _) -> 
         case convertType synEnv (U.typeBody tyS) of
             Right sty -> pure (varName f, sty)
             Left err -> throwError (Synonym err)
@@ -87,14 +86,14 @@ copyPoly prog = do
                         liftIO $ modifyIORef copyAssocRef ((x',e'):)
                         return x'
         go :: ([Id.Id String], M.Map String U.Type) -> U.Exp U.Type -> ExceptT TypeError m (U.Exp U.Type)
-        go !st@(stack,rho) (U.Exp l arg (_ty,_key)) = do
+        go st@(stack,rho) (U.Exp l arg (_ty,_key)) = do
             key' <- freshKey
             let ty = substWith rho _ty
             case (l, arg) of
                 (SLiteral, _) -> pure (U.Exp l arg (ty, key'))
                 (SVar, x) -> case M.lookup (U.varName x) bindInfo of
                     Nothing -> pure (U.Exp SVar (x{ U.varType = ty}) (ty,key'))
-                    Just (tyS, _) -> do
+                    Just (tyS, _) -> 
                         case U.matchType (U.typeBody tyS) ty of
                             Just match -> do
                                 let tys = map (match M.!) (U.typeArgs tyS)

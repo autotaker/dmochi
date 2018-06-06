@@ -1,4 +1,4 @@
-module Language.DMoCHi.ML.TailOptimization where
+module Language.DMoCHi.ML.Preprocess.TailOptimization where
 
 -- simplify by the following law: let x = e in x ==> e
 

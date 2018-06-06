@@ -1,5 +1,4 @@
-{-# LANGUAGE ViewPatterns #-}
-module Language.DMoCHi.ML.ElimUnreachable where
+module Language.DMoCHi.ML.Preprocess.ElimUnreachable where
 
 import Language.DMoCHi.ML.Syntax.PNormal
 

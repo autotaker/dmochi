@@ -1,5 +1,5 @@
 {-# LANGUAGE UndecidableInstances #-}
-module Language.DMoCHi.ML.Alpha(alpha,AlphaError, Exp(..), Program(..), refresh, Var) where
+module Language.DMoCHi.ML.Syntax.Alpha(alpha,AlphaError, Exp(..), Program(..), refresh, Var) where
 import qualified Language.DMoCHi.ML.Syntax.UnTyped as U
 import Language.DMoCHi.ML.Syntax.UnTyped(Type(..), TypeScheme, SynonymDef(..))
 import Language.DMoCHi.ML.Syntax.Base
