@@ -12,16 +12,13 @@ import           Language.DMoCHi.ML.Flow
 import           Language.DMoCHi.ML.Syntax.IType
 
 import           GHC.Generics (Generic)
--- import           Data.Kind(Constraint)
+import           Control.Applicative
 import           Control.Monad.Fix
 import           Control.Monad.Reader
-import           Control.Monad.Writer hiding((<>))
 import           Control.Monad.State.Strict
 import qualified Z3.Monad as Z3
--- import qualified Z3.Base as Z3Base
 import           Data.IORef
 import           Data.Time
---import           Data.Type.Equality
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.HashTable.IO as H
@@ -30,9 +27,11 @@ import qualified Data.Sequence as Q
 import           Text.PrettyPrint.HughesPJClass
 import qualified Data.PolyDict as Dict
 import           Data.PolyDict(Dict,access)
+import qualified Data.DList as DL
 
 type NodeId = Int
 type HashTable k v = H.BasicHashTable k v
+type HContext = HFormula.Context
 
 data Context = 
   Context { 
@@ -44,8 +43,6 @@ data Context =
   -- dependency graph, nodes in ctxNodeDepG (ident n) should be updated if node n is updated
   , ctxNodeDepG      :: HashTable NodeId [NodeId]
   
---  , ctxRtnTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
---  , ctxArgTypeTbl    :: HashTable UniqueKey ([HFormula], Scope) 
   , ctxFreeVarTbl    :: HashTable UniqueKey (S.Set TId)
   , ctxITypeCache    :: Cache IType
   , ctxITermCache    :: Cache ITermType
@@ -103,8 +100,6 @@ initContext prog = do
         ctxNodeCounter <- newIORef 1
         ctxNodeTbl     <- H.new
         ctxNodeDepG    <- H.new
-        -- ctxRtnTypeTbl  <- H.new
-        -- ctxArgTypeTbl  <- H.new
         ctxFreeVarTbl  <- H.new
         ctxITypeCache  <- newCache
         ctxITermCache  <- newCache
@@ -140,12 +135,12 @@ data Node e where
             { typeEnv    :: IEnv
             , constraint :: HFormula
             , ident      :: !NodeId
-            , types      :: IORef (SatType e)
+            , types      :: !(IORef (SatType e))
             , recalcator :: R (SatType e)
             , extractor  :: Extractor e
             , destructor :: R ()
             , pprinter   :: IO Doc
-            , alive      :: IORef Bool
+            , alive      :: !(IORef Bool)
             , term       :: e
             } -> Node e
 
@@ -168,8 +163,49 @@ type family Extractor e where
     Extractor Exp   = TermExtractor
     Extractor LExp  = TermExtractor
     Extractor Value = ValueExtractor
-type TermExtractor = CEnv -> ITermType -> WriterT [Bool] R (Maybe CValue)
+type TermExtractor = CEnv -> ITermType -> Extract CValue
 type ValueExtractor = CEnv -> CValue
+
+newtype Extract a = Extract { runExtract :: R (DL.DList Bool, Maybe a) }
+
+extractTrace :: Extract a -> R [Bool]
+extractTrace m = DL.toList . fst <$> runExtract m
+
+branch :: Bool -> Extract ()
+branch b = Extract $ pure (DL.singleton b, Just ())
+
+instance Functor Extract where
+    {-# INLINE fmap #-}
+    fmap f (Extract a) = Extract (fmap (\(tr, r) -> (tr, fmap f r)) a)
+instance Applicative Extract where
+    {-# INLINE pure #-}
+    {-# INLINE (<*>) #-}
+    pure a = Extract $ pure (mempty, Just a)
+    (<*>) = ap
+instance Alternative Extract where
+    {-# INLINE empty #-}
+    {-# INLINE (<|>) #-}
+    empty = Extract $ pure (mempty, Nothing)
+    Extract a <|> Extract b = Extract $ do
+        (tr1, ma) <- a
+        case ma of
+            Just _ -> pure (tr1, ma)
+            Nothing -> b
+instance MonadPlus Extract 
+
+instance Monad Extract where
+    {-# INLINE (>>=) #-}
+    Extract mv >>= f = Extract $ do
+        (tr, mv) <- mv
+        case mv of
+            Just v -> do
+                (tr', mr) <- runExtract (f v)
+                pure (tr `mappend` tr', mr)
+            Nothing -> pure (tr, Nothing)
+instance MonadIO Extract where
+    {-# INLINE liftIO #-}
+    liftIO ioaction = Extract $ (mempty,) . Just <$> liftIO ioaction
+
 
 type ValueNode = Node Value
 type ExpNode = Node Exp
@@ -184,11 +220,11 @@ queryId :: UpdateQuery -> NodeId
 queryId (UpdateQuery _ i) = i
 
 incrNodeCounter :: R NodeId
-incrNodeCounter = ask >>= \ctx -> liftIO $ do
-    v <- readIORef (ctxNodeCounter ctx)
-    writeIORef (ctxNodeCounter ctx) $! v+1
-    return v
-
+incrNodeCounter = 
+    asks ctxNodeCounter >>= \tbl -> 
+        liftIO $ do
+            v <- readIORef tbl
+            v <$ (writeIORef tbl $! v+1)
 
 measureTime :: MeasureKey -> R a -> R a
 measureTime key action = do
@@ -196,11 +232,11 @@ measureTime key action = do
     res <- action
     t_end <- liftIO getCurrentTime
     let dt = diffUTCTime t_end t_start
-    ask >>= \ctx -> liftIO $ do
-        r <- H.lookup (ctxTimer ctx) key
+    asks ctxTimer >>= \tbl -> liftIO $ do
+        r <- H.lookup tbl key
         case r of
-            Nothing -> H.insert (ctxTimer ctx) key $! dt
-            Just t  -> H.insert (ctxTimer ctx) key $! dt + t
+            Nothing -> H.insert tbl key $! dt
+            Just t  -> H.insert tbl key $! dt + t
     return res
 
 data IncSat
@@ -265,45 +301,47 @@ scopeOfAtom :: M.Map TId [Atom] -> Atom -> [Atom]
 scopeOfAtom env (Atom l arg _) = 
     case (l, arg) of
         (SLiteral, _) -> []
-        (SVar, x) -> (env M.! x)
-        (SUnary, UniArg _ a1) ->  scopeOfAtom env a1
+        (SVar, x) -> env M.! x
+        (SUnary, UniArg _ a1) -> scopeOfAtom env a1
         (SBinary, _) -> []
 
 genNode :: (NodeId -> R (Node e)) -> R (Node e)
 genNode constr = do
     i <- incrNodeCounter
     n <- constr i
-    tbl <- ctxNodeTbl <$> ask
-    liftIO $ H.insert tbl i (SomeNode n)
-    return n
+    n <$ (asks ctxNodeTbl >>= (\tbl -> 
+                liftIO (H.insert tbl i (SomeNode n))))
 
 getNode :: NodeId -> R SomeNode
 getNode i = do
-    tbl <- ctxNodeTbl <$> ask
+    tbl <- asks ctxNodeTbl
     liftIO (H.lookup tbl i) >>= \case
         Just v -> return v
         Nothing -> error $ "getNode: This node id " ++ (show i) ++ " is not registered!"
 
 setParent :: NodeId -> Node e -> R (Node e)
-setParent pId node = ask >>= \ctx -> do
-    liftIO $ insertTbl (ctxNodeDepG ctx) (nodeId node) pId
-    return node
+setParent pId node = 
+    node <$ (asks ctxNodeDepG >>= \tbl -> 
+                insertTbl tbl (nodeId node) [pId])
 
+{-# INLINE getTypes #-}
 getTypes :: MonadIO m => Node e -> m (SatType e)
 getTypes (Node { types = types }) = liftIO $ readIORef types
 
+{-# INLINE setTypes #-}
 setTypes :: MonadIO m => Node e -> SatType e -> m ()
 setTypes (Node { types = types }) ty = liftIO $ writeIORef types ty
 
-insertTbl :: (Eq key, Hashable key) => HashTable key [a] -> key -> a -> IO ()
-insertTbl tbl key value = 
+{-# INLINE insertTbl #-}
+insertTbl :: (MonadIO m, Eq key, Hashable key, Monoid a) => HashTable key a -> key -> a -> m ()
+insertTbl tbl key value = liftIO $ 
     H.lookup tbl key >>= \case
-        Just l -> H.insert tbl key (value : l)
-        Nothing -> H.insert tbl key [value]
+        Just l -> H.insert tbl key (value `mappend` l)
+        Nothing -> H.insert tbl key value
 
-lookupTbl :: (Eq key,Hashable key) => HashTable key [a] -> key -> IO [a]
-lookupTbl tbl key =
+{-# INLINE lookupTbl #-}
+lookupTbl :: (MonadIO m, Eq key, Hashable key, Monoid a) => HashTable key a -> key -> m a 
+lookupTbl tbl key = liftIO $ 
     H.lookup tbl key >>= \case
         Just l -> return l
-        Nothing -> return []
-
+        Nothing -> return mempty
