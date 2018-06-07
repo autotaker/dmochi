@@ -1,10 +1,15 @@
 {-# LANGUAGE DeriveGeneric, GeneralizedNewtypeDeriving, MultiParamTypeClasses, UndecidableInstances, RecordWildCards, OverloadedLabels #-}
-module Language.DMoCHi.ML.IncSaturationPre where
-import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkUni, mkVar, mkLiteral)
-import           Language.DMoCHi.ML.Syntax.PNormal (Atom(..))
+module Language.DMoCHi.ML.IncSaturationPre (  
+    R(..), IncSat,HContext,Node(..), SomeNode(..), UpdateQuery(..), LExpNode, ExpNode, ValueNode,
+    CValue(..), CEnv, IEnv, TermExtractor, ValueExtractor, Extractor, SatType, NodeId, HashTable,
+    QueryType(..), Context(..),
+    getStatistics,  extractTrace,  initContext, runR,
+    pushQuery, popQuery,  getNode,  genNode, setParent, getTypes, setTypes,
+    extendConstraintVar, extendConstraintCond, genericPrint,  branch, 
+    insertTbl, lookupTbl) where
+import           Language.DMoCHi.ML.Syntax.CEGAR 
 import           Language.DMoCHi.ML.Syntax.HFormula hiding(Context)
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
-import           Language.DMoCHi.ML.Syntax.PType hiding(ArgType)
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
 import           Language.DMoCHi.Common.Cache
@@ -35,19 +40,19 @@ type HContext = HFormula.Context
 
 data Context = 
   Context { 
-    ctxFlowTbl :: HashTable UniqueKey (S.Set ([IType], BFormula))
-  , ctxFlowReg :: HashTable UniqueKey [NodeId]
-  , ctxFlowMap :: FlowMap
-  , ctxNodeCounter   :: IORef Int
-  , ctxNodeTbl       :: HashTable NodeId SomeNode
+    ctxFlowTbl :: !(HashTable UniqueKey (S.Set ([IType], BFormula)))
+  , ctxFlowReg :: !(HashTable UniqueKey [NodeId])
+  , ctxFlowMap :: !FlowMap
+  , ctxNodeCounter   :: !(IORef Int)
+  , ctxNodeTbl       :: !(HashTable NodeId SomeNode)
   -- dependency graph, nodes in ctxNodeDepG (ident n) should be updated if node n is updated
-  , ctxNodeDepG      :: HashTable NodeId [NodeId]
+  , ctxNodeDepG      :: !(HashTable NodeId [NodeId])
   
-  , ctxFreeVarTbl    :: HashTable UniqueKey (S.Set TId)
-  , ctxITypeCache    :: Cache IType
-  , ctxITermCache    :: Cache ITermType
-  , ctxUpdated       :: IORef Bool
-  , ctxTimer :: HashTable MeasureKey NominalDiffTime
+  , ctxFreeVarTbl    :: !(HashTable UniqueKey (S.Set TId))
+  , ctxITypeCache    :: !(Cache IType)
+  , ctxITermCache    :: !(Cache ITermType)
+  , ctxUpdated       :: !(IORef Bool)
+  , ctxTimer :: !(HashTable MeasureKey NominalDiffTime)
   }
 
 data MeasureKey = CheckSat | CalcCondition | Total | MSaturation | MExtraction
@@ -64,6 +69,10 @@ instance MonadReader Context R where
 
 getHFormulaContext :: R HFormula.Context
 getHFormulaContext = R (lift ask)
+
+runR :: HContext -> Context -> R a -> LoggingT IO a
+runR hctx ctx doit = do
+    runHFormulaT (evalStateT (runReaderT (unR doit) ctx) (emptyQueue, S.empty)) hctx
 
 instance MonadState (Queue UpdateQuery, S.Set Int) R where
     get = R get
@@ -87,7 +96,6 @@ instance ITypeFactory R where
     getITermCache = ctxITermCache <$> ask
 
 
-type PEnv = M.Map TId PType
 type IEnv = M.Map TId IType
 
 initContext :: Program -> LoggingT IO Context
@@ -111,7 +119,7 @@ data CValue = CBase | CPair CValue CValue
             | CRec CEnv TId (HashTable (TId, ArgType, ITermType) ValueNode)
             | CCls CEnv [TId] (HashTable ArgType ExpNode)
 type CEnv = M.Map TId CValue
-type History = HashTable (TId, ArgType, ITermType) ValueNode
+-- type History = HashTable (TId, ArgType, ITermType) ValueNode
 
 type ArgType = ([IType],BFormula)
 
@@ -226,6 +234,7 @@ incrNodeCounter =
             v <- readIORef tbl
             v <$ (writeIORef tbl $! v+1)
 
+{- 
 measureTime :: MeasureKey -> R a -> R a
 measureTime key action = do
     t_start <- liftIO getCurrentTime
@@ -238,6 +247,7 @@ measureTime key action = do
             Nothing -> H.insert tbl key $! dt
             Just t  -> H.insert tbl key $! dt + t
     return res
+    -}
 
 data IncSat
 type instance Dict.Assoc IncSat "graph_size" = Int
@@ -281,8 +291,6 @@ genericPrint env fml e tys_ref ident termPrinter typePrinter = do
           $+$ text "type:" <+> doc_ity
     return doc
     
-printNode :: Node e -> IO ()
-printNode (Node { pprinter = pp }) = pp >>= print
 
 popQuery :: R (Maybe UpdateQuery)
 popQuery = state $ \(que, nodes) -> case popQueue que of
@@ -296,14 +304,6 @@ pushQuery q = modify' $ \(que, nodes) ->
     then (que, nodes)
     else (pushQueue q que, S.insert ident nodes)
 
-
-scopeOfAtom :: M.Map TId [Atom] -> Atom -> [Atom]
-scopeOfAtom env (Atom l arg _) = 
-    case (l, arg) of
-        (SLiteral, _) -> []
-        (SVar, x) -> env M.! x
-        (SUnary, UniArg _ a1) -> scopeOfAtom env a1
-        (SBinary, _) -> []
 
 genNode :: (NodeId -> R (Node e)) -> R (Node e)
 genNode constr = do
@@ -331,6 +331,15 @@ getTypes (Node { types = types }) = liftIO $ readIORef types
 {-# INLINE setTypes #-}
 setTypes :: MonadIO m => Node e -> SatType e -> m ()
 setTypes (Node { types = types }) ty = liftIO $ writeIORef types ty
+
+{-# INLINE extendConstraintVar #-}
+extendConstraintVar :: HFormulaFactory m => HFormula -> TId -> HFormula -> m HFormula
+extendConstraintVar fml x vx = 
+    mkBin SAnd fml =<< (mkVar x >>= \x -> mkBin SEq x vx)
+
+{-# INLINE extendConstraintCond #-}
+extendConstraintCond :: HFormulaFactory m => HFormula -> HFormula -> m HFormula
+extendConstraintCond = mkBin SAnd
 
 {-# INLINE insertTbl #-}
 insertTbl :: (MonadIO m, Eq key, Hashable key, Monoid a) => HashTable key a -> key -> a -> m ()

@@ -2,7 +2,7 @@ module Language.DMoCHi.ML.ToCEGAR(convert) where
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as From
 import qualified Language.DMoCHi.ML.Syntax.CEGAR   as To
-import           Language.DMoCHi.ML.Syntax.HFormula(HFormulaFactory(..), runHFormulaT, Context)
+import           Language.DMoCHi.ML.Syntax.HFormula(HFormulaFactory(..), runHFormulaT, Context, toHFormula)
 import           Language.DMoCHi.ML.Syntax.Base
 import           Language.DMoCHi.ML.Syntax.PType
 import           Language.DMoCHi.ML.Syntax.PNormal(Castable(..))
@@ -22,7 +22,7 @@ convertV :: HFormulaFactory m => TypeMap -> M.Map TId PType -> From.Value -> PTy
 convertV typeMap env v sigma = 
     let key = getUniqueKey v in
     case From.valueView v of
-        From.VAtom a -> return $ castWith key a
+        From.VAtom a -> castWith key <$> toHFormula a
         From.VOther SLambda (xs, e) -> do
             let PFun _ (_, ptys_xs, ps, pred_tmpl_xs) tau = alphaConvFun xs sigma
                 env' = extendEnv env (zip xs ptys_xs)
@@ -53,8 +53,9 @@ convertE typeMap env e tau =
             e2' <- convertE typeMap env' e2 tau
             return $ To.mkLetRec fs' e2' key
         From.EOther SAssume (cond, e2) -> do
+            cond' <- toHFormula cond
             e2' <- convertE typeMap env e2 tau
-            return $ To.mkAssume cond e2' key
+            return $ To.mkAssume cond' e2' key
         From.EOther SBranch (e1, e2) -> do
             e1' <- convertE typeMap env e1 tau
             e2' <- convertE typeMap env e2 tau
@@ -66,8 +67,9 @@ convertE typeMap env e tau =
                 From.LValue (From.valueView -> From.VAtom a) -> do
                     let info = To.DummyInfo
                     let pty_x = typeOfAtom env a
+                    fml <- toHFormula a
                     e2' <- convertE typeMap (M.insert x pty_x env) e2 tau
-                    return $ To.mkLet x (castWith (getUniqueKey e1) a) info e2' key
+                    return $ To.mkLet x (castWith (getUniqueKey e1) fml) info e2' key
                 From.LValue _ -> error "RHS of let-binding must not be a pair nor a lambda-abst"
                 From.LOther SApp (f, vs) -> do
                     let ((ptys_vs, ps, pred_tmpl_arg), ty_ret) = appPType (env M.! f) vs

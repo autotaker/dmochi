@@ -2,7 +2,8 @@
 module Language.DMoCHi.ML.Syntax.HFormula(
   HFormula(..), HFormulaFactory(..)
   , getIdent, getIValue, Context(..), HFormulaT, runHFormulaT, newContext
-  , mkBin, mkUni, mkVar, mkLiteral
+  , mkBin, mkUni, mkVar, mkLiteral, mkTrue
+
   , toHFormula, fromHFormula, calcCondition, fromBFormula
 ) where
 
@@ -245,6 +246,10 @@ mkLiteral :: HFormulaFactory m => Lit -> m HFormula
 mkLiteral l@(CInt i)  = genHFormula (HFormulaKey SLiteral l) (SMT.ASTValue <$> Z3.mkInteger i)
 mkLiteral l@(CBool b) = genHFormula (HFormulaKey SLiteral l) (SMT.ASTValue <$> Z3.mkBool b)
 mkLiteral CUnit = error "unexpected pattern"
+
+{-# INLINE mkTrue #-}
+mkTrue :: HFormulaFactory m => m HFormula
+mkTrue = mkLiteral (CBool True)
 
 {-# INLINE mkVar #-}
 mkVar :: HFormulaFactory m => TId -> m HFormula

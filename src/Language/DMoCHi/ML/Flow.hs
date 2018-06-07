@@ -12,6 +12,7 @@ import           Text.PrettyPrint.HughesPJClass
 -- import Debug.Trace
 
 import           Language.DMoCHi.ML.Syntax.CEGAR hiding(Label)
+import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import           Language.DMoCHi.Common.Id 
 import           Language.DMoCHi.Common.Util
 
@@ -147,8 +148,8 @@ labelOfType f = go 1
     go i (TFun _ _) = LKey $ f i
     go i (TPair ty1 ty2) = LPair (go (2*i) ty1) (go (2*i+1) ty2)
 
-labelOfAtom :: Env -> Atom -> Label
-labelOfAtom env (Atom l arg _) =
+labelOfAtom :: Env -> HFormula.HFormula -> Label
+labelOfAtom env (HFormula.HFormula l arg _ _ _) =
     case (l,arg) of
         (SLiteral, _) -> LBase
         (SVar, x) -> env M.! x

@@ -35,7 +35,7 @@ import Text.PrettyPrint.HughesPJClass
 data Label = Literal | Var | Binary | Unary | Pair 
            | Lambda | App | Let | LetRec
            | Assume | If | Branch 
-           | Fail | Omega | Rand
+           | Fail | Omega | Rand | Atomic
            deriving(Eq,Ord)
            
 data BinOp = Add | Sub | NEq | Eq | Lt | Gt | Lte | Gte | And | Or  | Mul | Div
@@ -91,6 +91,7 @@ reflectLabel l = case l of
     SFail -> Fail 
     SOmega -> Omega 
     SRand-> Rand
+    SAtomic -> Atomic
 
 reflectBinOp :: SBinOp op -> BinOp
 reflectBinOp l = case l of
@@ -182,6 +183,7 @@ type family WellFormed (l :: Label)  (e :: *)  (arg :: *) :: Constraint where
     WellFormed 'Fail    e arg = arg ~ ()
     WellFormed 'Omega   e arg = arg ~ ()
     WellFormed 'Rand    e arg = arg ~ ()
+    WellFormed 'Atomic  e arg = 'True ~ 'False
 
 data SLabel (l :: Label) where
     SLiteral :: SLabel 'Literal
@@ -199,6 +201,7 @@ data SLabel (l :: Label) where
     SFail    :: SLabel 'Fail
     SOmega   :: SLabel 'Omega
     SRand    :: SLabel 'Rand
+    SAtomic  :: SLabel 'Atomic
 
 type family EqLabel a b where
     EqLabel 'Literal 'Literal = 'True
@@ -216,6 +219,7 @@ type family EqLabel a b where
     EqLabel 'Fail 'Fail = 'True
     EqLabel 'Omega 'Omega = 'True
     EqLabel 'Rand 'Rand = 'True
+    EqLabel 'Atomic 'Atomic = 'True
     EqLabel a b = 'False
 
 data SBinOp (op :: BinOp) where

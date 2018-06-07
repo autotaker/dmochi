@@ -5,7 +5,6 @@ import qualified Data.Map as M
 import Text.PrettyPrint.HughesPJClass
 
 import qualified Language.DMoCHi.ML.Syntax.PNormal as ML
--- import qualified Language.DMoCHi.ML.PrettyPrint.PNormal as ML
 import qualified Language.DMoCHi.Boolean.Syntax.Typed as B
 import qualified Language.DMoCHi.Boolean.PrettyPrint.Typed as B
 import qualified Language.DMoCHi.ML.SMT as SMT

@@ -1,5 +1,6 @@
 module Language.DMoCHi.ML.PredicateGeneralizer where
-import Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkVar, mkLiteral)
+import Language.DMoCHi.ML.Syntax.CEGAR
+import           Language.DMoCHi.ML.Syntax.Atom(mkUni)
 import           Language.DMoCHi.Common.Id hiding(Id)
 import           Language.DMoCHi.Common.Util
 import qualified Data.Map as M
@@ -86,8 +87,8 @@ calc ctx solver traces prog = runHFormulaT doit ctx
                     Nothing -> pure info
         otraverse conv prog
 
-calcAtom :: Env -> Atom -> AValue
-calcAtom env (Atom l arg _) =
+calcAtom :: Env -> HFormula -> AValue
+calcAtom env (HFormula l arg _ _ _) =
     case (l, arg) of
         (SLiteral, _ ) -> ABase
         (SVar, x) -> env M.! x
@@ -124,7 +125,7 @@ calcExp env c e =
             let env' = extendEnv env [ (f, calcValue env' c v) | (f, v) <- fs ]
             calcExp env' c e1
         EOther SAssume (cond, e1) -> do
-            c' <- lift $ mkBin SAnd c =<< toHFormula cond
+            c' <- lift $ mkBin SAnd c cond
             calcExp env c' e1
         EOther SFail _ -> return Nothing
         EOther SOmega _ -> error "diverged"
@@ -148,7 +149,7 @@ calcLExp env c x e info =
             let av = calcAtom env atom
             c' <- lift $ do
                 vx <- mkVar x
-                toHFormula atom >>= mkBin SEq vx >>= mkBin SAnd c
+                mkBin SEq vx atom >>= mkBin SAnd c
             return $ Just (M.insert x av env, c')
         LOther SRand _ -> return $ Just (M.insert x ABase env, c)
         LOther SApp (f, info_arg, vs) -> do

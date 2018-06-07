@@ -3,7 +3,7 @@ module Language.DMoCHi.ML.Syntax.CEGAR(
       Program(..)
     , Exp(..), Value(..), Atom(..), LExp(..), Normalized, AbstInfo(..)
     , LExpView(..), ExpView(..), ValueView(..), expView, valueView, lexpView
-    , mkBin, mkUni, mkLiteral, mkVar, mkPair, mkLambda 
+    , mkPair, mkLambda 
     , mkApp, mkLet, mkLetRec, mkAssume, mkBranch, mkBranchL, mkFail, mkOmega, mkRand
     , mkAbstInfo, updateAbstInfo, Formula , decomposeFormula
     , Castable(..)
@@ -18,6 +18,7 @@ import GHC.Exts(Constraint)
 import Language.DMoCHi.ML.Syntax.Atom
 import Language.DMoCHi.ML.Syntax.PNormal(Castable(..))
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
+import Language.DMoCHi.ML.Syntax.HFormula(HFormula, HFormulaFactory)
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.Base
 import Text.PrettyPrint.HughesPJClass
@@ -30,7 +31,7 @@ import Text.Printf
 
 
 data AbstInfo 
- = AbstInfo { abstFormulas    :: [HFormula.HFormula]  -- current predicates to be used
+ = AbstInfo { abstFormulas    :: [HFormula]  -- current predicates to be used
             , abstTemplate   :: PredTemplate         -- represents P_k(a_1,...a_n) 
             , abstPredicates :: ([TId], [Atom]) -- (xs, [p_1,..., p_m]) s.t.
                                                      -- [a_1/x_1,...,a_n/x_n] p_i = phi_i
@@ -58,16 +59,13 @@ data LExp where
             => SLabel l -> arg -> !Type -> !UniqueKey -> LExp
 
 type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
-    Normalized 'Literal e arg = arg ~ Lit
-    Normalized 'Var     e arg = arg ~ Ident e
-    Normalized 'Unary   e arg = arg ~ UniArg Atom
-    Normalized 'Binary  e arg = arg ~ BinArg Atom
+    Normalized 'Atomic  e arg = arg ~ HFormula
     Normalized 'Pair    e arg = arg ~ (Value, Value)
     Normalized 'Lambda  e arg = arg ~ ([Ident e], AbstInfo, Exp)
     Normalized 'App     e arg = arg ~ (Ident e, AbstInfo, [Value])
     Normalized 'Let     e arg = arg ~ (Ident e, LExp, AbstInfo, Exp)
     Normalized 'LetRec  e arg = arg ~ ([(Ident e, Value)], Exp)
-    Normalized 'Assume  e arg = arg ~ (Atom, Exp)
+    Normalized 'Assume  e arg = arg ~ (HFormula, Exp)
     Normalized 'Branch  e arg = arg ~ (Exp, Exp)
     Normalized 'Fail    e arg = arg ~ ()
     Normalized 'Omega   e arg = arg ~ ()
@@ -87,10 +85,7 @@ type instance Ident  LExp = TId
 type instance Ident  Value = TId
 
 type family Meta (l :: Label) (e :: *) (info :: *) :: Constraint where
-    Meta 'Literal Exp info = info ~ AbstInfo
-    Meta 'Var     Exp info = info ~ AbstInfo
-    Meta 'Unary   Exp info = info ~ AbstInfo
-    Meta 'Binary  Exp info = info ~ AbstInfo
+    Meta 'Atomic Exp info = info ~ AbstInfo
     Meta 'Pair    Exp info = info ~ AbstInfo
     Meta 'Lambda  Exp info = info ~ AbstInfo
     Meta l        Exp info = info ~ ()
@@ -104,31 +99,27 @@ data ExpView where
                 => SLabel l -> arg -> ExpView
 
 data LExpView where
-    LAtom  :: Atom -> LExpView
+    LAtom  :: HFormula -> LExpView
     LOther :: ( Normalized l LExp arg
               , Supported l '[  'App, 'Branch, 'Rand]) 
                 => SLabel l -> arg -> LExpView
 
 data ValueView where
-    VAtom  :: Atom -> ValueView
+    VAtom  :: HFormula -> ValueView
     VOther :: ( Normalized l Value arg
               , Supported l '[ 'Pair, 'Lambda ]) 
                 => SLabel l -> arg -> ValueView
 
-type instance Labels Exp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
+type instance Labels Exp = '[ 'Atomic, 'Pair, 'Lambda
                             , 'Let, 'LetRec, 'Assume, 'Branch, 'Fail, 'Omega ]
-type instance Labels LExp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'App, 'Branch, 'Rand]
-type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda ]
-type instance Labels Atom  = '[ 'Literal, 'Var, 'Binary, 'Unary ]
+type instance Labels LExp = '[ 'Atomic, 'App, 'Branch, 'Rand]
+type instance Labels Value = '[ 'Atomic, 'Pair, 'Lambda ]
 
 
 {-# INLINE expView #-}
 expView :: Exp -> ExpView
 expView (Exp l arg sty meta key) = case l of
-    SLiteral -> EValue (Value l arg sty key) meta
-    SVar     -> EValue (Value l arg sty key) meta
-    SBinary  -> EValue (Value l arg sty key) meta
-    SUnary   -> EValue (Value l arg sty key) meta
+    SAtomic -> EValue (Value l arg sty key) meta
     SPair    -> EValue (Value l arg sty key) meta
     SLambda  -> EValue (Value l arg sty key) meta
     SLet     -> EOther l arg 
@@ -140,25 +131,18 @@ expView (Exp l arg sty meta key) = case l of
 
 {-# INLINE valueView #-}
 valueView :: Value -> ValueView
-valueView (Value l arg sty _) = case l of
-    SLiteral -> VAtom (Atom l arg sty)
-    SVar     -> VAtom (Atom l arg sty)
-    SBinary  -> VAtom (Atom l arg sty)
-    SUnary   -> VAtom (Atom l arg sty)
+valueView (Value l arg _ _) = case l of
+    SAtomic -> VAtom arg 
     SPair    -> VOther l arg
     SLambda  -> VOther l arg
 
 {-# INLINE lexpView #-}
 lexpView :: LExp -> LExpView
-lexpView (LExp l arg sty _) = case l of
-    SLiteral -> LAtom (Atom l arg sty)
-    SVar     -> LAtom (Atom l arg sty)
-    SBinary  -> LAtom (Atom l arg sty)
-    SUnary   -> LAtom (Atom l arg sty)
+lexpView (LExp l arg _ _) = case l of
+    SAtomic  -> LAtom arg
     SBranch  -> LOther l arg
     SRand    -> LOther l arg
     SApp     -> LOther l arg
-
 
 mkPair :: Value -> Value -> UniqueKey -> Value
 mkPair v1@(Value _ _ sty1 _) v2@(Value _ _ sty2 _) key = Value SPair (v1, v2) (TPair sty1 sty2) key
@@ -179,7 +163,7 @@ mkLetRec :: [(TId, Value)] -> Exp -> UniqueKey -> Exp
 mkLetRec fs e2 key = Exp SLetRec (fs, e2) (getType e2) () key
 
 
-mkAssume :: Atom -> Exp -> UniqueKey -> Exp
+mkAssume :: HFormula -> Exp -> UniqueKey -> Exp
 mkAssume v e key = Exp SAssume (v, e) (getType e) () key
 
 mkBranch :: Exp -> Exp -> UniqueKey -> Exp
@@ -195,7 +179,8 @@ mkOmega sty key = Exp SOmega () sty () key
 mkRand :: UniqueKey -> LExp
 mkRand key = LExp SRand () TInt key
 
-mkAbstInfo :: HFormula.HFormulaFactory m => [Atom] -> PredTemplate -> m AbstInfo
+
+mkAbstInfo :: HFormulaFactory m => [Atom] -> PredTemplate -> m AbstInfo
 mkAbstInfo ps' tmpl@(_, vs) = do
     ps <- mapM HFormula.toHFormula ps'
     let f :: Type -> String
@@ -211,7 +196,7 @@ mkAbstInfo ps' tmpl@(_, vs) = do
         , abstPredicates = (xs, map (desubstAtom subst) ps')
         }
 
-updateAbstInfo :: HFormula.HFormulaFactory m => [([TId], Atom)] -> AbstInfo -> m AbstInfo
+updateAbstInfo :: HFormulaFactory m => [([TId], Atom)] -> AbstInfo -> m AbstInfo
 updateAbstInfo _ DummyInfo = pure DummyInfo
 updateAbstInfo preds (AbstInfo ps tmpl (xs,fs)) = do
     (ps',fs') <- foldM (\(ps, fs) (ys, fml) -> do
@@ -231,32 +216,21 @@ instance HasType Value where
 instance HasType LExp where
     getType (LExp _ _ sty _) = sty
 
-instance Castable Atom Value where
-    type Attr Atom Value = UniqueKey
+instance Castable HFormula Value where
+    type Attr HFormula Value = UniqueKey
     cast = castWith reservedKey
-    castWith key (Atom l arg sty) = case l of
-        SLiteral -> Value l arg sty key
-        SVar -> Value l arg sty key
-        SBinary -> Value l arg sty key
-        SUnary -> Value l arg sty key
+    castWith key fml = Value SAtomic fml (getType fml) key
 
-instance Castable Atom LExp where
-    type Attr Atom LExp = UniqueKey
+instance Castable HFormula LExp where
+    type Attr HFormula LExp = UniqueKey
     cast = castWith reservedKey
-    castWith key (Atom l arg sty) = case l of
-        SLiteral -> LExp l arg sty key
-        SVar     -> LExp l arg sty key
-        SBinary  -> LExp l arg sty key
-        SUnary   -> LExp l arg sty key
+    castWith key fml = LExp SAtomic fml (getType fml) key
 
 instance Castable Value Exp where
     type Attr Value Exp = AbstInfo
     cast = undefined
     castWith info (Value l arg sty key) = case l of
-        SLiteral -> Exp l arg sty info key
-        SVar -> Exp l arg sty info key
-        SBinary -> Exp l arg sty info key
-        SUnary -> Exp l arg sty info key
+        SAtomic  -> Exp l arg sty info key
         SLambda -> Exp l arg sty info key
         SPair -> Exp l arg sty info key
 

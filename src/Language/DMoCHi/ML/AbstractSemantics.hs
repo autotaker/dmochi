@@ -2,12 +2,11 @@ module Language.DMoCHi.ML.AbstractSemantics(refine,AbstractSemantics, RefineConf
 
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
-import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin,mkVar,mkLiteral)
+import           Language.DMoCHi.ML.Syntax.CEGAR 
 import           Language.DMoCHi.Common.Id hiding(Id)
 import           Language.DMoCHi.Common.Util
 import           Data.PolyDict(Dict)
 import qualified Language.DMoCHi.ML.HornClause as Horn
---import           Language.DMoCHi.ML.IncSaturationPre
 import           Language.DMoCHi.ML.Syntax.HFormula
 import           Language.DMoCHi.ML.Syntax.IType
 import           Control.Monad.State.Strict
@@ -140,8 +139,8 @@ newPGen meta = do
     put $! st { stPIdEntries = (c, getUniqueKey meta) : stPIdEntries st }
     return $ Predicate meta c
 
-calcAtom :: Env -> Atom -> AValue
-calcAtom env (Atom l arg sty) = 
+calcAtom :: Env -> HFormula -> AValue
+calcAtom env (HFormula l arg sty _ _ ) = 
     case (l, arg) of
         (SLiteral, _) -> ABase sty
         (SVar, x) -> env M.! x
@@ -171,7 +170,7 @@ calcLExp env (fml, preds) x e =
             -- x == v
             fml' <- lift . lift $ do
                 vx <- mkVar x
-                toHFormula a >>= mkBin SEq vx >>= mkBin SAnd fml
+                mkBin SEq vx a >>= mkBin SAnd fml
             return (Left (av, fml'))
         LOther SRand _ -> return (Left (ABase TInt, fml))
         LOther SApp (f, info_arg, vs) -> do
@@ -229,7 +228,7 @@ calcExp env (fml, preds) e =
             let env' = extendEnv env [ (f, calcValue env' (fml, preds) v) | (f,v) <- fs ]
             calcExp env' (fml, preds) e1
         EOther SAssume (cond, e1) -> do
-            fml' <- lift . lift $ mkBin SAnd fml =<< toHFormula cond
+            fml' <- lift . lift $ mkBin SAnd fml cond
             calcExp env (fml', preds) e1
         EOther SBranch (e1, e2) -> do
             b <- consumeBranch
