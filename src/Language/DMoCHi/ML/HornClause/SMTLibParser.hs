@@ -3,6 +3,7 @@ module Language.DMoCHi.ML.HornClause.SMTLibParser where
 import Text.Parsec
 
 import qualified Language.DMoCHi.Common.Id as Id
+import Language.DMoCHi.Common.Util
 import qualified Text.Parsec.Token as P
 import qualified Data.Map as M
 --import Text.Parsec.String
@@ -10,20 +11,29 @@ import Language.DMoCHi.ML.Syntax.Atom
 import Control.Monad.Trans(lift)
 import Control.Monad
 import qualified Z3.Monad as Z3
-import Debug.Trace 
+import qualified Language.DMoCHi.ML.SMT as SMT
+import qualified Text.PrettyPrint.HughesPJClass as PP
+import Control.Monad.IO.Class
 
-type Parser a = ParsecT String () Z3.Z3 a
+type Parser a = ParsecT String () (SMT.SMT (LoggingT IO)) a
 instance Z3.MonadZ3 m => Z3.MonadZ3 (ParsecT s u m) where
-  getContext = lift $ Z3.getContext
-  getSolver  = lift $ Z3.getSolver
+  getContext = lift Z3.getContext
+  getSolver  = lift Z3.getSolver
 
-parseSolution :: FilePath -> IO (Either ParseError (Maybe [(Int, [TId], Atom)]))
+instance Z3.MonadZ3 m => Z3.MonadZ3 (LoggingT m) where
+  getContext = lift Z3.getContext
+  getSolver  = lift Z3.getSolver
+
+instance MonadLogger m => MonadLogger (ParsecT s u m)
+instance MonadLoggerIO m => MonadLoggerIO (ParsecT s u m)
+
+
+parseSolution :: FilePath -> LoggingT IO (Either ParseError (Maybe [(Int, [TId], Atom)]))
 parseSolution path = do
-  content <- readFile path
-  res <- Z3.evalZ3 $ runParserT mainP () path content
-  traceShow res $ return res
+  content <- liftIO $ readFile path
+  SMT.runSMT $ runParserT mainP () path content
 
-language :: P.GenLanguageDef String () Z3.Z3
+language :: P.GenLanguageDef String () (SMT.SMT (LoggingT IO))
 language = P.LanguageDef {
     P.reservedNames = ["sat", "unsat", "model", "define-fun" 
                       , "exists"
@@ -35,7 +45,7 @@ language = P.LanguageDef {
   , P.commentLine = ""
   , P.nestedComments = False
   , P.identStart = oneOf $ ['a'..'z'] ++ ['A'..'Z'] ++ "'_"
-  , P.identLetter = P.identStart language <|> oneOf ['0'..'9']
+  , P.identLetter = P.identStart language <|> oneOf (['0'..'9'] ++ "!")
   , P.opStart = oneOf ":!#$%&*+./<=>?@\\^|-~"
   , P.opLetter = P.opStart language
 }
@@ -131,7 +141,7 @@ fromAST env ast =
     Z3.Z3_QUANTIFIER_AST -> undefined
     _ -> undefined
 
-qe :: Z3.MonadZ3 m => Z3.AST -> m Z3.AST
+qe :: (Z3.MonadZ3 m, MonadLogger m) => Z3.AST -> m Z3.AST
 qe ast = do
   tactic <- Z3.mkQuantifierEliminationTactic
   goal <- Z3.mkGoal False False False
@@ -139,11 +149,14 @@ qe ast = do
   appRes <- Z3.applyTactic tactic goal
   [goal] <- Z3.getApplyResultSubgoals appRes
   formulas <- Z3.getGoalFormulas goal
-  l <- mapM Z3.astToString formulas 
-  ast' <- traceShow ("goalformulas", l) $
-    Z3.mkAnd formulas
+  --l <- mapM Z3.astToString formulas 
+  ast' <- Z3.mkAnd formulas
   ast_str <- Z3.astToString ast
   ast'_str <- Z3.astToString ast'
+  let doc = PP.braces $ 
+              PP.text "input:" PP.<+> PP.text ast_str PP.$+$
+              PP.text "result:" PP.<+> PP.text ast'_str
+  logPretty "SMTLibParser" LevelDebug "QE" (PPrinted doc)
   return ast'
 
 
@@ -190,8 +203,7 @@ termP penv env =
       symbols <- mapM Z3.mkStringSymbol names
       body <- termP penv env'
       term <- Z3.mkExists [] symbols sorts body
-      str <- Z3.astToString term
-      traceShow ("exists", str) $ qe term
+      qe term
       
 
 

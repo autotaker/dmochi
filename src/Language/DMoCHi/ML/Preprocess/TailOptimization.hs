@@ -39,6 +39,7 @@ simplifyExp e =
         EOther SLetRec (fs, e1) -> mkLetRec (map (\(f, v) -> (f, simplifyValue v)) fs) (simplifyExp e1) key
         EOther SAssume (a, e1) -> mkAssume a (simplifyExp e1) key
         EOther SBranch (e1, e2) -> mkBranch (simplifyExp e1) (simplifyExp e2) key
+        EOther SMark (x, e) -> mkMark x (simplifyExp e) key
         EOther SFail   _ -> e
         EOther SOmega  _ -> e
         EOther SLet (x, e1, e2) -> 

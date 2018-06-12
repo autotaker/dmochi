@@ -55,6 +55,9 @@ simplifyExp env e =
         EOther SBranch (e1, e2) -> mkBranch (simplifyExp env e1) (simplifyExp env e2) key
         EOther SFail   _ -> e
         EOther SOmega  _ -> e
+        EOther SMark (x, e) 
+            | M.member x env -> error "simplifyExp: Marker is constant"
+            | otherwise -> mkMark x (simplifyExp env e) key
         EOther SLet (x, e1, e2) -> 
             let e1' = simplifyLExp env e1 in
             case lexpView e1' of

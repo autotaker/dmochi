@@ -15,6 +15,7 @@ data Flag = Help
           | FoolTraces Int
           | PredicateGen
           | NoEmbedCurCond
+          | LogFilter String
           | RCamlCommand String
           | HoiceCommand String
           | ConvexHullCommand String
@@ -34,6 +35,7 @@ data Config = Config { targetProgram :: FilePath
                      , hornSolver :: HCCSSolver
                      , rcamlCommand :: String
                      , hoiceCommand :: String
+                     , logFilterExp :: Maybe String
                      , convexHullCommand :: String
                      , cegarLimit :: Int
                      , accErrTraces :: Bool
@@ -66,6 +68,7 @@ defaultConfig path = Config { targetProgram = path
                             , rcamlCommand = "rcaml"
                             , hoiceCommand = "hoice"
                             , convexHullCommand = "convex-hull"
+                            , logFilterExp =  Nothing
                             , cegarLimit = 20
                             , accErrTraces = False
                             , contextSensitive = False
@@ -92,6 +95,7 @@ options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"
 --          , Option [] ["fusion"] (NoArg Fusion) "enable model checking fusion"
 --          , Option [] ["incremental"] (NoArg Incremental) "enable incremental saturation algorithm"
           , Option ['v'] ["verbose"] (NoArg Verbose) "set pretty level to verbose"
+          , Option [] ["filter"] (ReqArg LogFilter "pattern") "set log filtering expression"
           , Option [] ["cegar"] (ReqArg parseMethod "dep|abst") "Set CEGAR method (default = dep)"  
           , Option [] ["rcaml"] (ReqArg RCamlCommand "cmd") "Set RCaml Command (default = rcaml)"
           , Option [] ["hoice"] (ReqArg HoiceCommand "cmd") "Set Hoice Command (default = hoice)"
@@ -136,6 +140,7 @@ parseArgs = doit
                      NoEmbedCurCond -> acc { embedCurCond = False }
                      HoiceCommand cmd -> acc { hoiceCommand = cmd }
                      RCamlCommand cmd -> acc { rcamlCommand = cmd }
+                     LogFilter str -> acc { logFilterExp = Just str }
                      ConvexHullCommand cmd -> acc { convexHullCommand = cmd }
    --                  Fusion -> acc { fusion = True }
    --                  Incremental -> acc { fusion = True, incremental = True }

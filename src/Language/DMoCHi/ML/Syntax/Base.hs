@@ -31,10 +31,11 @@ import Data.Hashable
 import GHC.Generics(Generic)
 import Data.Type.Equality
 import Text.PrettyPrint.HughesPJClass
+import Data.Aeson
 
 data Label = Literal | Var | Binary | Unary | Pair 
            | Lambda | App | Let | LetRec
-           | Assume | If | Branch 
+           | Assume | If | Branch | Mark
            | Fail | Omega | Rand | Atomic
            deriving(Eq,Ord)
            
@@ -45,6 +46,11 @@ data UniOp = Fst | Snd | Not | Neg
 
 data Lit = CInt Integer | CBool Bool | CUnit
     deriving(Eq,Ord,Generic)
+
+instance ToJSON Lit where
+    toJSON (CInt i) = toJSON i
+    toJSON (CBool b) = toJSON b
+    toJSON CUnit = Null
 
 type family Ident e
 type family Labels e :: [Label]
@@ -59,7 +65,7 @@ type family AllUniOps where
 
 type family AllLabels where
     AllLabels = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair,
-                   'Lambda, 'App, 'Let, 'LetRec, 
+                   'Lambda, 'App, 'Let, 'LetRec, 'Mark,
                    'Assume, 'If, 'Branch, 'Fail, 'Omega, 'Rand ]
 
 type family Elem (x :: k) (xs :: [k]) where
@@ -92,6 +98,7 @@ reflectLabel l = case l of
     SOmega -> Omega 
     SRand-> Rand
     SAtomic -> Atomic
+    SMark -> Mark
 
 reflectBinOp :: SBinOp op -> BinOp
 reflectBinOp l = case l of
@@ -183,6 +190,7 @@ type family WellFormed (l :: Label)  (e :: *)  (arg :: *) :: Constraint where
     WellFormed 'Fail    e arg = arg ~ ()
     WellFormed 'Omega   e arg = arg ~ ()
     WellFormed 'Rand    e arg = arg ~ ()
+    WellFormed 'Mark    e arg = arg ~ (Ident e, e)
     WellFormed 'Atomic  e arg = 'True ~ 'False
 
 data SLabel (l :: Label) where
@@ -202,6 +210,7 @@ data SLabel (l :: Label) where
     SOmega   :: SLabel 'Omega
     SRand    :: SLabel 'Rand
     SAtomic  :: SLabel 'Atomic
+    SMark    :: SLabel 'Mark
 
 type family EqLabel a b where
     EqLabel 'Literal 'Literal = 'True
@@ -220,6 +229,7 @@ type family EqLabel a b where
     EqLabel 'Omega 'Omega = 'True
     EqLabel 'Rand 'Rand = 'True
     EqLabel 'Atomic 'Atomic = 'True
+    EqLabel 'Mark 'Mark = 'True
     EqLabel a b = 'False
 
 data SBinOp (op :: BinOp) where
@@ -338,6 +348,8 @@ instance Pretty Lit where
             CBool True -> text "true"
             CBool False -> text "false"
             CUnit -> text "()"
+instance Show Lit where
+    show = render . pPrint
             
 
 data WellFormedPrinter e = 
@@ -397,6 +409,9 @@ genericPPrint pp pLevel prec op arg =
             text "if" <+> text "_" $+$
             (hang (text "then") 4 (pPrintExp pp pLevel 0 e1)) $+$
             (hang (text "else") 4 (pPrintExp pp pLevel 0 e2))
+        (SMark, (x, e)) -> maybeParens (prec > 0) $
+            text "mark" <+> pPrintIdent pp prettyBind 0 x <> semi $+$
+            pPrintExp pp pLevel 0 e
         (SFail, _) -> text "assert(false)"
         (SOmega, _) -> text "assume(false)"
         (SRand, _) -> text "random()"

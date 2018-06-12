@@ -244,4 +244,8 @@ inferE synEnv env (Exp l arg (_,key)) = do
         (SFail, _) -> pure $ Exp l arg (tvar, key)
         (SOmega, _) -> pure $ Exp l arg (tvar, key)
         (SRand, _) -> pure $ Exp l arg (TInt, key)
+        (SMark, (x, e)) -> do
+            ty <- concretize' (env M.! varName x)
+            e' <- inferE synEnv env e
+            pure $ Exp l (fmap (const ty) x, e') (annotType e', key)
     e <$ unify synEnv tvar (annotType e) 

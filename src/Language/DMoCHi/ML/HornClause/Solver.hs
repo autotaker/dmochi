@@ -45,7 +45,9 @@ hoiceSolver cmdPath baseName hccs ident = do
 
   liftIO $ writeFile file_smt2 $ renderSMTLib2 (mergePredicate hccs)
   liftIO $ callCommand cmd
-  liftIO (SMTLib.parseSolution file_ans) >>= \case
+  lift (lift (SMTLib.parseSolution file_ans)) >>= \case
       Left err -> throwError (ParseError err)
       Right Nothing -> throwError NoSolution
-      Right (Just r) -> return r
+      Right (Just r) -> do
+        logPretty "HornClauseSolver" LevelDebug "Predicates" r
+        return r

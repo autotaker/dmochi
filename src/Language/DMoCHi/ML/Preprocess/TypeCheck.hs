@@ -132,6 +132,10 @@ copyPoly prog = do
                     cond' <- go st cond
                     e' <- go st e
                     pure $ U.Exp l (cond', e') (ty, key')
+                (SMark, (x, e)) -> do
+                    let x' = x{ U.varType = substWith rho (U.varType x) }
+                    e' <- go st e
+                    pure $ U.Exp l (x', e') (ty, key')
                 (SIf, (cond, e1, e2)) -> do
                     cond' <- go st cond
                     e1' <- go st e1
@@ -324,6 +328,11 @@ convertE synEnv env (U.Exp l arg (ty,key)) = do
             e3' <- convertE synEnv env e3
             e3' <- cast e3' (getType e2')
             return $ mkBranch e2' e3' key
+        (SMark, (x, e)) -> do
+            let x' = TId sty (U.varName x)
+                sty = env M.! U.varName x
+            e' <- convertE synEnv env e
+            return $ mkMark x' e' key
         (SFail, ())  -> conv ty >>= \sty -> return $ mkFail sty key
         (SOmega, ()) -> conv ty >>= \sty -> return $ mkOmega sty key
         (SRand, ())  -> return $ mkRand key

@@ -86,5 +86,7 @@ normalizeT exp =
             e1' <- normalizeT e1
             e2' <- normalizeT e2
             return $ mkBranch e1' e2' key
+        EOther SMark (x, e) -> 
+            mkMark x <$> normalizeT e <*> pure key
         EOther SFail _ -> return $ mkFail sty key
         EOther SOmega _ -> return $ mkOmega sty key

@@ -177,13 +177,14 @@ data Log = Log { logCnstr :: [Constraint]
                , logClosure :: [ClosureInfo]
                , logReturn :: [ReturnInfo]
                , logBranch  :: [BranchInfo]
-               , logLetExp :: [LetExpInfo] }
+               , logLetExp :: [LetExpInfo]
+               , logRandGen :: [SValue] }
                deriving (Show)
 
 instance Monoid Log where
-    mappend (Log a1 a2 a3 a4 a5 a6) (Log b1 b2 b3 b4 b5 b6) = 
-        Log (a1 <> b1) (a2 <> b2) (a3 <> b3) (a4 <> b4) (a5 <> b5) (a6 <> b6)
-    mempty = Log [] [] [] [] [] []
+    mappend (Log a1 a2 a3 a4 a5 a6 a7) (Log b1 b2 b3 b4 b5 b6 b7) = 
+        Log (a1 <> b1) (a2 <> b2) (a3 <> b3) (a4 <> b4) (a5 <> b5) (a6 <> b6) (a7 <> b7)
+    mempty = Log [] [] [] [] [] [] []
 
 type M m a = StateT S (WriterT Log m) a
 data S = S { callCounter :: !Int
@@ -296,6 +297,9 @@ symbolicExec prog trace = do
                 return (CompTree _e [(1,InfoAssume phi,t)],r)
             (ML.SFail, _) -> return (leaf _e,Nothing)
             (ML.SOmega, _) -> return (leaf _e,Nothing)
+            (ML.SMark, (x, e)) -> do
+                randgen (env M.! x)
+                eval callSite env path e
             (ML.SBranch, (e1, e2)) -> do
                 let i = key
                 mb <- consume
@@ -379,28 +383,30 @@ symbolicExec prog trace = do
 
     -- utilities
     constrain :: Constraint -> M m ()
-    constrain c = tell (Log [c] [] [] [] [] [])
+    constrain c = tell (mempty{ logCnstr = [c] })
     branch :: BranchInfo -> M m ()
-    branch c = tell (Log [] [] [] [] [c] [])
+    branch c = tell (mempty{ logBranch = [c]})
     retval :: ReturnInfo -> M m ()
-    retval c = tell (Log [] [] [] [c] [] [])
-    letexp c = tell (Log [] [] [] [] [] [c])
+    retval c = tell (mempty{ logReturn = [c] })
+    letexp c = tell (mempty{ logLetExp = [c] })
+    randgen :: SValue -> M m ()
+    randgen c = tell (mempty{ logRandGen = [c] })
     newCall :: UniqueKey -> CallId -> CompTreePath -> ClosureId -> [Accessor] -> M m CallId
     newCall i pcall path clsId acsrs = do
         j <- callCounter <$> get
         modify incrCall
-        tell (Log [] [CallInfo clsId i pcall (CallId j) path acsrs] [] [] [] [])
+        tell (mempty{ logCall = [CallInfo clsId i pcall (CallId j) path acsrs]})
         return (CallId j)
     genClosure :: CallId -> (UniqueKey, [ML.TId], ML.Exp) -> Env -> M m Closure
     genClosure callSite fdef@(key,_,_) env = do
         j <- clsCounter <$> get
         modify incrCls
         let cls = (Cls fdef (ClosureId j) env [])
-        tell (Log [] [] [ClosureInfo key cls callSite] [] [] [])
+        tell (mempty{ logClosure = [ClosureInfo key cls callSite] })
         return cls
     consume :: M m (Maybe Bool)
     consume = do
-        l <- cTrace <$> get
+        l <- gets cTrace
         case l of
             (b:_) -> modify pop >> return (Just b)
             [] -> return Nothing

@@ -220,6 +220,7 @@ abstTerm tbl env cs pv e tau =
                     exprCase (ML.Exp ML.SBranch arg (ML.getType e1) key1)
                 ML.LOther ML.SFail _ -> error "abstTerm: Fail is not supported"
                 ML.LOther ML.SOmega _ -> error "abstTerm: Omega is not supported"
+        ML.EOther ML.SMark (_, e) -> abstTerm tbl env cs pv e tau
         ML.EOther ML.SAssume (v,e) -> do
             e_v <- abstValue tbl env cs pv (ML.cast v) PBool
             B.f_assume e_v <$> abstTerm tbl env (v : cs) pv e tau

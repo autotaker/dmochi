@@ -182,7 +182,7 @@ refineCGen :: forall m.(MonadFix m, MonadId m, MonadIO m, MonadLogger m) =>
               ML.Program -> FilePath -> Bool -> Int -> Trace -> 
               m (Maybe (Bool,([Horn.Clause],([(UniqueKey,RType)],[(UniqueKey,RPostType)]))))
 refineCGen prog traceFile contextSensitive foolThreshold trace = do
-    (genv, (Log consts calls closures returns branches letexps), compTree) <- symbolicExec prog trace
+    (genv, (Log consts calls closures returns branches letexps _), compTree) <- symbolicExec prog trace
     liftIO $ writeFile traceFile (renderCompTree compTree)
     logPretty "refine" LevelDebug "constraints" $ map (PPrinted . text . show) consts
     let cs = map fromSValue consts
@@ -327,6 +327,7 @@ refineCGen prog traceFile contextSensitive foolThreshold trace = do
                         let (_,sv) = evalRTypeA env v
                         let cs' = Left sv : cs
                         check env cs' callSite e tau
+                    (ML.SMark, (_, e)) -> check env cs callSite e tau
                     (ML.SBranch, (e1, e2)) -> do
                         let b = branchMap M.! (callSite,key)
                         if b 

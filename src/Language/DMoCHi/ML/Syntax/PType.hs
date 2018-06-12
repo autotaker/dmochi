@@ -290,6 +290,7 @@ initTypeMap specs (Program fs t0) = do
                 (SApp, (_, vs)) -> mapM_ (gatherV fv) vs
                 (SAssume, (_,e)) -> gatherE fv e
                 (SBranch, (e1, e2)) -> gatherE fv e1 >> gatherE fv e2
+                (SMark, (_, e)) -> gatherE fv e
                 (SFail, _) -> return ()
                 (SOmega, _) -> return ()
                 (SRand, _) -> return ()

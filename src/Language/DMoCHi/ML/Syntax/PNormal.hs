@@ -5,7 +5,7 @@ module Language.DMoCHi.ML.Syntax.PNormal( Program(..)
                                         , mkBin, mkUni, mkLiteral, mkVar, mkPair
                                         , mkLambda, mkApp, mkLet, mkLetRec
                                         , mkAssume, mkBranch, mkBranchL
-                                        , mkFail, mkOmega, mkRand
+                                        , mkFail, mkOmega, mkRand, mkMark
                                         , mkFailL, mkOmegaL
                                         , Castable(..)
                                         , normalize
@@ -66,13 +66,14 @@ type family Normalized (l :: Label) (e :: *) (arg :: *) :: Constraint where
     Normalized 'Fail    e arg = arg ~ ()
     Normalized 'Omega   e arg = arg ~ ()
     Normalized 'Rand    e arg = arg ~ ()
+    Normalized 'Mark    e arg = arg ~ (Ident e, Exp)
     Normalized l        e arg = 'True ~ 'False
 
 
 data ExpView where
     EValue :: Value -> ExpView
     EOther :: ( Normalized l Exp arg
-              , Supported l '[ 'Let, 'LetRec, 'Assume, 'Branch, 'Fail, 'Omega]) => SLabel l -> arg -> ExpView
+              , Supported l '[ 'Let, 'LetRec, 'Assume, 'Branch, 'Mark, 'Fail, 'Omega]) => SLabel l -> arg -> ExpView
 
 data LExpView where
     LValue :: Value -> LExpView
@@ -86,7 +87,7 @@ data ValueView where
 
 
 type instance Labels Exp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
-                            , 'Let, 'LetRec, 'Assume, 'Branch, 'Fail, 'Omega ]
+                            , 'Let, 'LetRec, 'Assume, 'Branch, 'Mark, 'Fail, 'Omega ]
 type instance Labels LExp = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda
                              , 'App, 'Branch, 'Rand, 'Fail, 'Omega ]
 type instance Labels Value = '[ 'Literal, 'Var, 'Binary, 'Unary, 'Pair, 'Lambda ]
@@ -112,6 +113,7 @@ expView (Exp l arg sty key) = case l of
     SBranch  -> EOther l arg
     SFail    -> EOther l arg
     SOmega   -> EOther l arg
+    SMark    -> EOther l arg
 
 {-# INLINE valueView #-}
 valueView :: Value -> ValueView
@@ -177,6 +179,9 @@ mkOmegaL sty key = LExp SOmega () sty key
 
 mkRand :: UniqueKey -> LExp
 mkRand key = LExp SRand () TInt key
+
+mkMark :: TId -> Exp -> UniqueKey -> Exp
+mkMark x e key = Exp SMark (x, e) (getType e) key
 
 instance HasType Exp where
     getType (Exp _ _ sty _) = sty
@@ -312,6 +317,7 @@ instance Castable Exp Typed.Exp where
         (SLetRec, (fs, e2)) -> Typed.Exp l (map (\(f,e1) -> (f, cast e1)) fs, cast e2) sty key
         (SAssume, (cond, e)) -> Typed.Exp l (cast cond, cast e) sty key
         (SBranch, (e1, e2)) -> Typed.Exp l (cast e1, cast e2) sty key
+        (SMark, (x,e)) -> Typed.Exp l (x, cast e) sty key
         (SFail, ()) -> Typed.Exp l arg sty key
         (SOmega, ()) -> Typed.Exp l arg sty key
 
@@ -394,6 +400,9 @@ convertL e@(Typed.Exp l arg sty key) =
             mkBranchL <$> (mkAssume  cond' e1' <$> freshKey)
                       <*> (mkAssume ncond' e2' <$> freshKey)
                       <*> pure key
+        (SMark, (x, e)) -> do
+            e' <- convertL e
+            shiftT $ \cont -> lift (mkMark x <$> cont e' <*> pure key)
         (SFail, ()) -> pure $ mkFailL sty key
         (SOmega, ()) -> pure $ mkOmegaL sty key
         (SRand, ()) -> pure $ mkRand key
@@ -441,6 +450,9 @@ convertE e@(Typed.Exp l arg sty key) =
                      <*> pure key
         (SFail, ()) -> pure $ mkFail sty key
         (SOmega, ()) -> pure $ mkOmega sty key
+        (SMark, (x, e)) -> do
+            e' <- resetT $ convertE e
+            pure $ mkMark x e' key
         (SRand, ()) -> do
             r <- TId sty <$> identify "r"
             rand <- mkRand <$> freshKey
@@ -513,6 +525,7 @@ freeVariables _scope _e = subE _scope _e S.empty
     sub _ _     SRand    _ acc = acc
     sub _ scope SLambda  (xs, e) acc = subE (foldr S.insert scope xs) e acc
     sub p scope SApp     (f, vs) acc = foldr (subV scope) (sub p scope SVar f acc) vs
-
+    sub _ scope SMark    (x, e)  acc = 
+        subE scope e (if S.member x scope then acc else S.insert x acc)
 
 

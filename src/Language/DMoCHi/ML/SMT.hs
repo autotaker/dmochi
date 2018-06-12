@@ -1,11 +1,15 @@
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeApplications, GeneralizedNewtypeDeriving #-}
 module Language.DMoCHi.ML.SMT(sat,abst,fromBDD,BDDNode(..), mkUMul, mkUDiv,
+                              SMTContext(..), SMT, runSMT, satWithModel,
                               getSMTCount, resetSMTCount,IValue(..), toIValueId, mkEqIValue) where
 
 import Language.DMoCHi.ML.Syntax.PNormal 
 import Z3.Monad 
+import qualified Z3.Base as Z3Base
 import Control.Monad.IO.Class
 import Control.Monad
+import Control.Monad.Logger
+import Control.Monad.Reader
 import Data.Function(on)
 import qualified Data.HashTable.IO as HT
 import qualified Data.HashTable.ST.Basic as HTBasic
@@ -18,6 +22,26 @@ import System.IO.Unsafe
 smtCounter :: IORef Int
 smtCounter = unsafePerformIO (newIORef 0)
 
+data SMTContext = SMTContext { smtContext :: Context, smtSolver :: Solver }
+
+newtype SMT m a = SMT (ReaderT SMTContext m a)
+    deriving(Functor, Monad, Applicative, MonadTrans, MonadIO)
+instance MonadLogger m => MonadLogger (SMT m)
+instance MonadLoggerIO m => MonadLoggerIO (SMT m)
+
+instance MonadIO m => MonadZ3 (SMT m) where
+    getSolver = SMT $ asks smtSolver
+    getContext = SMT $ asks smtContext
+
+runSMT :: MonadIO m => SMT m a -> m a
+runSMT (SMT action) = liftIO newContext >>= runReaderT action
+
+newContext :: IO SMTContext
+newContext = Z3Base.withConfig $ \cfg -> do
+    setOpts cfg stdOpts
+    ctx <- Z3Base.mkContext cfg
+    solver <- Z3Base.mkSolver ctx
+    return $ SMTContext ctx solver
 
 data IValue = Func | ASTValue AST | IPair IValue IValue deriving(Show)
 
@@ -127,6 +151,37 @@ sat vs = evalZ3 $ do
         Sat -> return True
         Unsat -> return False
         Undef -> return True
+
+satWithModel :: [Value] -> [Value] -> IO (Maybe [Lit])
+satWithModel cs vs = evalZ3 $ do
+    ics <- mapM toIValue cs
+    ivs <- mapM toIValue vs
+    assert =<< mkAnd' [ v | ASTValue v <- ics ]
+    (res, model') <- getModel
+    case res of
+        Sat -> fmap Just $
+            forM ivs $ \(ASTValue v) -> do
+                let Just model = model'
+                Just ast <- modelEval model v True 
+                kind <- getAstKind ast
+                ast_str <- astToString ast
+                case kind of
+                    Z3_NUMERAL_AST ->
+                        CInt . read <$> getNumeralString ast
+                    Z3_APP_AST -> do
+                        fname <- toApp ast >>= getAppDecl >>= getDeclName >>= getSymbolString
+                        case fname of
+                            "true" -> return $ CBool True
+                            "false" -> return $ CBool False
+                            _ -> error $ "unexpected model value:" ++ ast_str
+                    _ -> error $ "unexpected model value:" ++ ast_str
+        Unsat -> return Nothing
+        Undef -> error "SMT solver returns Undef result"
+
+
+
+
+
 
 data BDDNode a = Leaf !Int !Bool
                | Node !Int a (BDDNode a) (BDDNode a)

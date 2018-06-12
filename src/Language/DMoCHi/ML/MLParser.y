@@ -147,6 +147,7 @@ Arg : VAR                   { V $1 Nothing }
     | '_'                   { unusedVar    }
     | '(' VAR ':' Type ')'  { V $2 (Just $4) }
     | '(' '_' ':' Type ')'  { annotVar unusedVar $4 }
+    | '(' Arg ')'           { $2 }
 
 Args : Arg Args { $1 : $2 }
      | Arg      { [$1] }
@@ -222,7 +223,7 @@ primFuncs :: [(AnnotVar String (Maybe Type), TypeScheme, Exp)]
 primFuncs = 
     [ build "read_int" (TFun [TUnit] TInt) readIntDef
     , build "Random.bool" (TFun [TUnit] TBool) randomBoolDef
-    , build "Random.int" (TFun [TUnit] TInt) readIntDef
+    , build "Random.int" (TFun [TInt] TInt) randomIntDef
     , build "assume"   (TFun [TBool] TUnit) assumeDef
     , build "fst"      (TFun [TPair ta tb] (TVar "a")) fstDef
     , build "snd"      (TFun [TPair ta tb] (TVar "b")) sndDef
@@ -232,10 +233,29 @@ primFuncs =
     ta = TVar "a"
     tb = TVar "b"
     build fname ty def = (V fname Nothing, toTypeScheme ty, def)
-    readIntDef = mkLambda [unusedVar] mkRand
-    randomBoolDef = mkLambda [unusedVar] (mkBranch (mkLiteral (CBool True)) (mkLiteral (CBool False)))
+    readIntDef = 
+        mkLambda [unusedVar] $ 
+        mkLet x mkRand $
+        mkMark x (mkVar x)
+    randomIntDef =
+        mkLambda [x] $
+        mkLet y mkRand $
+        let e_0_lte_y_lt_x = 
+                mkBinary SAnd (mkBinary SLte c0 vy)
+                              (mkBinary SLt  vy vx) 
+            vx = mkVar x
+            vy = mkVar y 
+            c0 = mkLiteral (CInt 0) in
+        mkAssume (mkBinary SOr (mkBinary SEq vx c0) e_0_lte_y_lt_x) $
+        mkMark y (mkVar y) 
+    randomBoolDef = 
+        mkLambda [unusedVar] $
+        mkLet x (mkBranch (mkLiteral (CBool True)) 
+                          (mkLiteral (CBool False))) $
+        mkMark x (mkVar x)
     assumeDef  = mkLambda [x] (mkAssume (mkVar x) (mkLiteral CUnit))
     x = V "x" Nothing
+    y = V "y" Nothing
     fstDef = mkLambda [x] (mkUnary SFst (mkVar x))
     sndDef = mkLambda [x] (mkUnary SSnd (mkVar x))
     notDef = mkLambda [x] (mkUnary SNot (mkVar x))
@@ -246,8 +266,11 @@ toProg defs = foldr f (Program primFuncs [] [] e0) defs
     isDef (DLet _ _) = True
     isDef _ = False
     e0 = case last (filter isDef defs) of
-        DLet x e | arity e > 0 -> mkApp (mkVar x) [mkRand | _ <- [1..arity e]]
-        _                      -> mkLiteral CUnit
+        DLet x e | arity e > 0 -> 
+            let xs = [ V ("x_" ++ show i) Nothing | i <- [1..arity e]]
+                e_app = mkApp (mkVar x) [ mkVar x_i | x_i <- xs] in
+            foldr (\x_i acc -> mkLet x_i mkRand $ mkMark x_i acc) e_app xs
+        _ -> mkLiteral CUnit
     f (DLet x e) prog = prog{ mainTerm = mkLet x e (mainTerm prog) }
     f (DSyn syn) prog = prog{ synonyms = syn:synonyms prog }
     f (DSpec x ty) prog = prog{ specs  = (x, ty) : specs prog }

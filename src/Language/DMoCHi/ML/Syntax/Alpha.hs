@@ -82,6 +82,7 @@ instance Functor Exp where
         (SLet,     (x, e1, e2)) -> Exp l (fmap f x, fmap f e1, fmap f e2) (f a, key)
         (SLetRec,  (gs, e2)) -> Exp l (map (\(g,e) -> (fmap f g, fmap f e)) gs, fmap f e2) (f a, key)
         (SAssume,  (e1, e2)) -> Exp l (fmap f e1, fmap f e2) (f a, key)
+        (SMark, (x, e)) -> Exp l (fmap f x, fmap f e) (f a, key)
         (SIf,      (e1, e2, e3)) -> Exp l (fmap f e1, fmap f e2, fmap f e3) (f a, key)
         (SBranch,  (e1, e2)) -> Exp l (fmap f e1, fmap f e2) (f a, key)
 
@@ -104,6 +105,7 @@ instance Foldable Exp where
         (SAssume,  (e1, e2)) -> f a `mappend` foldMap f e1 `mappend` foldMap f e2
         (SIf,      (e1, e2, e3)) -> f a `mappend` foldMap f e1 `mappend` foldMap f e2 `mappend` foldMap f e3
         (SBranch,  (e1, e2)) -> f a `mappend` foldMap f e1 `mappend` foldMap f e2
+        (SMark,    (x, e)) -> f a `mappend` foldMap f x `mappend` foldMap f e
 
 instance Traversable Exp where
     traverse f (Exp l arg (a, key)) = case (l, arg) of
@@ -163,6 +165,11 @@ instance Traversable Exp where
                 <$> f a 
                 <*> traverse f e1 
                 <*> traverse f e2
+        (SMark, (x, e)) ->
+            (\b x' e' -> Exp l (x', e') (b, key))
+                <$> f a
+                <*> traverse f x
+                <*> traverse f e
 
 type M a = ReaderT (M.Map String (Var (Maybe Type))) (ExceptT AlphaError FreshLogging) a
 
@@ -235,6 +242,7 @@ renameE (U.Exp label arg annot) = do
                 values' <- mapM renameE values
                 e' <- renameE e
                 return $! Exp label (zip names' values', e') (annot,key)
+        (SMark, (x, e)) -> Exp label <$> ((,) <$> rename x <*> renameE e) <*> pure (annot, key)
         (SAssume, (cond,e)) -> Exp label <$> ((,) <$> renameE cond <*> renameE e) <*> pure (annot,key)
         (SIf, (e1,e2,e3)) -> Exp label <$> ((,,) <$> renameE e1 
                                                  <*> renameE e2

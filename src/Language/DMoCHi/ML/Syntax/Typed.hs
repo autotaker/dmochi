@@ -136,4 +136,5 @@ mkOmega ty key = Exp SOmega () ty key
 mkRand :: UniqueKey -> Exp
 mkRand key = Exp SRand () TInt key
         
-        
+mkMark :: TId -> Exp -> UniqueKey -> Exp
+mkMark x e key = Exp SMark  (x, e) (getType e) key

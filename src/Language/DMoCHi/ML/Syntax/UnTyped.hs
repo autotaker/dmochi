@@ -5,7 +5,7 @@ module Language.DMoCHi.ML.Syntax.UnTyped( Exp(..), Id, AnnotVar(..), AType(..)
                                         , arity
                                         , mkLiteral, mkVar, mkUnary, mkBinary
                                         , mkPair, mkLambda, mkApp, mkLet, mkLetRec
-                                        , mkAssume, mkIf
+                                        , mkAssume, mkIf, mkMark
                                         , mkBranch,  mkFail, mkOmega, mkRand
                                         , module Language.DMoCHi.ML.Syntax.Base ) where
 import Language.DMoCHi.ML.Syntax.Base
@@ -181,6 +181,9 @@ mkIf e1 e2 e3 = Exp SIf (e1,e2,e3) Nothing
 
 mkBranch :: Exp -> Exp -> Exp
 mkBranch e1 e2 = Exp SBranch (e1, e2) Nothing
+
+mkMark :: Var -> Exp -> Exp
+mkMark x e = Exp SMark (x, e) Nothing
 
 mkFail, mkOmega, mkRand :: Exp
 mkFail  = Exp SFail () Nothing

@@ -62,6 +62,7 @@ convertE typeMap env e tau =
             return $ To.mkBranch e1' e2' key
         From.EOther SFail () -> return $ To.mkFail (getType e) key
         From.EOther SOmega () -> return $ To.mkOmega (getType e) key
+        From.EOther SMark (_, e) -> convertE typeMap env e tau
         From.EOther SLet (x, e1, e2) -> 
             case From.lexpView e1 of
                 From.LValue (From.valueView -> From.VAtom a) -> do

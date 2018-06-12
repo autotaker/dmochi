@@ -17,6 +17,8 @@ import Data.PolyDict(Dict, access',Assoc,access)
 --import qualified Data.ByteString.Lazy as ByteString
 import qualified Data.ByteString.Lazy.Char8 as ByteString
 import Data.Aeson(encode)
+import           Text.Regex.PCRE.Text(Regex)
+import           Text.Regex.Base
 
 import           Language.DMoCHi.ML.Config
 import           Language.DMoCHi.Boolean.Syntax.Typed as B(tCheck)
@@ -42,9 +44,9 @@ import Language.DMoCHi.ML.Preprocess(preprocess, PreprocessError)
 import qualified Language.DMoCHi.ML.PredicateGeneralizer as PredicateGen
 import           Language.DMoCHi.Common.Id
 import           Language.DMoCHi.Common.Util
+import           Language.DMoCHi.ML.Syntax.Base(Lit)
 import qualified Language.DMoCHi.ML.ConvexHull.Solver as ConvexHull
 import qualified Language.DMoCHi.ML.SMT as SMT
-
 import qualified Language.DMoCHi.ML.HornClause as Horn
 import Control.Exception(bracket)
 
@@ -77,10 +79,15 @@ run = do
     putStrLn "### Verification Result ###"
     case r of
         Left err -> putStr "Error: " >> print err >> exitFailure
-        Right _ -> return ()
+        Right r -> print r
         
-data CEGARResult a = Safe | Unsafe | Refine a
-    deriving(Eq,Show)
+data CEGARResult a = Safe | Unsafe [Lit] | Refine a
+    deriving(Show)
+
+instance Eq (CEGARResult a) where
+    (==) Safe Safe = True
+    (==) (Unsafe _) (Unsafe _) = True
+    (==) _ _ = False
 
 data Main
 data CEGAR
@@ -91,6 +98,7 @@ type instance Assoc Main "preprocess" = NominalDiffTime
 type instance Assoc Main "cegar"      = IM.IntMap (Dict CEGAR)
 type instance Assoc Main "cycles"     = Int
 type instance Assoc Main "result"     = String
+type instance Assoc Main "counterexample" = [Lit]
 
 type instance Assoc CEGAR "refine" = NominalDiffTime
 type instance Assoc CEGAR "abst" = Dict PAbst.Abst
@@ -108,8 +116,17 @@ data CEGARContext (method :: CEGARMethod) where
 verify :: Config -> IO (Either MainError (CEGARResult ()), Dict Main)
 verify conf = setup doit
   where 
-  logFilter | verbose conf = id
-            | otherwise = filterLogger (\_ level -> level >= LevelInfo)
+  sourceFilter :: LogSource -> Bool
+  sourceFilter = case logFilterExp conf of
+    Just s -> 
+        let re :: Regex
+            re = makeRegex (Text.pack s)
+        in matchTest re
+    Nothing -> const True
+  levelFilter :: LogLevel -> Bool
+  levelFilter | verbose conf = const True
+              | otherwise = (>= LevelInfo)
+  logFilter = filterLogger (\source level -> sourceFilter source && levelFilter level)
   setup cont 
     | predicateGen conf = 
         bracket 
@@ -261,18 +278,19 @@ verify conf = setup doit
                                     (_, log, _compTree) <- 
                                         SExec.symbolicExec normalizedProgram trace
                                     let cs = map SExec.fromSValue $ SExec.logCnstr log
-                                    isFeasible <- liftIO $ SMT.sat cs
-                                    if isFeasible
-                                        then return Unsafe
-                                        else throwError err
+                                        vs = map SExec.fromSValue $ SExec.logRandGen log
+                                    liftIO (SMT.satWithModel cs vs) >>= \case
+                                        Just lits -> return $ Unsafe lits
+                                        Nothing -> throwError err
                                 err -> throwError err))
             case res of
                 Safe   -> do
                     update (access #result ?~ "Safe")
                     Safe <$ logInfoNS "result" "Safe"
-                Unsafe -> do
+                Unsafe ce -> do
                     update (access #result ?~ "Unsafe")
-                    Unsafe <$ logInfoNS "result" "Unsafe" 
+                    update (access #counterexample ?~ ce)
+                    Unsafe ce <$ logInfoNS "result" "Unsafe" 
                 Refine (cegarContext', trace) ->
                     cegarLoop (k+1) cegarContext' (trace:traces)
     

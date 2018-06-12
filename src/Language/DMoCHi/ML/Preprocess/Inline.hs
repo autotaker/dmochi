@@ -59,6 +59,8 @@ alphaE renv e =
             mkLetRec fs' e2' <$> freshKey
         EOther SAssume (cond, e) -> 
             mkAssume (alphaA renv cond) <$> alphaE renv e <*> freshKey
+        EOther SMark (x, e) ->
+            mkMark (rename renv x) <$> alphaE renv e <*> freshKey
         EOther SBranch (e1, e2) -> 
             mkBranch <$> alphaE renv e1 <*> alphaE renv e2 <*> freshKey
         EOther SFail  _ -> mkFail  (getType e) <$> freshKey
@@ -164,6 +166,8 @@ inlineE env e =
             mkBranch <$> inlineE env e1 
                      <*> inlineE env e2 
                      <*> pure key
+        EOther SMark (x, e) -> 
+            mkMark x <$> inlineE env e <*> pure key
         EOther SFail _ -> pure e
         EOther SOmega _ -> pure e
                             
@@ -183,6 +187,8 @@ straightE e ty_cont cont =  -- ty_cont is the type of answer expression
             mkAssume cond <$> straightE e ty_cont cont 
                           <*> pure key
         EOther SBranch (e1, e2) -> cont (mkBranchL e1 e2 key)
+        EOther SMark (x, e) ->
+            mkMark x <$> straightE e ty_cont cont <*> pure key
         EOther SFail _ -> pure $ mkFail ty_cont key
         EOther SOmega _ -> pure $ mkOmega ty_cont key
 
