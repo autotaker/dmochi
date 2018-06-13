@@ -6,6 +6,7 @@ import Text.PrettyPrint.HughesPJ
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Monad.State.Strict
+import Debug.Trace
 
 newtype HCCS = HCCS { clauses :: [Clause] }
 instance Monoid HCCS where

@@ -43,9 +43,9 @@ extra-deps: [z3-4.3.1, language-dot-0.1.0, json-tracer-0.0.3.0,atto-lisp-0.2.2.2
 
 # Override default flag values for local packages and extra-deps
 extra-lib-dirs: 
-  - '/home/autotaker/z3-4.6.0/lib'
+  - './z3-4.6.0/lib'
 extra-include-dirs: 
-  - '/home/autotaker/z3-4.6.0/include'
+  - './z3-4.6.0/include'
 
 # Extra package databases containing global packages
 extra-package-dbs: []

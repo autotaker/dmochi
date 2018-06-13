@@ -1,5 +1,5 @@
 module Language.DMoCHi.ML.PredicateGeneralizer where
-import Language.DMoCHi.ML.Syntax.CEGAR
+import Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkUni, mkVar, mkLiteral)
 import           Language.DMoCHi.ML.Syntax.Atom(mkUni)
 import           Language.DMoCHi.Common.Id hiding(Id)
 import           Language.DMoCHi.Common.Util

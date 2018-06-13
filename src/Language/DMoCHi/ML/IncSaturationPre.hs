@@ -7,7 +7,7 @@ module Language.DMoCHi.ML.IncSaturationPre (
     pushQuery, popQuery,  getNode,  genNode, setParent, getTypes, setTypes,
     extendConstraintVar, extendConstraintCond, genericPrint,  branch, 
     insertTbl, lookupTbl) where
-import           Language.DMoCHi.ML.Syntax.CEGAR 
+import           Language.DMoCHi.ML.Syntax.CEGAR hiding(mkBin, mkVar )
 import           Language.DMoCHi.ML.Syntax.HFormula hiding(Context)
 import qualified Language.DMoCHi.ML.Syntax.HFormula as HFormula
 import           Language.DMoCHi.Common.Id

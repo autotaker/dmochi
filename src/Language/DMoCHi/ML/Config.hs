@@ -44,8 +44,6 @@ data Config = Config { targetProgram :: FilePath
                      , foolThreshold :: Int
                      , predicateGen :: Bool
                      , embedCurCond :: Bool
- --                    , fusion :: Bool
- --                    , incremental :: Bool
                      , cegarMethod :: CEGARMethod
                      , verbose :: Bool
                      , interactive :: Bool }
@@ -62,25 +60,44 @@ getHCCSSolver Config{ hornSolver = Hoice
   Horn.hoiceSolver cmd basename
 
 defaultConfig :: FilePath -> Config
-defaultConfig path = Config { targetProgram = path
-                            , hornOption = ""
-                            , hornSolver = Fpat IT
-                            , rcamlCommand = "rcaml"
-                            , hoiceCommand = "hoice"
-                            , convexHullCommand = "convex-hull"
-                            , logFilterExp =  Nothing
-                            , cegarLimit = 20
-                            , accErrTraces = False
-                            , contextSensitive = False
-                            , foolTraces = False
-                            , foolThreshold = 1
-                            , predicateGen = False
-                            , embedCurCond = True
-  --                          , fusion = False
-  --                          , incremental = False
-                            , verbose = False
-                            , cegarMethod = DepType
-                            , interactive = False }
+defaultConfig path = 
+  Config { targetProgram = path
+         , hornOption = ""
+         , hornSolver = Hoice
+         , rcamlCommand = "rcaml"
+         , hoiceCommand = "hoice"
+         , convexHullCommand = "convex-hull"
+         , logFilterExp =  Nothing
+         , cegarLimit = 20
+         , accErrTraces = False
+         , contextSensitive = False
+         , foolTraces = False
+         , foolThreshold = 1
+         , predicateGen = False
+         , embedCurCond = True
+         , verbose = False
+         , cegarMethod = AbstSemantics
+         , interactive = False }
+
+eagerConfig :: FilePath -> Config
+eagerConfig path = 
+  Config { targetProgram = path
+         , hornOption = ""
+         , hornSolver = Fpat IT
+         , rcamlCommand = "rcaml"
+         , hoiceCommand = "hoice"
+         , convexHullCommand = "convex-hull"
+         , logFilterExp =  Nothing
+         , cegarLimit = 20
+         , accErrTraces = False
+         , contextSensitive = False
+         , foolTraces = False
+         , foolThreshold = 1
+         , predicateGen = False
+         , embedCurCond = True
+         , verbose = False
+         , cegarMethod = DepType
+         , interactive = False }
 
 options :: [ OptDescr Flag ]
 options = [ Option ['h'] ["help"] (NoArg Help) "Show this help message"

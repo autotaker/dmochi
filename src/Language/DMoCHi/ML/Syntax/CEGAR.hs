@@ -1,13 +1,14 @@
 {-# LANGUAGE MultiParamTypeClasses, PatternSynonyms #-}
 module Language.DMoCHi.ML.Syntax.CEGAR(
       Program(..)
-    , Exp(..), Value(..), Atom(..), LExp(..), Normalized, AbstInfo(..)
+    , Exp(..), Value(..), LExp(..), Normalized, AbstInfo(..)
     , LExpView(..), ExpView(..), ValueView(..), expView, valueView, lexpView
     , mkPair, mkLambda 
     , mkApp, mkLet, mkLetRec, mkAssume, mkBranch, mkBranchL, mkFail, mkOmega, mkRand
-    , mkAbstInfo, updateAbstInfo, Formula , decomposeFormula
+    , mkAbstInfo, updateAbstInfo 
     , Castable(..)
     , module Language.DMoCHi.ML.Syntax.Type
+    , module Language.DMoCHi.ML.Syntax.Atom
     , module Language.DMoCHi.ML.Syntax.Base )
      where
 

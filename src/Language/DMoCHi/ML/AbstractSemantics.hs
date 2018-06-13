@@ -2,7 +2,8 @@ module Language.DMoCHi.ML.AbstractSemantics(refine,AbstractSemantics, RefineConf
 
 import qualified Data.Map as M
 import qualified Data.IntMap as IM
-import           Language.DMoCHi.ML.Syntax.CEGAR 
+import           Language.DMoCHi.ML.Syntax.CEGAR hiding(decompose,mkVar,mkUni, mkBin, mkLiteral)
+import qualified Language.DMoCHi.ML.Syntax.Atom as Atom
 import           Language.DMoCHi.Common.Id hiding(Id)
 import           Language.DMoCHi.Common.Util
 import           Data.PolyDict(Dict)
@@ -110,7 +111,18 @@ toHornTerm = go [] where
             (SBinary, BinArg SSub v1 v2) -> Horn.Sub (go [] v1) (go [] v2)
             (SBinary, BinArg SMul v1 v2) -> Horn.Mul (go [] v1) (go [] v2)
             (SBinary, BinArg SDiv v1 v2) -> Horn.Div (go [] v1) (go [] v2)
-            (SBinary, BinArg SEq v1 v2)  -> Horn.Eq  (go [] v1) (go [] v2)
+            (SBinary, BinArg SEq v1 v2)  -> 
+                case getType v1 of
+                    TInt -> Horn.Eq  (go [] v1) (go [] v2)
+                    TBool -> Horn.Eq  (go [] v1) (go [] v2)
+                    TFun _ _ -> Horn.Bool True
+                    TPair _ _ -> 
+                        let v1l = Atom.mkUni SFst v1
+                            v1r = Atom.mkUni SSnd v1
+                            v2l = Atom.mkUni SFst v2
+                            v2r = Atom.mkUni SSnd v2
+                        in Horn.And (go meta (Atom.mkBin SEq v1l v2l))
+                                    (go meta (Atom.mkBin SEq v1r v2r))
             (SBinary, BinArg SLt v1 v2)  -> Horn.Lt  (go [] v1) (go [] v2)
             (SBinary, BinArg SLte v1 v2) -> Horn.Lte (go [] v1) (go [] v2)
             (SBinary, BinArg SAnd v1 v2) -> Horn.And (go [] v1) (go [] v2)

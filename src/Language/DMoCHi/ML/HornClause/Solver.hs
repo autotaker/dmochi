@@ -39,7 +39,7 @@ mergePredicate (HCCS clause) = renamePVar rename (HCCS clause)
 
 hoiceSolver :: FilePath -> String -> Solver
 hoiceSolver cmdPath baseName hccs ident = do
-  let cmd = printf "%s %s > %s" cmdPath file_smt2 file_ans
+  let cmd = printf "%s %s > %s || true" cmdPath file_smt2 file_ans
       file_smt2 = printf "%s_%d.smt2" baseName ident
       file_ans = file_smt2 ++ ".ans"
 

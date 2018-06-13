@@ -433,7 +433,14 @@ termOfValue = \case
     Bool b -> Horn.Bool b
     Add v1 v2 -> Horn.Add (termOfValue v1) (termOfValue v2)
     Sub v1 v2 -> Horn.Sub (termOfValue v1) (termOfValue v2)
-    Eq v1 v2 -> Horn.Eq (termOfValue v1) (termOfValue v2)
+    Eq v1 v2 -> case ML.getType v1 of
+        ML.TInt -> Horn.Eq (termOfValue v1) (termOfValue v2)
+        ML.TBool -> Horn.Eq (termOfValue v1) (termOfValue v2)
+        ML.TFun _ _ -> Horn.Bool True
+        ML.TPair _ _ -> 
+            let P v1l v1r = v1
+                P v2l v2r = v2 in
+            Horn.And (termOfValue (Eq v1l v2l))  (termOfValue (Eq v1r v2r))
     Lt v1 v2 -> Horn.Lt (termOfValue v1) (termOfValue v2)
     Lte v1 v2 -> Horn.Lte (termOfValue v1) (termOfValue v2)
     Not v -> Horn.Not (termOfValue v)

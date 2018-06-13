@@ -3,6 +3,7 @@ import Distribution.PackageDescription (PackageDescription(..), HookedBuildInfo,
 import Distribution.Simple.LocalBuildInfo (LocalBuildInfo,absoluteInstallDirs)
 import Distribution.Simple.Setup (CopyFlags
                                  ,BuildFlags
+                                 ,ConfigFlags
                                  ,CleanFlags
                                  ,buildVerbosity
                                  ,copyVerbosity
@@ -18,4 +19,3 @@ import System.FilePath((</>))
 
 main :: IO ()
 main = defaultMain
-

@@ -36,7 +36,7 @@ parseSolution path = do
 language :: P.GenLanguageDef String () (SMT.SMT (LoggingT IO))
 language = P.LanguageDef {
     P.reservedNames = ["sat", "unsat", "model", "define-fun" 
-                      , "exists"
+                      , "exists", "forall"
                       ,"Int", "Bool", "and", "or", "not"]
   , P.reservedOpNames = ["=","<",">","->","<>","+","-","<=",">="]
   , P.caseSensitive = True
@@ -166,7 +166,7 @@ termP penv env =
     <|> (reserved "true" *> Z3.mkTrue) 
     <|> (reserved "false" *> Z3.mkFalse)
     <|> (identifier >>= var env)
-    <|> parens (parseOp opList <|> predApp <|> exists)
+    <|> parens (parseOp opList <|> predApp <|> exists <|> forall)
     where
     opList = [(reserved "and",  Z3.mkAnd)
              ,(reserved "or",   Z3.mkOr)
@@ -203,6 +203,14 @@ termP penv env =
       symbols <- mapM Z3.mkStringSymbol names
       body <- termP penv env'
       term <- Z3.mkExists [] symbols sorts body
+      qe term
+    forall = do
+      xs <- reserved "forall" *> argsP 
+      let env' = reverse xs ++ env
+      let (names, sorts) = unzip xs
+      symbols <- mapM Z3.mkStringSymbol names
+      body <- termP penv env'
+      term <- Z3.mkForall [] symbols sorts body
       qe term
       
 

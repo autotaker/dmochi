@@ -5,7 +5,7 @@ name:                dmochi
 version:             0.1.0.0
 -- synopsis:            
 -- description:         
-license:             AllRightsReserved
+license:             MIT
 license-file:        LICENSE
 author:              Taku Terao
 maintainer:          autotaker@gmail.com
@@ -68,7 +68,9 @@ library
                        monad-logger >= 0.3.24,
                        mono-traversable,
                        atto-lisp,
-                       attoparsec
+                       attoparsec,
+                       regex-base, regex-pcre-text
+
 
   build-tools:         alex, happy
   exposed-modules:     Language.DMoCHi.Common.Heap,
