@@ -35,6 +35,9 @@ tokens :-
 <0>            fun     { lexeme $ \_ -> TokenFun }
 <0>            begin   { lexeme $ \_ -> TokenBegin}
 <0>            end     { lexeme $ \_ -> TokenEnd }
+<0,specSC>     int     { lexeme $ \_ -> TokenInt }
+<0,specSC>     bool    { lexeme $ \_ -> TokenBool }
+<0,specSC>     unit    { lexeme $ \_ -> TokenUnit }
 <0,specSC>     "->"    { lexeme $ \_ -> TokenArr }
 <0,specSC>     ";;"    { lexeme $ \_ -> TokenEOL }
 <0,specSC>     ";"     { lexeme $ \_ -> TokenSemi}

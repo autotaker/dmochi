@@ -6,6 +6,7 @@ import Language.DMoCHi.Common.Id
 import Language.DMoCHi.ML.Syntax.Type
 import Language.DMoCHi.ML.Syntax.Base
 import Text.PrettyPrint.HughesPJClass
+import Text.Printf
 
 data Program = Program { functions :: [(TId, UniqueKey, [TId], Exp)] 
                        , mainTerm  :: Exp }
@@ -45,19 +46,30 @@ instance Pretty Program where
         text "(*main*)" $+$
         pPrintPrec plevel 0 t
 
+instance Show Exp where
+    show = render . pPrint
+instance Show Program where
+    show = render . pPrint
+
 mkBin :: SBinOp op -> Exp -> Exp -> UniqueKey -> Exp
 mkBin op e1 e2 key = 
     let f :: Type -> Type -> Exp -> Exp
-        f ty1 ty2 k | getType e1 /= ty1 = error "mkBin: Type Error"
-                    | getType e2 /= ty2 = error "mkBin: Type Error"
+        f ty1 ty2 k | getType e1 /= ty1 = error $ printf "mkBin: Type Error: left operand, expected %s actual %s"  (show ty1) (show $ getType e1)
+                    | getType e2 /= ty2 = error $ printf "mkBin: Type Error: right operand, expected %s actual %s" (show ty2) (show $ getType e2)
                     | otherwise = k
+        g :: Exp -> Exp
+        g e | getType e1 /= getType e2 = error $ printf "mkBin: TypeErrror: operands %s %s must have the same type" (show e1) (show e2)
+            | otherwise = case getType e1 of
+                TInt -> e
+                TBool -> e
+                _ -> error $ printf "mkBin: TypeError: the type of operands, %s, must be a base type" (show (getType e1))
     in case op of
         SAdd -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TInt key
         SSub -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TInt key
         SDiv -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TInt key
         SMul -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TInt key
-        SEq  -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TBool key
-        SNEq -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TBool key
+        SEq  -> g $ Exp SBinary (BinArg op e1 e2) TBool key
+        SNEq -> g $ Exp SBinary (BinArg op e1 e2) TBool key
         SLt  -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TBool key
         SLte -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TBool key
         SGt  -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TBool key

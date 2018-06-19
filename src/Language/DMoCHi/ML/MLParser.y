@@ -147,6 +147,8 @@ Arg : VAR                   { V $1 Nothing }
     | '_'                   { unusedVar    }
     | '(' VAR ':' Type ')'  { V $2 (Just $4) }
     | '(' '_' ':' Type ')'  { annotVar unusedVar $4 }
+    | '(' ')'               { annotVar unusedVar TUnit }
+    | '(' '(' ')' ':' unit ')' { annotVar unusedVar TUnit }
     | '(' Arg ')'           { $2 }
 
 Args : Arg Args { $1 : $2 }

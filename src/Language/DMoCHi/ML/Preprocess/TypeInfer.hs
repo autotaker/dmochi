@@ -79,6 +79,7 @@ unify env a b = go a b
                     _ | x `elemType` ty2' -> throwError RecursiveType
                       | otherwise -> updateSubst x ty2'
     go ty1 ty2@(TVar _) = go ty2 ty1
+    -- ignore failures
     go TInt _  = pure ()
     go TBool _ = pure ()
     go TUnit _ = pure ()
@@ -166,8 +167,12 @@ inferE synEnv env (Exp l arg (_,key)) = do
                 SSub -> f TInt >> pure TInt
                 SDiv -> f TInt >> pure TInt
                 SMul -> f TInt >> pure TInt
-                SEq  -> f TInt >> pure TBool
-                SNEq -> f TInt >> pure TBool
+                SEq  -> do
+                    tvarArg <- freshType
+                    f tvarArg >> pure TBool
+                SNEq -> do
+                    tvarArg <- freshType
+                    f tvarArg >> pure TBool
                 SLt  -> f TInt >> pure TBool
                 SGt  -> f TInt >> pure TBool
                 SLte -> f TInt >> pure TBool

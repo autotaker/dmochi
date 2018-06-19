@@ -15,6 +15,7 @@ import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey)
 import Language.DMoCHi.ML.Preprocess.DesugarSynonym
 import Language.DMoCHi.Common.Util
 
+--import Debug.Trace
 instance Show TypeError where
     show (UndefinedVariable s)      = "UndefinedVariables: "++ s
     show (TypeMisMatch p t1 t2)     = "TypeMisMatch: " ++ show t1 ++ " should be " ++ show t2 ++ ". context :" ++ show p
@@ -234,11 +235,11 @@ cast e ty = do
     mkLet x e e' <$> Id.freshKey
 
 convertE :: forall c. SynEnv -> Env -> U.Exp U.Type -> ExceptT TypeError (FreshIO c) Exp
-convertE synEnv env (U.Exp l arg (ty,key)) = do
+convertE synEnv env (U.Exp l arg (ty,key)) = 
     let conv :: U.Type -> ExceptT TypeError (FreshIO c) Type
         conv ty = case convertType synEnv ty of
             Left err -> throwError (Synonym err)
-            Right sty -> pure sty
+            Right sty -> pure sty in
     case (l, arg) of
         (SLiteral, U.CInt _)  -> return $ mkLiteral arg key
         (SLiteral, U.CBool _) -> return $ mkLiteral arg key
@@ -302,10 +303,11 @@ convertE synEnv env (U.Exp l arg (ty,key)) = do
             e2' <- convertE synEnv env' e2
             return $ mkLet (TId (getType e1') (U.varName x)) e1' e2' key
         (SLetRec, (fs, e)) -> do
-            env' <- fmap (foldr (uncurry M.insert) env) $ forM fs $ \(f, e_f) ->
-                case convertType synEnv (annotType e_f) of
-                    Left err -> throwError (Synonym err)
-                    Right sty -> return (U.varName f, sty)
+            env' <- extendEnv env <$> 
+                forM fs (\(f, e_f) ->
+                    case convertType synEnv (annotType e_f) of
+                        Left err -> throwError (Synonym err)
+                        Right sty -> return (U.varName f, sty))
             fs' <- forM fs $ \(f, e1) -> do
                 (Exp SLambda (xs, e_body) _ key) <- convertE synEnv env' e1 
                 let ty_f@(TFun _ ty_r) = env' M.! U.varName f
@@ -333,7 +335,7 @@ convertE synEnv env (U.Exp l arg (ty,key)) = do
                 sty = env M.! U.varName x
             e' <- convertE synEnv env e
             return $ mkMark x' e' key
-        (SFail, ())  -> conv ty >>= \sty -> return $ mkFail sty key
-        (SOmega, ()) -> conv ty >>= \sty -> return $ mkOmega sty key
-        (SRand, ())  -> return $ mkRand key
+        (SFail, ())  -> (`mkFail` key) <$> conv ty 
+        (SOmega, ()) -> (`mkOmega` key) <$> conv ty
+        (SRand, ())  -> pure $ mkRand key
                 
