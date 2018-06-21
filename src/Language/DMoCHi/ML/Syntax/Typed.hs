@@ -68,6 +68,7 @@ mkBin op e1 e2 key =
         SSub -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TInt key
         SDiv -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TInt key
         SMul -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TInt key
+        SMod -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TInt key
         SEq  -> g $ Exp SBinary (BinArg op e1 e2) TBool key
         SNEq -> g $ Exp SBinary (BinArg op e1 e2) TBool key
         SLt  -> f TInt TInt $ Exp SBinary (BinArg op e1 e2) TBool key

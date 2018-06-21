@@ -111,6 +111,7 @@ toHornTerm = go [] where
             (SBinary, BinArg SSub v1 v2) -> Horn.Sub (go [] v1) (go [] v2)
             (SBinary, BinArg SMul v1 v2) -> Horn.Mul (go [] v1) (go [] v2)
             (SBinary, BinArg SDiv v1 v2) -> Horn.Div (go [] v1) (go [] v2)
+            (SBinary, BinArg SMod v1 v2) -> Horn.Mod (go [] v1) (go [] v2)
             (SBinary, BinArg SEq v1 v2)  -> 
                 case getType v1 of
                     TInt -> Horn.Eq  (go [] v1) (go [] v2)

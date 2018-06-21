@@ -21,7 +21,7 @@ data Atom where
 type instance Ident Atom = TId
 
 type instance Labels Atom  = '[ 'Literal, 'Var, 'Binary, 'Unary ]
-type instance BinOps Atom  = '[ 'Add, 'Sub, 'Div, 'Mul, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
+type instance BinOps Atom  = '[ 'Add, 'Sub, 'Div, 'Mul, 'Mod, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
 type instance UniOps Atom  = '[ 'Fst, 'Snd, 'Not, 'Neg ]
 
 mkBin :: SBinOp op -> Atom -> Atom -> Atom
@@ -30,6 +30,7 @@ mkBin op v1 v2 = case op of
     SSub -> Atom SBinary (BinArg SSub v1 v2) TInt
     SDiv -> Atom SBinary (BinArg SDiv v1 v2) TInt
     SMul -> Atom SBinary (BinArg SMul v1 v2) TInt
+    SMod -> Atom SBinary (BinArg SMod v1 v2) TInt
     SEq  -> Atom SBinary (BinArg SEq v1 v2) TBool
     SNEq  -> Atom SUnary (UniArg SNot (Atom SBinary (BinArg SEq v1 v2) TBool)) TBool
     SLt  -> Atom SBinary (BinArg SLt v1 v2) TBool

@@ -126,6 +126,7 @@ abstAValue env cs pv = go
             ML.SSub  -> return $ B.T []
             ML.SDiv  -> return $ B.T []
             ML.SMul  -> return $ B.T []
+            ML.SMod  -> return $ B.T []
             ML.SEq   -> abstFormula cs pv v
             ML.SLt   -> abstFormula cs pv v
             ML.SLte  -> abstFormula cs pv v

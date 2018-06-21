@@ -296,6 +296,7 @@ instance Castable Exp Typed.Exp where
                     SSub -> BinArg op a' b'
                     SDiv -> BinArg op a' b'
                     SMul -> BinArg op a' b'
+                    SMod -> BinArg op a' b'
                     SEq  -> BinArg op a' b'
                     SLt  -> BinArg op a' b'
                     SLte -> BinArg op a' b'

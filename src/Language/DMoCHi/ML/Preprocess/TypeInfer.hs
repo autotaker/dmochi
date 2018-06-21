@@ -167,6 +167,7 @@ inferE synEnv env (Exp l arg (_,key)) = do
                 SSub -> f TInt >> pure TInt
                 SDiv -> f TInt >> pure TInt
                 SMul -> f TInt >> pure TInt
+                SMod -> f TInt >> pure TInt
                 SEq  -> do
                     tvarArg <- freshType
                     f tvarArg >> pure TBool

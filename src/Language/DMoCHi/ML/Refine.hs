@@ -142,6 +142,7 @@ evalRTypeA env = go  where
                 ML.SSub -> (RInt, Sub sv1 sv2)
                 ML.SMul -> (RInt, Mul sv1 sv2)
                 ML.SDiv -> (RInt, Div sv1 sv2)
+                ML.SMod -> error "mod is not supported"
                 ML.SEq -> (RBool, Eq sv1 sv2)
                 ML.SLt -> (RBool, Lt sv1 sv2)
                 ML.SLte -> (RBool, Lte sv1 sv2)
@@ -569,6 +570,7 @@ refineLFormula penv env fml = phi' where
             ML.SSub -> ML.mkBin ML.SSub (go a) (go b)
             ML.SMul -> ML.mkBin ML.SMul (go a) (go b)
             ML.SDiv -> ML.mkBin ML.SDiv (go a) (go b)
+            ML.SMod -> ML.mkBin ML.SMod (go a) (go b)
             ML.SEq  -> ML.mkBin ML.SEq (go a) (go b)
             ML.SLt  -> ML.mkBin ML.SLt (go a) (go b)
             ML.SLte -> ML.mkBin ML.SLte (go a) (go b)

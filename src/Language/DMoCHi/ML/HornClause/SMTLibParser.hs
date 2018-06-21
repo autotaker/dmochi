@@ -37,7 +37,7 @@ language :: P.GenLanguageDef String () (SMT.SMT (LoggingT IO))
 language = P.LanguageDef {
     P.reservedNames = ["sat", "unsat", "model", "define-fun" 
                       , "exists", "forall"
-                      ,"Int", "Bool", "and", "or", "not"]
+                      ,"Int", "Bool", "and", "or", "not", "mod"]
   , P.reservedOpNames = ["=","<",">","->","<>","+","-","<=",">=", "/"]
   , P.caseSensitive = True
   , P.commentStart = ""
@@ -124,6 +124,7 @@ fromAST env ast =
         ("-", [v]) -> return $ mkUni SNeg v
         ("*", vs) -> return $ foldl1 (mkBin SMul) vs
         ("div", [v1, v2]) -> return $ mkBin SDiv v1 v2
+        ("mod", [v1, v2]) -> return $ mkBin SMod v1 v2
         ("true", []) -> return $ mkLiteral $ CBool True
         ("false", []) -> return $ mkLiteral $ CBool False
         ("=", [v1,v2]) -> return $ mkBin SEq v1 v2
@@ -181,6 +182,7 @@ termP penv env =
              ,(reservedOp "*",  Z3.mkMul)
              ,(reserved "div",  binary Z3.mkDiv)
              ,(reservedOp "/",  binary Z3.mkDiv)
+             ,(reserved "mod",  binary Z3.mkMod)
              ]
     binary f [a,b] = f a b
     binary _ _ = parserFail "expect binary"

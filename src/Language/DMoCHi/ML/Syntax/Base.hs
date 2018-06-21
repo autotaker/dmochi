@@ -39,7 +39,7 @@ data Label = Literal | Var | Binary | Unary | Pair
            | Fail | Omega | Rand | Atomic
            deriving(Eq,Ord)
            
-data BinOp = Add | Sub | NEq | Eq | Lt | Gt | Lte | Gte | And | Or  | Mul | Div
+data BinOp = Add | Sub | NEq | Eq | Lt | Gt | Lte | Gte | And | Or  | Mul | Div | Mod
     deriving (Eq,Ord)
 data UniOp = Fst | Snd | Not | Neg
     deriving (Eq,Ord)
@@ -58,7 +58,7 @@ type family BinOps e :: [BinOp]
 type family UniOps e :: [UniOp]
 
 type family AllBinOps where
-    AllBinOps = '[ 'Add, 'Sub, 'NEq, 'Eq, 'Lt, 'Gt, 'Lte, 'Gte, 'And, 'Or, 'Mul, 'Div ]
+    AllBinOps = '[ 'Add, 'Sub, 'NEq, 'Eq, 'Lt, 'Gt, 'Lte, 'Gte, 'And, 'Or, 'Mul, 'Div, 'Mod ]
 
 type family AllUniOps where
     AllUniOps = '[ 'Fst, 'Snd, 'Not, 'Neg ]
@@ -106,6 +106,7 @@ reflectBinOp l = case l of
     SSub -> Sub
     SMul -> Mul
     SDiv -> Div
+    SMod -> Mod
     SEq -> Eq
     SNEq -> NEq
     SLt -> Lt
@@ -163,6 +164,7 @@ instance Hashable (SBinOp op) where
             SNEq -> 10
             SMul -> 11
             SDiv -> 12
+            SMod -> 13
 
 instance Hashable (SUniOp op) where
     hashWithSalt salt op = salt `hashWithSalt` v
@@ -245,6 +247,7 @@ data SBinOp (op :: BinOp) where
     SNEq     :: SBinOp 'NEq
     SDiv     :: SBinOp 'Div
     SMul     :: SBinOp 'Mul
+    SMod     :: SBinOp 'Mod
 
 type family EqBinOp a b where
     EqBinOp 'Add 'Add = 'True
@@ -258,6 +261,7 @@ type family EqBinOp a b where
     EqBinOp 'And 'And = 'True
     EqBinOp 'Or  'Or = 'True
     EqBinOp 'Div 'Div = 'True
+    EqBinOp 'Mod 'Mod = 'True
     EqBinOp 'Mul 'Mul = 'True
     EqBinOp a b = 'False
 
@@ -265,6 +269,7 @@ instance TestEquality SBinOp where
     testEquality SAdd SAdd = Just Refl
     testEquality SSub SSub = Just Refl
     testEquality SDiv SDiv = Just Refl
+    testEquality SMod SMod = Just Refl
     testEquality SMul SMul = Just Refl
     testEquality SEq  SEq  = Just Refl
     testEquality SNEq SNEq  = Just Refl
@@ -314,6 +319,7 @@ instance Show (SBinOp op) where
     show SOr = "SOr"
     show SDiv = "SDiv"
     show SMul = "SMul"
+    show SMod = "SMod"
 instance Show (SUniOp op) where
     show SFst = "SFst"
     show SSnd = "SSnd"
@@ -330,6 +336,7 @@ binaryPrec :: SBinOp op -> (Rational, String, Assoc)
 binaryPrec SAdd = (6, "+", AssocLeft)
 binaryPrec SSub = (6, "-", AssocLeft)
 binaryPrec SDiv = (7, "/", AssocLeft)
+binaryPrec SMod = (7, "mod", AssocLeft)
 binaryPrec SMul = (8, "*", AssocLeft)
 binaryPrec SEq   = (4, "=", AssocNone)
 binaryPrec SNEq  = (4, "<>", AssocNone)

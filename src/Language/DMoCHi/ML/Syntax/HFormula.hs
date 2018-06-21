@@ -44,7 +44,7 @@ getIValue (HFormula _ _ _ iv _) = iv
 
 type instance Ident HFormula  = TId
 type instance Labels HFormula  = '[ 'Literal, 'Var, 'Unary, 'Binary ]
-type instance BinOps HFormula = '[ 'Add, 'Sub, 'Div, 'Mul, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
+type instance BinOps HFormula = '[ 'Add, 'Sub, 'Div, 'Mul, 'Mod, 'Eq, 'Lt, 'Lte, 'And, 'Or ]
 type instance UniOps HFormula = '[ 'Fst, 'Snd, 'Not, 'Neg ]
 
 instance HasType HFormulaKey where
@@ -207,6 +207,7 @@ mkBin op v1 v2 =
         SSub -> genHFormula key (SMT.ASTValue <$> Z3.mkSub [v1', v2'])
         SDiv -> genHFormula key (SMT.mkUDiv iv1 iv2)
         SMul -> genHFormula key (SMT.mkUMul isLinear iv1 iv2)
+        SMod -> genHFormula key (SMT.ASTValue <$> Z3.mkMod v1' v2')
         SEq  -> genHFormula key (SMT.mkEqIValue iv1 iv2)
         SLt  -> genHFormula key (SMT.ASTValue <$> Z3.mkLt v1' v2')
         SLte -> genHFormula key (SMT.ASTValue <$> Z3.mkLe v1' v2')

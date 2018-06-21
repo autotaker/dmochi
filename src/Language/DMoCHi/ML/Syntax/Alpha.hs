@@ -261,5 +261,5 @@ register x m = do
 register' :: [U.AnnotVar String (Maybe Type)] -> M a -> M ([U.AnnotVar (Id String) (Maybe Type)],a)
 register' xs m = do
     xs' <- mapM identify xs
-    v  <- local (\env -> foldr (\(x,x') -> M.insert (U.varName x) x') env (zip xs xs')) m
+    v  <- local (\env -> foldl (\acc (x,x') -> M.insert (U.varName x) x' acc) env (zip xs xs')) m
     return (xs',v)

@@ -69,6 +69,7 @@ instance HasType (BinArg e) where
             SSub -> TInt
             SMul -> TInt
             SDiv -> TInt
+            SMod -> TInt
             SEq  -> TBool
             SNEq -> TBool
             SLt  -> TBool

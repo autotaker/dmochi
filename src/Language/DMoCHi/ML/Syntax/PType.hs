@@ -171,6 +171,7 @@ typeOfAtom env = go where
             SSub -> PInt
             SMul -> PInt
             SDiv -> PInt
+            SMod -> PInt
             SEq  -> PBool
             SLt  -> PBool
             SLte -> PBool

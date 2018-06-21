@@ -25,6 +25,7 @@ data Term = Bool Bool
           | Sub Term Term
           | Mul Term Term
           | Div Term Term
+          | Mod Term Term
           | Eq  Term Term
           | NEq Term Term
           | Gt  Term Term
@@ -44,6 +45,7 @@ instance HasType Term where
     getType (Sub _ _) = TInt
     getType (Mul _ _) = TInt
     getType (Div _ _) = TInt
+    getType (Mod _ _) = TInt
     getType (Eq _ _) = TBool
     getType (NEq _ _) = TBool
     getType (Gt _ _) = TBool
@@ -72,6 +74,7 @@ freeVariables clause = S.toList $ execState doit S.empty
         Sub t1 t2 -> term t1 >> term t2
         Mul t1 t2 -> term t1 >> term t2
         Div t1 t2 -> term t1 >> term t2
+        Mod t1 t2 -> term t1 >> term t2
         Eq  t1 t2 -> term t1 >> term t2
         NEq t1 t2 -> term t1 >> term t2
         Gt  t1 t2 -> term t1 >> term t2
@@ -99,6 +102,7 @@ renamePVar rename (HCCS hccs) = HCCS $
     Sub t1 t2 -> Sub (renameTerm t1) (renameTerm t2)
     Mul t1 t2 -> Mul (renameTerm t1) (renameTerm t2)
     Div t1 t2 -> Div (renameTerm t1) (renameTerm t2)
+    Mod t1 t2 -> Mod (renameTerm t1) (renameTerm t2)
     Eq t1 t2 -> Eq (renameTerm t1) (renameTerm t2)
     NEq t1 t2 -> NEq (renameTerm t1) (renameTerm t2)
     Gt t1 t2 -> Gt (renameTerm t1) (renameTerm t2)
@@ -164,6 +168,7 @@ renderSMTLib2 hccs = render doit ++ "\n"
         Sub t1 t2 -> parens $ text "-" <+> renderTerm t1 <+> renderTerm t2
         Mul t1 t2 -> parens $ text "*" <+> renderTerm t1 <+> renderTerm t2
         Div t1 t2 -> parens $ text "/" <+> renderTerm t1 <+> renderTerm t2
+        Mod t1 t2 -> parens $ text "mod" <+> renderTerm t1 <+> renderTerm t2
         Eq  t1 t2 -> parens $ text "=" <+> renderTerm t1 <+> renderTerm t2
         NEq t1 t2 -> parens $ text "!=" <+> renderTerm t1 <+> renderTerm t2
         Gt  t1 t2 -> parens $ text ">" <+> renderTerm t1 <+> renderTerm t2
@@ -209,6 +214,8 @@ instance Show Term where
         (showsPrec 6 t1) . showString " * " . (showsPrec 6 t2)
     showsPrec d (Div t1 t2) = showParen (d >= 6) $ 
         (showsPrec 6 t1) . showString " / " . (showsPrec 6 t2)
+    showsPrec d (Mod t1 t2) = showParen (d >= 6) $ 
+        (showsPrec 6 t1) . showString " mod " . (showsPrec 6 t2)
     showsPrec d (Add t1 t2) = showParen (d >= 5) $ 
         (showsPrec 5 t1) . showString " + " . (showsPrec 5 t2)
     showsPrec d (Sub t1 t2) = showParen (d >= 5) $ 
