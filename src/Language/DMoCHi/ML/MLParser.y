@@ -279,6 +279,7 @@ toProg defs = foldr f (Program primFuncs [] [] e0) defs
     f (DRec funs) prog = prog{ mainTerm = mkLetRec funs (mainTerm prog) }
 
 mkAssert :: Exp -> Exp
+mkAssert (Exp SLiteral (CBool False) _) =  mkFail
 mkAssert e = mkIf e (mkLiteral CUnit) mkFail
 
 parseProg :: String -> Either String Program
