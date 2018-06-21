@@ -15,7 +15,7 @@ import Language.DMoCHi.Common.Id(MonadId(..), UniqueKey)
 import Language.DMoCHi.ML.Preprocess.DesugarSynonym
 import Language.DMoCHi.Common.Util
 
-import Debug.Trace
+--import Debug.Trace
 instance Show TypeError where
     show (UndefinedVariable s)      = "UndefinedVariables: "++ s
     show (TypeMisMatch p t1 t2)     = "TypeMisMatch: " ++ show t1 ++ " should be " ++ show t2 ++ ". context :" ++ show p
@@ -191,10 +191,10 @@ convertType synEnv ty = runExcept $ fmap go (desugarType synEnv ty)
 
 cast :: MonadId m => Exp -> Type -> m Exp
 cast e ty | getType e == ty = return e
-cast e ty = traceShow (e,ty) $ do
+cast e ty = do
     let castV v ty | ty_v == ty = return v
                    | otherwise = 
-            case traceShow ("castV", v, ty_v, ty) (ty_v, ty) of
+            case (ty_v, ty) of
                 (TPair _ _, TPair ty3 ty4) -> do
                     v1 <- mkUni SFst v <$> Id.freshKey
                     v2 <- mkUni SSnd v <$> Id.freshKey
