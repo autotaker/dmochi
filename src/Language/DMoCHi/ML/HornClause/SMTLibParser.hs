@@ -38,7 +38,7 @@ language = P.LanguageDef {
     P.reservedNames = ["sat", "unsat", "model", "define-fun" 
                       , "exists", "forall"
                       ,"Int", "Bool", "and", "or", "not"]
-  , P.reservedOpNames = ["=","<",">","->","<>","+","-","<=",">="]
+  , P.reservedOpNames = ["=","<",">","->","<>","+","-","<=",">=", "/"]
   , P.caseSensitive = True
   , P.commentStart = ""
   , P.commentEnd = ""
@@ -179,7 +179,8 @@ termP penv env =
              ,(reservedOp "+",  Z3.mkAdd)
              ,(reservedOp "-",  unaryOrMany Z3.mkUnaryMinus Z3.mkSub)
              ,(reservedOp "*",  Z3.mkMul)
-             ,(reservedOp "div",  binary Z3.mkDiv)
+             ,(reserved "div",  binary Z3.mkDiv)
+             ,(reservedOp "/",  binary Z3.mkDiv)
              ]
     binary f [a,b] = f a b
     binary _ _ = parserFail "expect binary"
